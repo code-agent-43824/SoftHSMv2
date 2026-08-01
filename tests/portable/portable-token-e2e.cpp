@@ -198,7 +198,7 @@ static std::optional<CK_SLOT_ID> configuredSlot()
     char* end = nullptr;
     const unsigned long long value = std::strtoull(configured.c_str(), &end, 0);
     if (end == nullptr || *end != '\0') fail("P11_TEST_SLOT_ID must be a decimal or 0x-prefixed number");
-    if (value > static_cast<unsigned long long>(std::numeric_limits<CK_SLOT_ID>::max()))
+    if (value > static_cast<unsigned long long>((std::numeric_limits<CK_SLOT_ID>::max)()))
         fail("P11_TEST_SLOT_ID does not fit CK_SLOT_ID on this platform");
     return static_cast<CK_SLOT_ID>(value);
 }
