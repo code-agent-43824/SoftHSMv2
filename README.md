@@ -69,9 +69,10 @@ the application directly at the PKCS #11 module. The module reads
 `tokens` directory beside it. Relative token paths are resolved from the
 configuration file, so the application's working directory does not matter.
 
-Portable builds statically include OpenSSL and their applicable C/C++ runtime.
-The `SOFTHSM2_CONF` environment variable remains available as an explicit
-override. See `packaging/portable/README.txt` for the archive layout.
+Portable builds statically include OpenSSL. Linux and Windows also statically
+include their C/C++ runtime; macOS uses the system libc++. The `SOFTHSM2_CONF`
+environment variable remains available as an explicit override. See
+`packaging/portable/README.txt` for the archive layout.
 
 ### Building from the repository
 

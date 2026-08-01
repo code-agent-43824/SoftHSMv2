@@ -71,7 +71,7 @@ cc "$root_dir/scripts/portable/smoke.c" -o "$work_dir/portable-smoke"
 test -d "$stage_dir/tokens"
 rmdir "$stage_dir/tokens"
 lipo "$stage_dir/libsofthsm2.dylib" -verify_arch arm64 x86_64
-if otool -L "$stage_dir/libsofthsm2.dylib" | grep -Eq 'lib(ssl|crypto|c\+\+)'; then
+if otool -L "$stage_dir/libsofthsm2.dylib" | grep -Eq 'lib(ssl|crypto)'; then
   echo "portable module has an unexpected non-system runtime dependency" >&2
   otool -L "$stage_dir/libsofthsm2.dylib" >&2
   exit 1
