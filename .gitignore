@@ -55,6 +55,9 @@ test-results.xml
 
 # Building directories
 build
+build-*/
+dist/
+.portable-work/
 Botan-*
 ROOT
 *.cmake

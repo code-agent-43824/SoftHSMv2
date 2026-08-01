@@ -60,6 +60,19 @@ The unit tests requires CppUnit.
 
 ## Installation
 
+### Portable binary releases
+
+This fork provides installer-free ZIP archives for Linux x64, Linux ARM64,
+Windows x64, Windows ARM64, and universal macOS. Extract one archive and point
+the application directly at the PKCS #11 module. The module reads
+`softhsm.conf` from its own directory by default and creates the configured
+`tokens` directory beside it. Relative token paths are resolved from the
+configuration file, so the application's working directory does not matter.
+
+Portable builds statically include OpenSSL and their applicable C/C++ runtime.
+The `SOFTHSM2_CONF` environment variable remains available as an explicit
+override. See `packaging/portable/README.txt` for the archive layout.
+
 ### Building from the repository
 
 If the code is downloaded directly from the code repository, you have to

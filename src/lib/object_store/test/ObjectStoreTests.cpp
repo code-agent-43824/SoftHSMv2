@@ -75,6 +75,22 @@ void ObjectStoreTests::testEmptyStore()
 	CPPUNIT_ASSERT(store.getTokenCount() == 0);
 }
 
+void ObjectStoreTests::testCreateMissingStore()
+{
+#ifndef _WIN32
+	const char* path = "./testdir/missing";
+#else
+	const char* path = ".\\testdir\\missing";
+#endif
+
+	ObjectStore store(path, DEFAULT_UMASK);
+	CPPUNIT_ASSERT(store.isValid());
+	CPPUNIT_ASSERT(store.getTokenCount() == 0);
+
+	Directory directory(path);
+	CPPUNIT_ASSERT(directory.isValid());
+}
+
 void ObjectStoreTests::testNewTokens()
 {
 	ByteString label1 = "DEADC0FFEE";
@@ -279,4 +295,3 @@ void ObjectStoreTests::testDeleteToken()
 	               ((retrieveLabel1 == label2) && (retrieveLabel2 != label1)));
 	CPPUNIT_ASSERT(retrieveLabel1 != retrieveLabel2);
 }
-

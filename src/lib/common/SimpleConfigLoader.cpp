@@ -34,10 +34,14 @@
 #include <string.h>
 #include <stdlib.h>
 #include <algorithm>
+#include <cctype>
 #include <limits.h>
+#include <vector>
 #ifdef _WIN32
 # include <io.h>
+# include <windows.h>
 #else
+# include <dlfcn.h>
 # include <unistd.h>
 #endif
 #include "config.h"
@@ -72,10 +76,154 @@ SimpleConfigLoader::SimpleConfigLoader()
 {
 }
 
+#define PORTABLE_CONFIG_FILE "softhsm.conf"
+#define LEGACY_PORTABLE_CONFIG_FILE "softhsm2.conf"
+
+namespace
+{
+	static int moduleAnchor;
+
+	static bool isPathSeparator(char c)
+	{
+		return c == '/' || c == '\\';
+	}
+
+	static std::string parentDirectory(const std::string& path)
+	{
+		const std::string::size_type separator = path.find_last_of("/\\");
+		if (separator == std::string::npos)
+		{
+			return ".";
+		}
+		if (separator == 0)
+		{
+			return path.substr(0, 1);
+		}
+#ifdef _WIN32
+		if (separator == 2 && path.size() >= 3 && path[1] == ':')
+		{
+			return path.substr(0, 3);
+		}
+#endif
+		return path.substr(0, separator);
+	}
+
+	static std::string joinPath(const std::string& directory, const std::string& name)
+	{
+		if (directory.empty() || directory == ".")
+		{
+#ifdef _WIN32
+			return std::string(".\\") + name;
+#else
+			return std::string("./") + name;
+#endif
+		}
+		if (isPathSeparator(directory[directory.size() - 1]))
+		{
+			return directory + name;
+		}
+#ifdef _WIN32
+		return directory + "\\" + name;
+#else
+		return directory + "/" + name;
+#endif
+	}
+
+	static bool isAbsolutePath(const std::string& path)
+	{
+		if (path.empty())
+		{
+			return false;
+		}
+#ifdef _WIN32
+		if (isPathSeparator(path[0]))
+		{
+			return true;
+		}
+		return path.size() >= 3 && std::isalpha(static_cast<unsigned char>(path[0])) &&
+		       path[1] == ':' && isPathSeparator(path[2]);
+#else
+		return path[0] == '/';
+#endif
+	}
+
+	static bool isReadableFile(const std::string& path)
+	{
+#ifdef _WIN32
+		return _access(path.c_str(), 4) == 0;
+#else
+		return access(path.c_str(), R_OK) == 0;
+#endif
+	}
+
+	static std::string moduleFilePath()
+	{
+#ifdef _WIN32
+		HMODULE module = NULL;
+		if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+		                        GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+		                        reinterpret_cast<LPCSTR>(&moduleAnchor), &module))
+		{
+			return std::string();
+		}
+
+		std::vector<char> path(512);
+		for (;;)
+		{
+			const DWORD length = GetModuleFileNameA(module, &path[0], static_cast<DWORD>(path.size()));
+			if (length == 0)
+			{
+				return std::string();
+			}
+			if (length < path.size() - 1)
+			{
+				return std::string(&path[0], length);
+			}
+			path.resize(path.size() * 2);
+		}
+#else
+		Dl_info info;
+		if (dladdr(static_cast<void*>(&moduleAnchor), &info) == 0 || info.dli_fname == NULL)
+		{
+			return std::string();
+		}
+
+		char resolved[PATH_MAX];
+		if (realpath(info.dli_fname, resolved) != NULL)
+		{
+			return std::string(resolved);
+		}
+		return std::string(info.dli_fname);
+#endif
+	}
+
+	static char* getPortableConfigPath()
+	{
+		const std::string modulePath = moduleFilePath();
+		if (modulePath.empty())
+		{
+			return NULL;
+		}
+
+		const std::string directory = parentDirectory(modulePath);
+		const char* candidates[] = { PORTABLE_CONFIG_FILE, LEGACY_PORTABLE_CONFIG_FILE };
+		for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); ++i)
+		{
+			const std::string candidate = joinPath(directory, candidates[i]);
+			if (isReadableFile(candidate))
+			{
+				return strdup(candidate.c_str());
+			}
+		}
+		return NULL;
+	}
+}
+
 // Load the configuration
 bool SimpleConfigLoader::loadConfiguration()
 {
 	char* configPath = getConfigPath();
+	const std::string configDirectory = parentDirectory(configPath);
 
 	FILE* fp = fopen(configPath,"r");
 
@@ -150,6 +298,10 @@ bool SimpleConfigLoader::loadConfiguration()
 		switch (Configuration::i()->getType(stringName))
 		{
 			case CONFIG_TYPE_STRING:
+				if (stringName == "directories.tokendir" && !isAbsolutePath(stringValue))
+				{
+					stringValue = joinPath(configDirectory, stringValue);
+				}
 				Configuration::i()->setString(stringName, stringValue);
 				break;
 			case CONFIG_TYPE_INT:
@@ -302,13 +454,17 @@ char* SimpleConfigLoader::getConfigPath()
 	{
 		return configPath;
 	}
-	else
+
+	tpath = getPortableConfigPath();
+	if (tpath != NULL)
 	{
-		tpath = get_user_path();
-		if (tpath != NULL)
-		{
-			return tpath;
-		}
+		return tpath;
+	}
+
+	tpath = get_user_path();
+	if (tpath != NULL)
+	{
+		return tpath;
 	}
 
 	return strdup(DEFAULT_SOFTHSM2_CONF);

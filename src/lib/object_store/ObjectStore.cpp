@@ -40,7 +40,44 @@
 #include "ObjectStoreToken.h"
 #include "OSPathSep.h"
 #include "UUID.h"
+#include <errno.h>
 #include <stdio.h>
+#include <sys/stat.h>
+#ifdef _WIN32
+#include <direct.h>
+#endif
+
+namespace
+{
+	static bool ensureStoreDirectory(const std::string& path, int umask)
+	{
+#ifdef _WIN32
+		struct _stat status;
+		if (_stat(path.c_str(), &status) == 0)
+		{
+			return (status.st_mode & _S_IFDIR) != 0;
+		}
+		if (errno != ENOENT)
+		{
+			return false;
+		}
+		(void)umask;
+		return _mkdir(path.c_str()) == 0 || errno == EEXIST;
+#else
+		struct stat status;
+		if (stat(path.c_str(), &status) == 0)
+		{
+			return S_ISDIR(status.st_mode);
+		}
+		if (errno != ENOENT)
+		{
+			return false;
+		}
+		const mode_t mode = (S_IRWXU | S_IRWXG | S_IRWXO) & ~static_cast<mode_t>(umask);
+		return mkdir(path.c_str(), mode) == 0 || errno == EEXIST;
+#endif
+	}
+}
 
 // Constructor
 ObjectStore::ObjectStore(std::string inStorePath, int inUmask)
@@ -51,6 +88,11 @@ ObjectStore::ObjectStore(std::string inStorePath, int inUmask)
 	storeMutex = MutexFactory::i()->getMutex();
 
 	MutexLocker lock(storeMutex);
+	if (!ensureStoreDirectory(storePath, umask))
+	{
+		WARNING_MSG("Failed to create object store in %s", storePath.c_str());
+		return;
+	}
 
 	// Find all tokens in the specified path
 	Directory storeDir(storePath);
@@ -185,4 +227,3 @@ bool ObjectStore::destroyToken(ObjectStoreToken *token)
 
 	return false;
 }
-

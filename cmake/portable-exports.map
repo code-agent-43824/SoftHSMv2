@@ -1,0 +1,6 @@
+SOFTHSM2_PORTABLE {
+  global:
+    C_*;
+  local:
+    *;
+};

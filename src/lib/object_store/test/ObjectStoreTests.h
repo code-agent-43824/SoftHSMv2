@@ -39,6 +39,7 @@ class ObjectStoreTests : public CppUnit::TestFixture
 {
 	CPPUNIT_TEST_SUITE(ObjectStoreTests);
 	CPPUNIT_TEST(testEmptyStore);
+	CPPUNIT_TEST(testCreateMissingStore);
 	CPPUNIT_TEST(testNewTokens);
 	CPPUNIT_TEST(testExistingTokens);
 	CPPUNIT_TEST(testDeleteToken);
@@ -46,6 +47,7 @@ class ObjectStoreTests : public CppUnit::TestFixture
 
 public:
 	void testEmptyStore();
+	void testCreateMissingStore();
 	void testNewTokens();
 	void testExistingTokens();
 	void testDeleteToken();
@@ -55,4 +57,3 @@ public:
 };
 
 #endif // !_SOFTHSM_V2_OBJECTSTORETESTS_H
-

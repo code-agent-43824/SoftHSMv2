@@ -65,7 +65,7 @@ include_directories(${INCLUDE_DIRS})
 # Static Library Config
 ###############################################################################
 add_library(${PROJECT_NAME}-static STATIC ${SOURCES})
-target_link_libraries(${PROJECT_NAME}-static ${STATIC_FILES})
+target_link_libraries(${PROJECT_NAME}-static ${STATIC_FILES} ${CMAKE_DL_LIBS})
 set_target_properties(${PROJECT_NAME}-static
                       PROPERTIES OUTPUT_NAME ${PROJECT_NAME}-static
                       )
@@ -76,9 +76,25 @@ target_compile_options(${PROJECT_NAME}-static PRIVATE ${COMPILE_OPTIONS})
 # Shared Library Config
 ###############################################################################
 add_library(${PROJECT_NAME} SHARED ${SOURCES})
-target_link_libraries(${PROJECT_NAME} ${STATIC_FILES})
+target_link_libraries(${PROJECT_NAME} ${STATIC_FILES} ${CMAKE_DL_LIBS})
 generate_export_header(${PROJECT_NAME})
 target_compile_options(${PROJECT_NAME} PRIVATE ${COMPILE_OPTIONS})
+
+if(ENABLE_PORTABLE)
+        if(MSVC)
+                set_property(TARGET ${PROJECT_NAME} ${PROJECT_NAME}-static
+                             PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+        elseif(APPLE)
+                target_link_options(${PROJECT_NAME} PRIVATE
+                                    "-Wl,-exported_symbols_list,${CMAKE_SOURCE_DIR}/cmake/portable-exports.macos")
+        elseif(UNIX)
+                target_link_options(${PROJECT_NAME} PRIVATE
+                                    -static-libgcc
+                                    -static-libstdc++
+                                    "-Wl,--exclude-libs,ALL"
+                                    "-Wl,--version-script=${CMAKE_SOURCE_DIR}/cmake/portable-exports.map")
+        endif()
+endif()
 
 ###############################################################################
 # Tests

@@ -1,0 +1,144 @@
+name: Portable release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag to create or update
+        required: true
+        default: v2.7.0-portable.1
+
+permissions:
+  contents: read
+
+env:
+  OPENSSL_VERSION: 3.5.7
+  OPENSSL_SHA256: a8c0d28a529ca480f9f36cf5792e2cd21984552a3c8e4aa11a24aa31aeac98e8
+
+jobs:
+  linux-x64:
+    name: Linux x64 (glibc 2.31)
+    runs-on: ubuntu-24.04
+    container: ubuntu:20.04
+    steps:
+      - name: Install build tools
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential ca-certificates cmake curl libcppunit-dev perl pkg-config zip
+      - uses: actions/checkout@v7
+      - name: Build and verify
+        env:
+          PORTABLE_ARCH: x64
+        run: scripts/portable/build-linux.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: softhsm-portable-linux-x64
+          path: dist/softhsm-portable-linux-x64.zip
+          if-no-files-found: error
+          retention-days: 90
+
+  linux-arm64:
+    name: Linux ARM64 (glibc 2.31)
+    runs-on: ubuntu-24.04-arm
+    container: ubuntu:20.04
+    steps:
+      - name: Install build tools
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential ca-certificates cmake curl libcppunit-dev perl pkg-config zip
+      - uses: actions/checkout@v7
+      - name: Build and verify
+        env:
+          PORTABLE_ARCH: arm64
+        run: scripts/portable/build-linux.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: softhsm-portable-linux-arm64
+          path: dist/softhsm-portable-linux-arm64.zip
+          if-no-files-found: error
+          retention-days: 90
+
+  windows-x64:
+    name: Windows x64
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build and verify
+        shell: cmd
+        env:
+          PORTABLE_ARCH: x64
+        run: scripts\portable\build-windows.cmd
+      - uses: actions/upload-artifact@v7
+        with:
+          name: softhsm-portable-windows-x64
+          path: dist/softhsm-portable-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 90
+
+  windows-arm64:
+    name: Windows ARM64
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build and verify
+        shell: cmd
+        env:
+          PORTABLE_ARCH: arm64
+        run: scripts\portable\build-windows.cmd
+      - uses: actions/upload-artifact@v7
+        with:
+          name: softhsm-portable-windows-arm64
+          path: dist/softhsm-portable-windows-arm64.zip
+          if-no-files-found: error
+          retention-days: 90
+
+  macos-universal:
+    name: macOS universal (Intel and Apple Silicon)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build and verify
+        run: scripts/portable/build-macos.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: softhsm-portable-macos-universal
+          path: dist/softhsm-portable-macos-universal.zip
+          if-no-files-found: error
+          retention-days: 90
+
+  release:
+    name: Publish all portable packages
+    needs:
+      - linux-x64
+      - linux-arm64
+      - windows-x64
+      - windows-arm64
+      - macos-universal
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: softhsm-portable-*
+          path: release-assets
+          merge-multiple: true
+      - name: Create checksums
+        working-directory: release-assets
+        run: sha256sum *.zip > SHA256SUMS
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" release-assets/* --clobber
+          else
+            gh release create "$RELEASE_TAG" release-assets/* \
+              --target "$GITHUB_SHA" \
+              --title "SoftHSM portable $RELEASE_TAG" \
+              --notes "Portable, installer-free PKCS #11 modules for Linux, Windows, and macOS. Extract one ZIP and point the application at the module path. The module reads softhsm.conf and creates its tokens directory beside itself."
+          fi
