@@ -74,6 +74,14 @@ include their C/C++ runtime; macOS uses the system libc++. The `SOFTHSM2_CONF`
 environment variable remains available as an explicit override. See
 `packaging/portable/README.txt` for the archive layout.
 
+Every platform build must pass `tests/portable/PortableTokenIntegrationTest.java`
+before its archive can be uploaded. The test initialises a token, logs in,
+generates a persistent RSA-2048 key, creates and verifies a PKCS#10 request,
+uses an external OpenSSL CA to issue a certificate, imports its chain into the
+token, creates detached CMS with the token key, and verifies the CMS using the
+OpenSSL command line. The release job runs only after all five platform builds
+have passed this gate.
+
 ### Building from the repository
 
 If the code is downloaded directly from the code repository, you have to

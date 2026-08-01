@@ -50,7 +50,14 @@ cp "$openssl_source/LICENSE.txt" "$stage_dir/LICENSE-OpenSSL.txt"
 cc "$root_dir/scripts/portable/smoke.c" -ldl -o "$work_dir/portable-smoke"
 (cd /tmp && env -u SOFTHSM2_CONF "$work_dir/portable-smoke" "$stage_dir/libsofthsm2.so")
 test -d "$stage_dir/tokens"
-rmdir "$stage_dir/tokens"
+
+"$root_dir/tests/portable/run-integration.sh" \
+  "$stage_dir/libsofthsm2.so" \
+  "$build_dir/src/bin/util/softhsm2-util" \
+  "$openssl_prefix/bin/openssl" \
+  "$stage_dir/softhsm.conf" \
+  "$work_dir/integration"
+rm -rf "$stage_dir/tokens"
 
 if ldd "$stage_dir/libsofthsm2.so" | grep -Eq 'lib(ssl|crypto|stdc\+\+|gcc_s)'; then
   echo "portable module has an unexpected non-system runtime dependency" >&2
