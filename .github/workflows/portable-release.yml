@@ -6,7 +6,7 @@ on:
       release_tag:
         description: Release tag to create or update
         required: true
-        default: v2.7.0-portable.2
+        default: v2.7.0-portable.3
 
 permissions:
   contents: read
@@ -16,8 +16,8 @@ env:
   OPENSSL_SHA256: a8c0d28a529ca480f9f36cf5792e2cd21984552a3c8e4aa11a24aa31aeac98e8
 
 jobs:
-  linux-x64:
-    name: Linux x64 (glibc 2.31)
+  build-linux-x64:
+    name: Build Linux x64 (glibc 2.31)
     runs-on: ubuntu-24.04
     container: ubuntu:20.04
     steps:
@@ -25,13 +25,9 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential ca-certificates cmake curl libcppunit-dev perl pkg-config zip
+            build-essential ca-certificates cmake curl perl pkg-config zip
       - uses: actions/checkout@v7
-      - uses: actions/setup-java@v5
-        with:
-          distribution: microsoft
-          java-version: 21
-      - name: Build and verify
+      - name: Build package
         env:
           PORTABLE_ARCH: x64
         run: scripts/portable/build-linux.sh
@@ -42,8 +38,8 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-  linux-arm64:
-    name: Linux ARM64 (glibc 2.31)
+  build-linux-arm64:
+    name: Build Linux ARM64 (glibc 2.31)
     runs-on: ubuntu-24.04-arm
     container: ubuntu:20.04
     steps:
@@ -51,13 +47,9 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential ca-certificates cmake curl libcppunit-dev perl pkg-config zip
+            build-essential ca-certificates cmake curl perl pkg-config zip
       - uses: actions/checkout@v7
-      - uses: actions/setup-java@v5
-        with:
-          distribution: microsoft
-          java-version: 21
-      - name: Build and verify
+      - name: Build package
         env:
           PORTABLE_ARCH: arm64
         run: scripts/portable/build-linux.sh
@@ -68,16 +60,12 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-  windows-x64:
-    name: Windows x64
+  build-windows-x64:
+    name: Build Windows x64
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-java@v5
-        with:
-          distribution: microsoft
-          java-version: 21
-      - name: Build and verify
+      - name: Build package
         shell: cmd
         env:
           PORTABLE_ARCH: x64
@@ -89,16 +77,12 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-  windows-arm64:
-    name: Windows ARM64
+  build-windows-arm64:
+    name: Build Windows ARM64
     runs-on: windows-11-arm
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-java@v5
-        with:
-          distribution: microsoft
-          java-version: 21
-      - name: Build and verify
+      - name: Build package
         shell: cmd
         env:
           PORTABLE_ARCH: arm64
@@ -110,16 +94,12 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-  macos-universal:
-    name: macOS universal (Intel and Apple Silicon)
+  build-macos-universal:
+    name: Build macOS universal
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-java@v5
-        with:
-          distribution: microsoft
-          java-version: 21
-      - name: Build and verify
+      - name: Build package
         run: scripts/portable/build-macos.sh
       - uses: actions/upload-artifact@v7
         with:
@@ -128,14 +108,103 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+  verify-linux-x64:
+    name: Verify downloaded Linux x64 package
+    needs: build-linux-x64
+    runs-on: ubuntu-24.04
+    container: ubuntu:20.04
+    steps:
+      - name: Install minimal test tools
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates g++ openssl unzip
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: softhsm-portable-linux-x64
+          path: downloaded
+      - name: Test downloaded package
+        run: tests/portable/run-fresh-integration.sh downloaded/softhsm-portable-linux-x64.zip libsofthsm2.so "$(command -v openssl)"
+
+  verify-linux-arm64:
+    name: Verify downloaded Linux ARM64 package
+    needs: build-linux-arm64
+    runs-on: ubuntu-24.04-arm
+    container: ubuntu:20.04
+    steps:
+      - name: Install minimal test tools
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates g++ openssl unzip
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: softhsm-portable-linux-arm64
+          path: downloaded
+      - name: Test downloaded package
+        run: tests/portable/run-fresh-integration.sh downloaded/softhsm-portable-linux-arm64.zip libsofthsm2.so "$(command -v openssl)"
+
+  verify-windows-x64:
+    name: Verify downloaded Windows x64 package
+    needs: build-windows-x64
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: softhsm-portable-windows-x64
+          path: downloaded
+      - name: Test downloaded package
+        shell: cmd
+        env:
+          PORTABLE_ARCH: x64
+        run: tests\portable\run-fresh-windows.cmd downloaded\softhsm-portable-windows-x64.zip
+
+  verify-windows-arm64:
+    name: Verify downloaded Windows ARM64 package
+    needs: build-windows-arm64
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: softhsm-portable-windows-arm64
+          path: downloaded
+      - name: Test downloaded package
+        shell: cmd
+        env:
+          PORTABLE_ARCH: arm64
+        run: tests\portable\run-fresh-windows.cmd downloaded\softhsm-portable-windows-arm64.zip
+
+  verify-macos-universal:
+    name: Verify downloaded macOS universal package
+    needs: build-macos-universal
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: softhsm-portable-macos-universal
+          path: downloaded
+      - name: Test downloaded package
+        env:
+          CXX: clang++
+        run: |
+          openssl="$(brew --prefix openssl@3)/bin/openssl"
+          tests/portable/run-fresh-integration.sh \
+            downloaded/softhsm-portable-macos-universal.zip \
+            libsofthsm2.dylib "$openssl"
+
   release:
-    name: Publish all portable packages
+    name: Publish all verified portable packages
     needs:
-      - linux-x64
-      - linux-arm64
-      - windows-x64
-      - windows-arm64
-      - macos-universal
+      - verify-linux-x64
+      - verify-linux-arm64
+      - verify-windows-x64
+      - verify-windows-arm64
+      - verify-macos-universal
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -160,5 +229,5 @@ jobs:
             gh release create "$RELEASE_TAG" release-assets/* \
               --target "$GITHUB_SHA" \
               --title "SoftHSM portable $RELEASE_TAG" \
-              --notes "Portable, installer-free PKCS #11 modules for Linux, Windows, and macOS. Extract one ZIP and point the application at the module path. Before publication every platform passes an end-to-end RSA, PKCS#10, certificate import, and externally verified CMS test."
+              --notes "Portable, installer-free PKCS #11 modules for Linux, Windows, and macOS. Every package is built on one runner, uploaded, then downloaded and tested on a separate fresh runner using only a small direct PKCS #11 C++ client and the OpenSSL command line."
           fi

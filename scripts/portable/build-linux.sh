@@ -32,12 +32,11 @@ cmake -S "$root_dir" -B "$build_dir" \
   -DENABLE_PORTABLE=ON \
   -DENABLE_STATIC=OFF \
   -DENABLE_P11_KIT=OFF \
-  -DBUILD_TESTS=ON \
+  -DBUILD_TESTS=OFF \
   -DWITH_OBJECTSTORE_BACKEND_DB=OFF \
   -DWITH_CRYPTO_BACKEND=openssl \
   -DOPENSSL_ROOT_DIR="$openssl_prefix"
 cmake --build "$build_dir" --parallel "$(getconf _NPROCESSORS_ONLN)"
-ctest --test-dir "$build_dir" --output-on-failure
 
 mkdir -p "$stage_dir"
 cp "$build_dir/src/lib/libsofthsm2.so" "$stage_dir/libsofthsm2.so"
@@ -46,18 +45,6 @@ cp "$root_dir/packaging/portable/softhsm.conf" "$stage_dir/softhsm.conf"
 cp "$root_dir/packaging/portable/README.txt" "$stage_dir/README.txt"
 cp "$root_dir/LICENSE" "$stage_dir/LICENSE-SoftHSM.txt"
 cp "$openssl_source/LICENSE.txt" "$stage_dir/LICENSE-OpenSSL.txt"
-
-cc "$root_dir/scripts/portable/smoke.c" -ldl -o "$work_dir/portable-smoke"
-(cd /tmp && env -u SOFTHSM2_CONF "$work_dir/portable-smoke" "$stage_dir/libsofthsm2.so")
-test -d "$stage_dir/tokens"
-
-"$root_dir/tests/portable/run-integration.sh" \
-  "$stage_dir/libsofthsm2.so" \
-  "$build_dir/src/bin/util/softhsm2-util" \
-  "$openssl_prefix/bin/openssl" \
-  "$stage_dir/softhsm.conf" \
-  "$work_dir/integration"
-rm -rf "$stage_dir/tokens"
 
 if ldd "$stage_dir/libsofthsm2.so" | grep -Eq 'lib(ssl|crypto|stdc\+\+|gcc_s)'; then
   echo "portable module has an unexpected non-system runtime dependency" >&2

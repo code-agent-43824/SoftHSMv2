@@ -50,7 +50,7 @@ for arch in arm64 x86_64; do
     -DWITH_OBJECTSTORE_BACKEND_DB=OFF \
     -DWITH_CRYPTO_BACKEND=openssl \
     -DOPENSSL_ROOT_DIR="$work_dir/openssl-install-$arch"
-  cmake --build "$build_dir" --target softhsm2 softhsm2-util --parallel "$(sysctl -n hw.logicalcpu)"
+  cmake --build "$build_dir" --target softhsm2 --parallel "$(sysctl -n hw.logicalcpu)"
 done
 
 arm_module=$(find "$work_dir/softhsm-build-arm64" -name libsofthsm2.dylib -type f -print -quit)
@@ -65,29 +65,6 @@ cp "$root_dir/packaging/portable/softhsm.conf" "$stage_dir/softhsm.conf"
 cp "$root_dir/packaging/portable/README.txt" "$stage_dir/README.txt"
 cp "$root_dir/LICENSE" "$stage_dir/LICENSE-SoftHSM.txt"
 cp "$openssl_source/LICENSE.txt" "$stage_dir/LICENSE-OpenSSL.txt"
-
-cc "$root_dir/scripts/portable/smoke.c" -o "$work_dir/portable-smoke"
-(cd /tmp && env -u SOFTHSM2_CONF "$work_dir/portable-smoke" "$stage_dir/libsofthsm2.dylib")
-test -d "$stage_dir/tokens"
-
-host_arch=$(uname -m)
-if [[ "$host_arch" == x86_64 ]]; then
-  native_arch=x86_64
-elif [[ "$host_arch" == arm64 ]]; then
-  native_arch=arm64
-else
-  echo "unsupported macOS runner architecture: $host_arch" >&2
-  exit 1
-fi
-native_utility=$(find "$work_dir/softhsm-build-$native_arch" -name softhsm2-util -type f -print -quit)
-test -n "$native_utility"
-"$root_dir/tests/portable/run-integration.sh" \
-  "$stage_dir/libsofthsm2.dylib" \
-  "$native_utility" \
-  "$work_dir/openssl-install-$native_arch/bin/openssl" \
-  "$stage_dir/softhsm.conf" \
-  "$work_dir/integration"
-rm -rf "$stage_dir/tokens"
 
 lipo "$stage_dir/libsofthsm2.dylib" -verify_arch arm64 x86_64
 if otool -L "$stage_dir/libsofthsm2.dylib" | grep -Eq 'lib(ssl|crypto)'; then

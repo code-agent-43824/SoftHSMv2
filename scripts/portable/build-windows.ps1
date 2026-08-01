@@ -51,7 +51,7 @@ cmake -S $RootDir -B $BuildDir -A $CMakeArch `
     -DWITH_CRYPTO_BACKEND=openssl `
     "-DOPENSSL_ROOT_DIR=$OpenSSLPrefix"
 if ($LASTEXITCODE -ne 0) { throw "SoftHSM configure failed" }
-cmake --build $BuildDir --config Release --target softhsm2 softhsm2-util --parallel
+cmake --build $BuildDir --config Release --target softhsm2 --parallel
 if ($LASTEXITCODE -ne 0) { throw "SoftHSM build failed" }
 
 $ModulePath = Get-ChildItem -Path $BuildDir -Filter softhsm2.dll -Recurse | Select-Object -First 1
@@ -62,33 +62,6 @@ Copy-Item (Join-Path $RootDir "packaging/portable/softhsm.conf") (Join-Path $Sta
 Copy-Item (Join-Path $RootDir "packaging/portable/README.txt") (Join-Path $StageDir "README.txt")
 Copy-Item (Join-Path $RootDir "LICENSE") (Join-Path $StageDir "LICENSE-SoftHSM.txt")
 Copy-Item (Join-Path $OpenSSLSource "LICENSE.txt") (Join-Path $StageDir "LICENSE-OpenSSL.txt")
-
-$SmokeExe = Join-Path $WorkDir "portable-smoke.exe"
-cl /nologo /O2 /MT (Join-Path $RootDir "scripts/portable/smoke.c") "/Fe:$SmokeExe"
-if ($LASTEXITCODE -ne 0) { throw "smoke test build failed" }
-Push-Location $env:RUNNER_TEMP
-try {
-    Remove-Item Env:SOFTHSM2_CONF -ErrorAction SilentlyContinue
-    & $SmokeExe (Join-Path $StageDir "softhsm2.dll")
-    if ($LASTEXITCODE -ne 0) { throw "portable module smoke test failed" }
-}
-finally {
-    Pop-Location
-}
-$TokensDir = Join-Path $StageDir "tokens"
-if (-not (Test-Path -PathType Container $TokensDir)) { throw "tokens directory was not created beside the module" }
-
-$UtilityPath = Get-ChildItem -Path $BuildDir -Filter softhsm2-util.exe -Recurse | Select-Object -First 1
-if (-not $UtilityPath) { throw "softhsm2-util.exe was not produced" }
-& (Join-Path $RootDir "tests/portable/run-integration.ps1") `
-    (Join-Path $StageDir "softhsm2.dll") `
-    $UtilityPath.FullName `
-    (Join-Path $OpenSSLPrefix "bin/openssl.exe") `
-    (Join-Path $StageDir "softhsm.conf") `
-    (Join-Path $WorkDir "integration")
-if ($LASTEXITCODE -ne 0) { throw "portable token integration test failed" }
-if (-not (Test-Path -PathType Container $TokensDir)) { throw "integration test did not persist a token" }
-Remove-Item -Recurse $TokensDir
 
 $UnexpectedDlls = & dumpbin /dependents (Join-Path $StageDir "softhsm2.dll") |
     Select-String -Pattern 'libcrypto|libssl|vcruntime|msvcp|ucrtbased' -CaseSensitive:$false

@@ -74,13 +74,15 @@ include their C/C++ runtime; macOS uses the system libc++. The `SOFTHSM2_CONF`
 environment variable remains available as an explicit override. See
 `packaging/portable/README.txt` for the archive layout.
 
-Every platform build must pass `tests/portable/PortableTokenIntegrationTest.java`
-before its archive can be uploaded. The test initialises a token, logs in,
-generates a persistent RSA-2048 key, creates and verifies a PKCS#10 request,
-uses an external OpenSSL CA to issue a certificate, imports its chain into the
-token, creates detached CMS with the token key, and verifies the CMS using the
-OpenSSL command line. The release job runs only after all five platform builds
-have passed this gate.
+Each platform archive is produced and uploaded by a build job. A separate,
+fresh runner of the same architecture then downloads the archive and tests it
+as an external consumer. The dependency-light client in
+`tests/portable/portable-token-e2e.cpp` loads the packaged module directly and
+uses only PKCS #11 calls to initialise a token, log in, generate persistent
+RSA-2048 keys, create a PKCS#10 request, import the issued certificate, and
+produce detached CMS. Shell and PowerShell launchers use the OpenSSL command
+line as the independent CSR, CA, certificate, and CMS verifier. The release
+job runs only after all five fresh-runner verification jobs have passed.
 
 ### Building from the repository
 
