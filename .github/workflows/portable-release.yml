@@ -6,7 +6,7 @@ on:
       release_tag:
         description: Release tag to create or update
         required: true
-        default: v2.7.0-portable.3
+        default: v2.7.0-portable.4
 
 permissions:
   contents: read
@@ -229,5 +229,5 @@ jobs:
             gh release create "$RELEASE_TAG" release-assets/* \
               --target "$GITHUB_SHA" \
               --title "SoftHSM portable $RELEASE_TAG" \
-              --notes "Portable, installer-free PKCS #11 modules for Linux, Windows, and macOS. Every package is built on one runner, uploaded, then downloaded and tested on a separate fresh runner using only a small direct PKCS #11 C++ client and the OpenSSL command line."
+              --notes "Portable, installer-free PKCS #11 modules for Linux, Windows, and macOS. Every package is built on one runner, uploaded, then downloaded and tested on a separate fresh runner using a vendor-neutral direct PKCS #11 C++ client and the OpenSSL command line. The test emits a redacted parameter-level trace of every PKCS #11 call and template."
           fi
