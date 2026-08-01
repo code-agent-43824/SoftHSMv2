@@ -292,6 +292,11 @@ elseif(WITH_CRYPTO_BACKEND STREQUAL "openssl")
 
     set(CRYPTO_INCLUDES ${OPENSSL_INCLUDE_DIR})
     set(CRYPTO_LIBS ${OPENSSL_LIBRARIES})
+    if(WIN32)
+        # Static OpenSSL uses these Windows system libraries. FindOpenSSL's
+        # legacy OPENSSL_LIBRARIES variable does not propagate them.
+        list(APPEND CRYPTO_LIBS Crypt32.lib Ws2_32.lib)
+    endif()
     message(STATUS "OpenSSL: Found version ${OPENSSL_VERSION}")
     message(STATUS "OpenSSL: Includes: ${CRYPTO_INCLUDES}")
     message(STATUS "OpenSSL: Libs: ${CRYPTO_LIBS}")
@@ -311,9 +316,16 @@ elseif(WITH_CRYPTO_BACKEND STREQUAL "openssl")
         endif()
     endif()
 
+    set(_saved_required_includes "${CMAKE_REQUIRED_INCLUDES}")
+    set(CMAKE_REQUIRED_INCLUDES "${CRYPTO_INCLUDES}")
     check_include_files(openssl/ssl.h HAVE_OPENSSL_SSL_H)
+    set(CMAKE_REQUIRED_INCLUDES "${_saved_required_includes}")
     get_filename_component(CRYPTO_LIB_DIR "${OPENSSL_CRYPTO_LIBRARY}" DIRECTORY)
-    check_library_exists(crypto "BN_new" "${CRYPTO_LIB_DIR}" HAVE_LIBCRYPTO)
+    if(WIN32 AND EXISTS "${OPENSSL_CRYPTO_LIBRARY}")
+        set(HAVE_LIBCRYPTO 1)
+    else()
+        check_library_exists(crypto "BN_new" "${CRYPTO_LIB_DIR}" HAVE_LIBCRYPTO)
+    endif()
 
     # acx_openssl_ecc.m4
     if(ENABLE_ECC)

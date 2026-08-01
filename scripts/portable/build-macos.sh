@@ -12,6 +12,7 @@ stage_dir="$work_dir/stage"
 output_dir="$root_dir/dist"
 archive_name="softhsm-portable-macos-universal.zip"
 deployment_target=11.0
+export MACOSX_DEPLOYMENT_TARGET="$deployment_target"
 
 mkdir -p "$work_dir" "$output_dir"
 curl --fail --location --retry 5 --output "$openssl_archive" \
@@ -29,7 +30,7 @@ for arch in arm64 x86_64; do
   else
     target=darwin64-x86_64-cc
   fi
-  env MACOSX_DEPLOYMENT_TARGET="$deployment_target" ./Configure "$target" \
+  ./Configure "$target" \
     no-shared no-module no-tests --prefix="$prefix" --libdir=lib
   make -j"$(sysctl -n hw.logicalcpu)"
   make install_sw install_ssldirs
@@ -69,7 +70,7 @@ cc "$root_dir/scripts/portable/smoke.c" -o "$work_dir/portable-smoke"
 (cd /tmp && env -u SOFTHSM2_CONF "$work_dir/portable-smoke" "$stage_dir/libsofthsm2.dylib")
 test -d "$stage_dir/tokens"
 rmdir "$stage_dir/tokens"
-lipo -verify_arch arm64 x86_64 "$stage_dir/libsofthsm2.dylib"
+lipo "$stage_dir/libsofthsm2.dylib" -verify_arch arm64 x86_64
 if otool -L "$stage_dir/libsofthsm2.dylib" | grep -Eq 'lib(ssl|crypto|c\+\+)'; then
   echo "portable module has an unexpected non-system runtime dependency" >&2
   otool -L "$stage_dir/libsofthsm2.dylib" >&2
