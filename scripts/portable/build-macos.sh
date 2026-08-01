@@ -78,5 +78,5 @@ if otool -L "$stage_dir/libsofthsm2.dylib" | grep -Eq 'lib(ssl|crypto)'; then
 fi
 
 rm -f "$output_dir/$archive_name"
-(cd "$stage_dir" && ditto -c -k --keepParent=false . "$output_dir/$archive_name")
+(cd "$stage_dir" && /usr/bin/zip -X -9 -j "$output_dir/$archive_name" ./*)
 shasum -a 256 "$output_dir/$archive_name"
