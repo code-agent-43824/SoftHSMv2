@@ -24,7 +24,7 @@ download_jar() {
   local target="$deps_dir/$artifact-$bc_version.jar"
   curl --fail --location --retry 5 --output "$target" \
     "https://repo1.maven.org/maven2/org/bouncycastle/$artifact/$bc_version/$artifact-$bc_version.jar"
-  if command -v sha256sum >/dev/null 2>&1; then
+  if [[ $(uname -s) != Darwin ]] && command -v sha256sum >/dev/null 2>&1; then
     printf '%s  %s\n' "$expected_sha256" "$target" | sha256sum --check
   else
     printf '%s  %s\n' "$expected_sha256" "$target" | shasum -a 256 --check
