@@ -21,12 +21,15 @@ test -f "$package_dir/$module_name"
 test -f "$package_dir/softhsm.conf"
 
 cxx=${CXX:-c++}
-link_flags=()
-if [[ $(uname -s) == Linux ]]; then link_flags+=(-ldl); fi
-"$cxx" -std=c++17 -O2 -Wall -Wextra -Werror \
-  -I"$root_dir/src/lib/pkcs11" \
-  "$root_dir/tests/portable/portable-token-e2e.cpp" \
-  "${link_flags[@]}" -o "$tester"
+if [[ $(uname -s) == Linux ]]; then
+  "$cxx" -std=c++17 -O2 -Wall -Wextra -Werror \
+    -I"$root_dir/src/lib/pkcs11" \
+    "$root_dir/tests/portable/portable-token-e2e.cpp" -ldl -o "$tester"
+else
+  "$cxx" -std=c++17 -O2 -Wall -Wextra -Werror \
+    -I"$root_dir/src/lib/pkcs11" \
+    "$root_dir/tests/portable/portable-token-e2e.cpp" -o "$tester"
+fi
 
 unset SOFTHSM2_CONF
 (cd /tmp && "$tester" prepare "$package_dir/$module_name" "$scenario_dir" 12345678 12345678)
