@@ -523,6 +523,10 @@ static const char* attributeName(CK_ATTRIBUTE_TYPE type)
         case CKA_MODULUS_BITS: return "CKA_MODULUS_BITS";
         case CKA_PUBLIC_EXPONENT: return "CKA_PUBLIC_EXPONENT";
         case CKA_EXTRACTABLE: return "CKA_EXTRACTABLE";
+        case CKA_LOCAL: return "CKA_LOCAL";
+        case CKA_KEY_GEN_MECHANISM: return "CKA_KEY_GEN_MECHANISM";
+        case CKA_GOSTR3410_PARAMS: return "CKA_GOSTR3410_PARAMS";
+        case CKA_GOSTR3411_PARAMS: return "CKA_GOSTR3411_PARAMS";
         case CKA_SUBJECT: return "CKA_SUBJECT";
         default: return "CKA_<unknown>";
     }
@@ -544,6 +548,7 @@ static std::string objectClassName(CK_OBJECT_CLASS value)
 static std::string keyTypeName(CK_KEY_TYPE value)
 {
     if (value == CKK_RSA) return "CKK_RSA";
+    if (value == CKK_GOSTR3410) return "CKK_GOSTR3410";
     return "CKK_<unknown>(" + hexNumber(value) + ")";
 }
 
@@ -570,7 +575,8 @@ static std::string attributeValue(const CK_ATTRIBUTE& attribute)
     if ((attribute.type == CKA_TOKEN || attribute.type == CKA_PRIVATE ||
          attribute.type == CKA_SENSITIVE || attribute.type == CKA_ENCRYPT ||
          attribute.type == CKA_DECRYPT || attribute.type == CKA_SIGN ||
-         attribute.type == CKA_VERIFY || attribute.type == CKA_EXTRACTABLE) &&
+         attribute.type == CKA_VERIFY || attribute.type == CKA_EXTRACTABLE ||
+         attribute.type == CKA_LOCAL) &&
         attribute.ulValueLen == sizeof(CK_BBOOL))
         return *static_cast<const CK_BBOOL*>(attribute.pValue) == CK_TRUE ? "CK_TRUE" : "CK_FALSE";
     if (attribute.type == CKA_MODULUS_BITS && attribute.ulValueLen == sizeof(CK_ULONG))
@@ -600,6 +606,7 @@ static const char* mechanismName(CK_MECHANISM_TYPE mechanism)
         case CKM_RSA_PKCS: return "CKM_RSA_PKCS";
         case CKM_SHA256_RSA_PKCS: return "CKM_SHA256_RSA_PKCS";
         case CKM_SHA256: return "CKM_SHA256";
+        case CKM_GOSTR3410_KEY_PAIR_GEN: return "CKM_GOSTR3410_KEY_PAIR_GEN";
         case CKM_GOSTR3411_2012_256: return "CKM_GOSTR3411_2012_256";
         default: return "CKM_<unknown>";
     }
@@ -800,6 +807,129 @@ static void verifyStreebog256(Module& module, CK_SESSION_HANDLE session)
     if (multipart != expected)
         fail("multipart GOST R 34.11-2012/256 digest does not match RFC 6986");
     trace("REFERENCE", "multipart GOST R 34.11-2012/256 matches RFC 6986 section 10.1.2");
+}
+
+static CK_ULONG ulongAttribute(Module& module, CK_SESSION_HANDLE session,
+                              CK_OBJECT_HANDLE object, CK_ATTRIBUTE_TYPE type)
+{
+    const Bytes encoded = attribute(module, session, object, type);
+    if (encoded.size() != sizeof(CK_ULONG))
+        fail(std::string(attributeName(type)) + " has an unexpected size");
+    CK_ULONG value = 0;
+    std::memcpy(&value, encoded.data(), sizeof(value));
+    return value;
+}
+
+static void verifyGOST2012KeyGeneration(Module& module, CK_SESSION_HANDLE session,
+                                        const Bytes& baseObjectId)
+{
+    CK_OBJECT_CLASS publicClass = CKO_PUBLIC_KEY;
+    CK_OBJECT_CLASS privateClass = CKO_PRIVATE_KEY;
+    CK_KEY_TYPE keyType = CKK_GOSTR3410;
+    CK_BBOOL yes = CK_TRUE;
+    CK_BBOOL no = CK_FALSE;
+    const std::string label = "portable-ci-gost2012-256";
+    Bytes objectId = baseObjectId;
+    objectId.push_back(0x47);
+
+    // The CryptoPro-A parameter set is deliberately used here because the
+    // same standard template is accepted by rtpkcs11ecp.  Together with the
+    // Streebog-256 digest parameter it denotes a 2012/256 key pair.
+    Bytes curve = bytesFromHex("06072a850302022301");       // 1.2.643.2.2.35.1
+    Bytes digestParam = bytesFromHex("06082a85030701010202"); // 1.2.643.7.1.1.2.2
+    CK_ATTRIBUTE publicTemplate[] = {
+        {CKA_CLASS, &publicClass, sizeof(publicClass)},
+        {CKA_KEY_TYPE, &keyType, sizeof(keyType)},
+        {CKA_TOKEN, &yes, sizeof(yes)},
+        {CKA_PRIVATE, &no, sizeof(no)},
+        {CKA_VERIFY, &yes, sizeof(yes)},
+        {CKA_GOSTR3410_PARAMS, curve.data(), static_cast<CK_ULONG>(curve.size())},
+        {CKA_GOSTR3411_PARAMS, digestParam.data(), static_cast<CK_ULONG>(digestParam.size())},
+        {CKA_LABEL, const_cast<char*>(label.data()), static_cast<CK_ULONG>(label.size())},
+        {CKA_ID, objectId.data(), static_cast<CK_ULONG>(objectId.size())}
+    };
+    CK_ATTRIBUTE privateTemplate[] = {
+        {CKA_CLASS, &privateClass, sizeof(privateClass)},
+        {CKA_KEY_TYPE, &keyType, sizeof(keyType)},
+        {CKA_TOKEN, &yes, sizeof(yes)},
+        {CKA_PRIVATE, &yes, sizeof(yes)},
+        {CKA_SENSITIVE, &yes, sizeof(yes)},
+        {CKA_SIGN, &yes, sizeof(yes)},
+        {CKA_EXTRACTABLE, &no, sizeof(no)},
+        {CKA_GOSTR3410_PARAMS, curve.data(), static_cast<CK_ULONG>(curve.size())},
+        {CKA_GOSTR3411_PARAMS, digestParam.data(), static_cast<CK_ULONG>(digestParam.size())},
+        {CKA_LABEL, const_cast<char*>(label.data()), static_cast<CK_ULONG>(label.size())},
+        {CKA_ID, objectId.data(), static_cast<CK_ULONG>(objectId.size())}
+    };
+    const CK_ULONG publicCount = sizeof(publicTemplate) / sizeof(publicTemplate[0]);
+    const CK_ULONG privateCount = sizeof(privateTemplate) / sizeof(privateTemplate[0]);
+    traceTemplate("GOST R 34.10-2012/256 public-key generation template", publicTemplate, publicCount);
+    traceTemplate("GOST R 34.10-2012/256 private-key generation template", privateTemplate, privateCount);
+
+    CK_OBJECT_HANDLE publicKey = CK_INVALID_HANDLE;
+    CK_OBJECT_HANDLE privateKey = CK_INVALID_HANDLE;
+    CK_BYTE invalidParameter = 0;
+    CK_MECHANISM invalidMechanism{CKM_GOSTR3410_KEY_PAIR_GEN, &invalidParameter, 1};
+    check(invoke("C_GenerateKeyPair", "hSession=" + std::to_string(session) +
+                 ", pMechanism={mechanism=CKM_GOSTR3410_KEY_PAIR_GEN, pParameter=byte[1], ulParameterLen=1}" +
+                 ", pPublicKeyTemplate=publicTemplate, ulPublicKeyAttributeCount=" + std::to_string(publicCount) +
+                 ", pPrivateKeyTemplate=privateTemplate, ulPrivateKeyAttributeCount=" + std::to_string(privateCount),
+                 [&] { return module->C_GenerateKeyPair(session, &invalidMechanism,
+                                  publicTemplate, publicCount, privateTemplate, privateCount,
+                                  &publicKey, &privateKey); }),
+          CKR_MECHANISM_PARAM_INVALID, "C_GenerateKeyPair(non-empty GOST parameters)");
+    trace("STANDARD", "CKM_GOSTR3410_KEY_PAIR_GEN rejects non-empty mechanism parameters");
+
+    CK_MECHANISM mechanism{CKM_GOSTR3410_KEY_PAIR_GEN, nullptr, 0};
+    callOk("C_GenerateKeyPair", "hSession=" + std::to_string(session) +
+           ", pMechanism={mechanism=CKM_GOSTR3410_KEY_PAIR_GEN, pParameter=NULL_PTR, ulParameterLen=0}" +
+           ", pPublicKeyTemplate=publicTemplate, ulPublicKeyAttributeCount=" + std::to_string(publicCount) +
+           ", pPrivateKeyTemplate=privateTemplate, ulPrivateKeyAttributeCount=" + std::to_string(privateCount) +
+           ", phPublicKey=&publicKey, phPrivateKey=&privateKey",
+           [&] { return module->C_GenerateKeyPair(session, &mechanism,
+                            publicTemplate, publicCount, privateTemplate, privateCount,
+                            &publicKey, &privateKey); });
+    trace("OBJECT", "generated GOST publicKey handle=" + std::to_string(publicKey) +
+                    ", privateKey handle=" + std::to_string(privateKey));
+    if (publicKey == CK_INVALID_HANDLE || privateKey == CK_INVALID_HANDLE || publicKey == privateKey)
+        fail("GOST key generation returned invalid handles");
+
+    if (ulongAttribute(module, session, publicKey, CKA_KEY_TYPE) != CKK_GOSTR3410)
+        fail("generated GOST public key has the wrong key type");
+    if (ulongAttribute(module, session, publicKey, CKA_KEY_GEN_MECHANISM) != CKM_GOSTR3410_KEY_PAIR_GEN)
+        fail("generated GOST public key has the wrong key-generation mechanism");
+    const Bytes local = attribute(module, session, publicKey, CKA_LOCAL);
+    if (local.size() != sizeof(CK_BBOOL) || local[0] != CK_TRUE)
+        fail("generated GOST public key is not marked local");
+    if (attribute(module, session, publicKey, CKA_GOSTR3410_PARAMS) != curve ||
+        attribute(module, session, publicKey, CKA_GOSTR3411_PARAMS) != digestParam)
+        fail("generated GOST public key parameter OIDs changed");
+    const Bytes point = attribute(module, session, publicKey, CKA_VALUE);
+    if (point.size() != 64 || std::all_of(point.begin(), point.end(), [](unsigned char byte) { return byte == 0; }))
+        fail("generated GOST public key is not a non-zero 256-bit X || Y point");
+
+    CK_ATTRIBUTE privateValue{CKA_VALUE, nullptr, 0};
+    check(invoke("C_GetAttributeValue", "hSession=" + std::to_string(session) +
+                 ", hObject=" + std::to_string(privateKey) +
+                 ", pTemplate={CKA_VALUE,NULL_PTR,0}, ulCount=1",
+                 [&] { return module->C_GetAttributeValue(session, privateKey, &privateValue, 1); }),
+          CKR_ATTRIBUTE_SENSITIVE, "C_GetAttributeValue(private GOST CKA_VALUE)");
+    trace("SECURITY", "generated GOST private scalar is non-extractable through C_GetAttributeValue");
+
+    std::vector<CK_ATTRIBUTE> publicQuery = {
+        {CKA_CLASS, &publicClass, sizeof(publicClass)},
+        {CKA_KEY_TYPE, &keyType, sizeof(keyType)},
+        {CKA_ID, objectId.data(), static_cast<CK_ULONG>(objectId.size())}
+    };
+    std::vector<CK_ATTRIBUTE> privateQuery = {
+        {CKA_CLASS, &privateClass, sizeof(privateClass)},
+        {CKA_KEY_TYPE, &keyType, sizeof(keyType)},
+        {CKA_ID, objectId.data(), static_cast<CK_ULONG>(objectId.size())}
+    };
+    if (findOne(module, session, publicQuery) != publicKey ||
+        findOne(module, session, privateQuery) != privateKey)
+        fail("generated GOST key pair was not persisted under its standard CKA_ID");
+    trace("KEYGEN", "GOST R 34.10-2012/256 key pair generation and persisted attributes verified");
 }
 
 struct Tlv
@@ -1021,7 +1151,9 @@ static void prepare(const fs::path& modulePath, const fs::path& work)
     requireMechanism(module, slot, CKM_SHA256_RSA_PKCS, CKF_SIGN, 2048);
     requireMechanism(module, slot, CKM_SHA256, CKF_DIGEST);
     requireMechanism(module, slot, CKM_GOSTR3411_2012_256, CKF_DIGEST);
+    requireMechanism(module, slot, CKM_GOSTR3410_KEY_PAIR_GEN, CKF_GENERATE_KEY_PAIR, 256);
     verifyStreebog256(module, session);
+    verifyGOST2012KeyGeneration(module, session, objectId);
 
     CK_OBJECT_CLASS publicClass = CKO_PUBLIC_KEY;
     CK_OBJECT_CLASS privateClass = CKO_PRIVATE_KEY;

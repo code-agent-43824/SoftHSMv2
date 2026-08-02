@@ -26,4 +26,7 @@ required.
 
 GOST R 34.11-2012/256 is available through the TC26
 CKM_GOSTR3411_2012_256 mechanism for one-shot and multipart PKCS #11 digest
-operations. No signing, MAC, or other GOST R 34.11-2012 mechanism is enabled.
+operations. GOST R 34.10-2012/256 key pairs can be generated with
+CKM_GOSTR3410_KEY_PAIR_GEN and explicit CKA_GOSTR3410_PARAMS and
+CKA_GOSTR3411_PARAMS attributes. No GOST signing, MAC, key agreement, or other
+GOST mechanism is enabled.

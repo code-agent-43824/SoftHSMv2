@@ -503,26 +503,32 @@ else()
     message(FATAL_ERROR "Crypto backend '${WITH_CRYPTO_BACKEND}' not supported. Use openssl or botan.")
 endif()
 
-# GOST R 34.11-2012/256 is intentionally a small, digest-only extension.  It
-# uses a separately supplied, statically linkable Botan build even when the
-# rest of SoftHSM uses the OpenSSL backend.
-if(ENABLE_GOST_3411_2012)
-    find_path(BOTAN_STREEBOG_INCLUDE_DIR
+# The narrowly scoped GOST 2012 extensions use a separately supplied,
+# statically linkable Botan build even when the rest of SoftHSM uses OpenSSL.
+if(ENABLE_GOST_3411_2012 OR ENABLE_GOST_3410_2012_256)
+    find_path(BOTAN_GOST_INCLUDE_DIR
               NAMES botan/hash.h
-              DOC "Botan include directory for GOST R 34.11-2012/256")
-    find_library(BOTAN_STREEBOG_LIBRARY
+              DOC "Botan include directory for the GOST 2012 extensions")
+    find_library(BOTAN_GOST_LIBRARY
                  NAMES botan-3 botan-2 botan
-                 DOC "Botan library for GOST R 34.11-2012/256")
-    if(NOT BOTAN_STREEBOG_INCLUDE_DIR OR NOT BOTAN_STREEBOG_LIBRARY)
-        message(FATAL_ERROR "GOST R 34.11-2012/256 requires a Botan include directory and library")
+                 DOC "Botan library for the GOST 2012 extensions")
+    if(NOT BOTAN_GOST_INCLUDE_DIR OR NOT BOTAN_GOST_LIBRARY)
+        message(FATAL_ERROR "The GOST 2012 extensions require a Botan include directory and library")
     endif()
-    set(WITH_GOST_3411_2012 1)
-    list(APPEND CRYPTO_INCLUDES ${BOTAN_STREEBOG_INCLUDE_DIR})
-    list(APPEND CRYPTO_LIBS ${BOTAN_STREEBOG_LIBRARY})
+    list(APPEND CRYPTO_INCLUDES ${BOTAN_GOST_INCLUDE_DIR})
+    list(APPEND CRYPTO_LIBS ${BOTAN_GOST_LIBRARY})
     list(REMOVE_DUPLICATES CRYPTO_INCLUDES)
     list(REMOVE_DUPLICATES CRYPTO_LIBS)
-    message(STATUS "GOST R 34.11-2012/256: Botan include: ${BOTAN_STREEBOG_INCLUDE_DIR}")
-    message(STATUS "GOST R 34.11-2012/256: Botan library: ${BOTAN_STREEBOG_LIBRARY}")
+    message(STATUS "GOST 2012 extensions: Botan include: ${BOTAN_GOST_INCLUDE_DIR}")
+    message(STATUS "GOST 2012 extensions: Botan library: ${BOTAN_GOST_LIBRARY}")
+endif()
+
+if(ENABLE_GOST_3411_2012)
+    set(WITH_GOST_3411_2012 1)
+endif()
+
+if(ENABLE_GOST_3410_2012_256)
+    set(WITH_GOST_3410_2012_256 1)
 endif()
 
 # Find SQLite3

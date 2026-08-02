@@ -63,6 +63,9 @@
 #include "DHPrivateKey.h"
 #include "GOSTPublicKey.h"
 #include "GOSTPrivateKey.h"
+#ifdef WITH_GOST_3410_2012_256
+#include "BotanGOST2012KeyGenerator.h"
+#endif
 #ifdef WITH_ML_DSA
 #include "MLDSAParameters.h"
 #include "MLDSAMechanismParam.h"
@@ -862,6 +865,9 @@ void SoftHSM::prepareSupportedMechanisms(std::map<std::string, CK_MECHANISM_TYPE
 	t["CKM_GOSTR3410"]		= CKM_GOSTR3410;
 	t["CKM_GOSTR3410_WITH_GOSTR3411"] = CKM_GOSTR3410_WITH_GOSTR3411;
 #endif
+#if defined(WITH_GOST_3410_2012_256) && !defined(WITH_GOST)
+	t["CKM_GOSTR3410_KEY_PAIR_GEN"] = CKM_GOSTR3410_KEY_PAIR_GEN;
+#endif
 #ifdef WITH_GOST_3411_2012
 	t["CKM_GOSTR3411_2012_256"] = CKM_GOSTR3411_2012_256;
 #endif
@@ -1386,6 +1392,13 @@ CK_RV SoftHSM::C_GetMechanismInfo(CK_SLOT_ID slotID, CK_MECHANISM_TYPE type, CK_
 			pInfo->ulMinKeySize = 0;
 			pInfo->ulMaxKeySize = 0;
 			pInfo->flags = CKF_SIGN | CKF_VERIFY;
+			break;
+#endif
+#if defined(WITH_GOST_3410_2012_256) && !defined(WITH_GOST)
+		case CKM_GOSTR3410_KEY_PAIR_GEN:
+			pInfo->ulMinKeySize = 256;
+			pInfo->ulMaxKeySize = 256;
+			pInfo->flags = CKF_GENERATE_KEY_PAIR;
 			break;
 #endif
 #ifdef WITH_GOST_3411_2012
@@ -6464,7 +6477,7 @@ CK_RV SoftHSM::C_GenerateKeyPair
 			keyType = CKK_EC;
 			break;
 #endif
-#ifdef WITH_GOST
+#if defined(WITH_GOST) || defined(WITH_GOST_3410_2012_256)
 		case CKM_GOSTR3410_KEY_PAIR_GEN:
 			keyType = CKK_GOSTR3410;
 			break;
@@ -6598,11 +6611,22 @@ CK_RV SoftHSM::C_GenerateKeyPair
 	// Generate GOST keys
 	if (pMechanism->mechanism == CKM_GOSTR3410_KEY_PAIR_GEN)
 	{
+#ifdef WITH_GOST_3410_2012_256
+		if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
+			return CKR_MECHANISM_PARAM_INVALID;
+		return this->generateGOST2012(hSession,
+									 pPublicKeyTemplate, ulPublicKeyAttributeCount,
+									 pPrivateKeyTemplate, ulPrivateKeyAttributeCount,
+									 phPublicKey, phPrivateKey,
+									 ispublicKeyToken, ispublicKeyPrivate,
+									 isprivateKeyToken, isprivateKeyPrivate);
+#else
 			return this->generateGOST(hSession,
 									 pPublicKeyTemplate, ulPublicKeyAttributeCount,
 									 pPrivateKeyTemplate, ulPrivateKeyAttributeCount,
 									 phPublicKey, phPrivateKey,
 									 ispublicKeyToken, ispublicKeyPrivate, isprivateKeyToken, isprivateKeyPrivate);
+#endif
 	}
 
 	// Generate EDDSA keys
@@ -12281,6 +12305,239 @@ CK_RV SoftHSM::generateGOST
 
 	return rv;
 }
+
+#ifdef WITH_GOST_3410_2012_256
+// Generate a GOST R 34.10-2012 256-bit key pair.  This deliberately stops at
+// object generation; signing and key-agreement mechanisms are not enabled.
+CK_RV SoftHSM::generateGOST2012
+(CK_SESSION_HANDLE hSession,
+	CK_ATTRIBUTE_PTR pPublicKeyTemplate,
+	CK_ULONG ulPublicKeyAttributeCount,
+	CK_ATTRIBUTE_PTR pPrivateKeyTemplate,
+	CK_ULONG ulPrivateKeyAttributeCount,
+	CK_OBJECT_HANDLE_PTR phPublicKey,
+	CK_OBJECT_HANDLE_PTR phPrivateKey,
+	CK_BBOOL isPublicKeyOnToken,
+	CK_BBOOL isPublicKeyPrivate,
+	CK_BBOOL isPrivateKeyOnToken,
+	CK_BBOOL isPrivateKeyPrivate)
+{
+	*phPublicKey = CK_INVALID_HANDLE;
+	*phPrivateKey = CK_INVALID_HANDLE;
+
+	Session* session = (Session*)handleManager->getSession(hSession);
+	if (session == NULL) return CKR_SESSION_HANDLE_INVALID;
+	Token* token = session->getToken();
+	if (token == NULL) return CKR_GENERAL_ERROR;
+
+	ByteString param3410;
+	ByteString param3411;
+	for (CK_ULONG i = 0; i < ulPublicKeyAttributeCount; ++i)
+	{
+		switch (pPublicKeyTemplate[i].type)
+		{
+			case CKA_GOSTR3410_PARAMS:
+				param3410 = ByteString((unsigned char*)pPublicKeyTemplate[i].pValue,
+				                       pPublicKeyTemplate[i].ulValueLen);
+				break;
+			case CKA_GOSTR3411_PARAMS:
+				param3411 = ByteString((unsigned char*)pPublicKeyTemplate[i].pValue,
+				                       pPublicKeyTemplate[i].ulValueLen);
+				break;
+			case CKA_VALUE:
+				return CKR_ATTRIBUTE_READ_ONLY;
+			default:
+				break;
+		}
+	}
+	for (CK_ULONG i = 0; i < ulPrivateKeyAttributeCount; ++i)
+	{
+		switch (pPrivateKeyTemplate[i].type)
+		{
+			case CKA_VALUE:
+				return CKR_ATTRIBUTE_READ_ONLY;
+			case CKA_GOSTR3410_PARAMS:
+				if (ByteString((unsigned char*)pPrivateKeyTemplate[i].pValue,
+				               pPrivateKeyTemplate[i].ulValueLen) != param3410)
+					return CKR_TEMPLATE_INCONSISTENT;
+				break;
+			case CKA_GOSTR3411_PARAMS:
+				if (ByteString((unsigned char*)pPrivateKeyTemplate[i].pValue,
+				               pPrivateKeyTemplate[i].ulValueLen) != param3411)
+					return CKR_TEMPLATE_INCONSISTENT;
+				break;
+			default:
+				break;
+		}
+	}
+
+	if (param3410.size() == 0 || param3411.size() == 0)
+		return CKR_TEMPLATE_INCOMPLETE;
+
+	const ByteString tc26CurveA("06092a8503070102010101");
+	const ByteString tc26CurveB("06092a8503070102010102");
+	const ByteString cryptoProCurveA("06072a850302022301");
+	const ByteString cryptoProExchangeA("06072a850302022400");
+	const ByteString streebog256("06082a85030701010202");
+	if (param3410 != tc26CurveA && param3410 != tc26CurveB &&
+	    param3410 != cryptoProCurveA && param3410 != cryptoProExchangeA)
+		return CKR_ATTRIBUTE_VALUE_INVALID;
+	if (param3411 != streebog256)
+		return CKR_ATTRIBUTE_VALUE_INVALID;
+
+	ByteString publicValue;
+	ByteString privateValue;
+	if (!BotanGOST2012KeyGenerator::generate(param3410, publicValue, privateValue))
+		return CKR_FUNCTION_FAILED;
+
+	CK_RV rv = CKR_OK;
+	const CK_ULONG maxAttribs = 32;
+	CK_OBJECT_CLASS publicKeyClass = CKO_PUBLIC_KEY;
+	CK_OBJECT_CLASS privateKeyClass = CKO_PRIVATE_KEY;
+	CK_KEY_TYPE keyType = CKK_GOSTR3410;
+
+	CK_ATTRIBUTE publicKeyAttribs[maxAttribs] = {
+		{ CKA_CLASS, &publicKeyClass, sizeof(publicKeyClass) },
+		{ CKA_TOKEN, &isPublicKeyOnToken, sizeof(isPublicKeyOnToken) },
+		{ CKA_PRIVATE, &isPublicKeyPrivate, sizeof(isPublicKeyPrivate) },
+		{ CKA_KEY_TYPE, &keyType, sizeof(keyType) },
+	};
+	CK_ULONG publicKeyAttribsCount = 4;
+	if (ulPublicKeyAttributeCount > maxAttribs - publicKeyAttribsCount)
+		rv = CKR_TEMPLATE_INCONSISTENT;
+	for (CK_ULONG i = 0; i < ulPublicKeyAttributeCount && rv == CKR_OK; ++i)
+	{
+		switch (pPublicKeyTemplate[i].type)
+		{
+			case CKA_CLASS:
+			case CKA_TOKEN:
+			case CKA_PRIVATE:
+			case CKA_KEY_TYPE:
+				break;
+			default:
+				publicKeyAttribs[publicKeyAttribsCount++] = pPublicKeyTemplate[i];
+				break;
+		}
+	}
+	if (rv == CKR_OK)
+		rv = CreateObject(hSession, publicKeyAttribs, publicKeyAttribsCount,
+		                  phPublicKey, OBJECT_OP_GENERATE);
+
+	if (rv == CKR_OK)
+	{
+		OSObject* object = (OSObject*)handleManager->getObject(*phPublicKey);
+		if (object == NULL_PTR || !object->isValid())
+			rv = CKR_FUNCTION_FAILED;
+		else if (object->startTransaction())
+		{
+			bool ok = object->setAttribute(CKA_LOCAL, true);
+			CK_ULONG mechanism = (CK_ULONG)CKM_GOSTR3410_KEY_PAIR_GEN;
+			ok = ok && object->setAttribute(CKA_KEY_GEN_MECHANISM, mechanism);
+			ByteString storedPublic;
+			if (isPublicKeyPrivate)
+				ok = ok && token->encrypt(publicValue, storedPublic);
+			else
+				storedPublic = publicValue;
+			ok = ok && object->setAttribute(CKA_VALUE, storedPublic);
+			if (ok) ok = object->commitTransaction();
+			else object->abortTransaction();
+			if (!ok) rv = CKR_FUNCTION_FAILED;
+		}
+		else
+			rv = CKR_FUNCTION_FAILED;
+	}
+
+	CK_ATTRIBUTE privateKeyAttribs[maxAttribs] = {
+		{ CKA_CLASS, &privateKeyClass, sizeof(privateKeyClass) },
+		{ CKA_TOKEN, &isPrivateKeyOnToken, sizeof(isPrivateKeyOnToken) },
+		{ CKA_PRIVATE, &isPrivateKeyPrivate, sizeof(isPrivateKeyPrivate) },
+		{ CKA_KEY_TYPE, &keyType, sizeof(keyType) },
+	};
+	CK_ULONG privateKeyAttribsCount = 4;
+	if (rv == CKR_OK && ulPrivateKeyAttributeCount > maxAttribs - privateKeyAttribsCount)
+		rv = CKR_TEMPLATE_INCONSISTENT;
+	for (CK_ULONG i = 0; i < ulPrivateKeyAttributeCount && rv == CKR_OK; ++i)
+	{
+		switch (pPrivateKeyTemplate[i].type)
+		{
+			case CKA_CLASS:
+			case CKA_TOKEN:
+			case CKA_PRIVATE:
+			case CKA_KEY_TYPE:
+			case CKA_GOSTR3410_PARAMS:
+			case CKA_GOSTR3411_PARAMS:
+				break;
+			default:
+				privateKeyAttribs[privateKeyAttribsCount++] = pPrivateKeyTemplate[i];
+				break;
+		}
+	}
+	if (rv == CKR_OK)
+		rv = CreateObject(hSession, privateKeyAttribs, privateKeyAttribsCount,
+		                  phPrivateKey, OBJECT_OP_GENERATE);
+
+	if (rv == CKR_OK)
+	{
+		OSObject* object = (OSObject*)handleManager->getObject(*phPrivateKey);
+		if (object == NULL_PTR || !object->isValid())
+			rv = CKR_FUNCTION_FAILED;
+		else if (object->startTransaction())
+		{
+			bool ok = object->setAttribute(CKA_LOCAL, true);
+			CK_ULONG mechanism = (CK_ULONG)CKM_GOSTR3410_KEY_PAIR_GEN;
+			ok = ok && object->setAttribute(CKA_KEY_GEN_MECHANISM, mechanism);
+			const bool alwaysSensitive = object->getBooleanValue(CKA_SENSITIVE, false);
+			const bool neverExtractable = !object->getBooleanValue(CKA_EXTRACTABLE, false);
+			ok = ok && object->setAttribute(CKA_ALWAYS_SENSITIVE, alwaysSensitive);
+			ok = ok && object->setAttribute(CKA_NEVER_EXTRACTABLE, neverExtractable);
+
+			ByteString storedValue;
+			ByteString stored3410;
+			ByteString stored3411;
+			if (isPrivateKeyPrivate)
+			{
+				ok = ok && token->encrypt(privateValue, storedValue);
+				ok = ok && token->encrypt(param3410, stored3410);
+				ok = ok && token->encrypt(param3411, stored3411);
+			}
+			else
+			{
+				storedValue = privateValue;
+				stored3410 = param3410;
+				stored3411 = param3411;
+			}
+			ok = ok && object->setAttribute(CKA_VALUE, storedValue);
+			ok = ok && object->setAttribute(CKA_GOSTR3410_PARAMS, stored3410);
+			ok = ok && object->setAttribute(CKA_GOSTR3411_PARAMS, stored3411);
+			if (ok) ok = object->commitTransaction();
+			else object->abortTransaction();
+			if (!ok) rv = CKR_FUNCTION_FAILED;
+		}
+		else
+			rv = CKR_FUNCTION_FAILED;
+	}
+
+	privateValue.wipe();
+	if (rv != CKR_OK)
+	{
+		if (*phPrivateKey != CK_INVALID_HANDLE)
+		{
+			OSObject* object = (OSObject*)handleManager->getObject(*phPrivateKey);
+			handleManager->destroyObject(*phPrivateKey);
+			if (object) object->destroyObject();
+			*phPrivateKey = CK_INVALID_HANDLE;
+		}
+		if (*phPublicKey != CK_INVALID_HANDLE)
+		{
+			OSObject* object = (OSObject*)handleManager->getObject(*phPublicKey);
+			handleManager->destroyObject(*phPublicKey);
+			if (object) object->destroyObject();
+			*phPublicKey = CK_INVALID_HANDLE;
+		}
+	}
+	return rv;
+}
+#endif
 
 // Derive a DH secret
 CK_RV SoftHSM::deriveDH

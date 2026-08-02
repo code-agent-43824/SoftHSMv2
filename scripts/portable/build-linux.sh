@@ -37,7 +37,7 @@ curl --fail --location --retry 5 --output "$botan_archive" \
 printf '%s  %s\n' "$BOTAN_SHA256" "$botan_archive" | sha256sum --check
 tar -xJf "$botan_archive" -C "$work_dir"
 python3 "$botan_source/configure.py" \
-  --disable-shared --minimized-build --enable-modules=streebog \
+  --disable-shared --minimized-build --enable-modules=streebog,gost_3410 \
   --without-documentation --extra-cxxflags=-fPIC --with-build-dir="$botan_build"
 make -C "$botan_build" -j"$(getconf _NPROCESSORS_ONLN)" libs
 
@@ -50,8 +50,9 @@ cmake -S "$root_dir" -B "$build_dir" \
   -DWITH_OBJECTSTORE_BACKEND_DB=OFF \
   -DWITH_CRYPTO_BACKEND=openssl \
   -DENABLE_GOST_3411_2012=ON \
-  -DBOTAN_STREEBOG_INCLUDE_DIR="$botan_build/build/include" \
-  -DBOTAN_STREEBOG_LIBRARY="$botan_build/libbotan-2.a" \
+  -DENABLE_GOST_3410_2012_256=ON \
+  -DBOTAN_GOST_INCLUDE_DIR="$botan_build/build/include" \
+  -DBOTAN_GOST_LIBRARY="$botan_build/libbotan-2.a" \
   -DOPENSSL_ROOT_DIR="$openssl_prefix"
 cmake --build "$build_dir" --parallel "$(getconf _NPROCESSORS_ONLN)"
 

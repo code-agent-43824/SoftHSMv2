@@ -51,7 +51,7 @@ for arch in arm64 x86_64; do
   python3 "$botan_source/configure.py" \
     --cc=clang --os=darwin --cpu="$arch" \
     --cc-abi-flags="-arch $arch -mmacosx-version-min=$deployment_target" \
-    --disable-shared --minimized-build --enable-modules=streebog \
+    --disable-shared --minimized-build --enable-modules=streebog,gost_3410 \
     --without-documentation --with-build-dir="$botan_build"
   make -C "$botan_build" -j"$(sysctl -n hw.logicalcpu)" libs
 done
@@ -69,8 +69,9 @@ for arch in arm64 x86_64; do
     -DWITH_OBJECTSTORE_BACKEND_DB=OFF \
     -DWITH_CRYPTO_BACKEND=openssl \
     -DENABLE_GOST_3411_2012=ON \
-    -DBOTAN_STREEBOG_INCLUDE_DIR="$work_dir/botan-build-$arch/build/include" \
-    -DBOTAN_STREEBOG_LIBRARY="$work_dir/botan-build-$arch/libbotan-2.a" \
+    -DENABLE_GOST_3410_2012_256=ON \
+    -DBOTAN_GOST_INCLUDE_DIR="$work_dir/botan-build-$arch/build/include" \
+    -DBOTAN_GOST_LIBRARY="$work_dir/botan-build-$arch/libbotan-2.a" \
     -DOPENSSL_ROOT_DIR="$work_dir/openssl-install-$arch"
   cmake --build "$build_dir" --target softhsm2 --parallel "$(sysctl -n hw.logicalcpu)"
 done

@@ -6,7 +6,7 @@ on:
       release_tag:
         description: Release tag to create or update
         required: true
-        default: v2.7.0-portable.5
+        default: v2.7.0-portable.6
 
 permissions:
   contents: read
@@ -231,5 +231,5 @@ jobs:
             gh release create "$RELEASE_TAG" release-assets/* \
               --target "$GITHUB_SHA" \
               --title "SoftHSM portable $RELEASE_TAG" \
-              --notes "Portable, installer-free PKCS #11 modules for Linux, Windows, and macOS. This release adds digest-only GOST R 34.11-2012/256 (Streebog-256) through the TC26 CKM_GOSTR3411_2012_256 mechanism, backed by a minimized static Botan build. Every package is built on one runner, uploaded, then downloaded and tested on a separate fresh runner using a vendor-neutral direct PKCS #11 C++ client and the OpenSSL command line. The test emits a redacted parameter-level trace of every PKCS #11 call and template and verifies one-shot and multipart Streebog-256 against RFC 6986."
+              --notes "Portable, installer-free PKCS #11 modules for Linux, Windows, and macOS. This release adds C_GenerateKeyPair-only GOST R 34.10-2012/256 key generation with CKM_GOSTR3410_KEY_PAIR_GEN, in addition to digest-only Streebog-256. Both are backed by a minimized static Botan build; GOST signing and key agreement remain disabled. Every package is built on one runner, uploaded, then downloaded and tested on a separate fresh runner using a vendor-neutral direct PKCS #11 C++ client and the OpenSSL command line. The test emits a redacted parameter-level trace of every PKCS #11 call and template, checks generated GOST key objects and attributes, and verifies one-shot and multipart Streebog-256 against RFC 6986."
           fi

@@ -54,7 +54,7 @@ tar -xJf $BotanArchive -C $WorkDir
 
 $BotanCpu = if ($env:PORTABLE_ARCH -eq "arm64") { "arm64" } else { "x86_64" }
 python (Join-Path $BotanSource "configure.py") --cc=msvc --os=windows --cpu=$BotanCpu `
-    --msvc-runtime=MT --disable-shared --minimized-build --enable-modules=streebog `
+    --msvc-runtime=MT --disable-shared --minimized-build --enable-modules=streebog,gost_3410 `
     --without-documentation "--with-build-dir=$BotanBuild"
 if ($LASTEXITCODE -ne 0) { throw "Botan configure failed" }
 nmake /f (Join-Path $BotanBuild "Makefile") libs
@@ -73,8 +73,9 @@ cmake -S $RootDir -B $BuildDir -A $CMakeArch `
     -DWITH_OBJECTSTORE_BACKEND_DB=OFF `
     -DWITH_CRYPTO_BACKEND=openssl `
     -DENABLE_GOST_3411_2012=ON `
-    "-DBOTAN_STREEBOG_INCLUDE_DIR=$(Join-Path $BotanBuild 'build/include')" `
-    "-DBOTAN_STREEBOG_LIBRARY=$($BotanLibrary.FullName)" `
+    -DENABLE_GOST_3410_2012_256=ON `
+    "-DBOTAN_GOST_INCLUDE_DIR=$(Join-Path $BotanBuild 'build/include')" `
+    "-DBOTAN_GOST_LIBRARY=$($BotanLibrary.FullName)" `
     "-DOPENSSL_ROOT_DIR=$OpenSSLPrefix"
 if ($LASTEXITCODE -ne 0) { throw "SoftHSM configure failed" }
 cmake --build $BuildDir --config Release --target softhsm2 --parallel

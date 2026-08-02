@@ -107,6 +107,10 @@ if(WITH_GOST_3411_2012)
     list(APPEND SOURCES BotanStreebog256.cpp)
 endif(WITH_GOST_3411_2012)
 
+if(WITH_GOST_3410_2012_256)
+    list(APPEND SOURCES BotanGOST2012KeyGenerator.cpp)
+endif(WITH_GOST_3410_2012_256)
+
 if(WITH_BOTAN)
     list(APPEND SOURCES BotanAES.cpp
                         BotanCryptoFactory.cpp
