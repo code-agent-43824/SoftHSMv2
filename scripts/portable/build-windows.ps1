@@ -4,6 +4,8 @@ Set-StrictMode -Version Latest
 if (-not $env:PORTABLE_ARCH) { throw "PORTABLE_ARCH is required" }
 if (-not $env:OPENSSL_VERSION) { throw "OPENSSL_VERSION is required" }
 if (-not $env:OPENSSL_SHA256) { throw "OPENSSL_SHA256 is required" }
+if (-not $env:BOTAN_VERSION) { throw "BOTAN_VERSION is required" }
+if (-not $env:BOTAN_SHA256) { throw "BOTAN_SHA256 is required" }
 
 $RootDir = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 $WorkRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { Join-Path $RootDir ".portable-work" }
@@ -11,6 +13,9 @@ $WorkDir = Join-Path $WorkRoot "windows-$($env:PORTABLE_ARCH)"
 $OpenSSLArchive = Join-Path $WorkDir "openssl.tar.gz"
 $OpenSSLSource = Join-Path $WorkDir "openssl-$($env:OPENSSL_VERSION)"
 $OpenSSLPrefix = Join-Path $WorkDir "openssl-install"
+$BotanArchive = Join-Path $WorkDir "botan.tar.xz"
+$BotanSource = Join-Path $WorkDir "Botan-$($env:BOTAN_VERSION)"
+$BotanBuild = Join-Path $WorkDir "botan-build"
 $BuildDir = Join-Path $WorkDir "softhsm-build"
 $StageDir = Join-Path $WorkDir "stage"
 $OutputDir = Join-Path $RootDir "dist"
@@ -39,6 +44,24 @@ finally {
     Pop-Location
 }
 
+$BotanUrl = "https://botan.randombit.net/releases/Botan-$($env:BOTAN_VERSION).tar.xz"
+Invoke-WebRequest -Uri $BotanUrl -OutFile $BotanArchive
+$ActualBotanHash = (Get-FileHash -Algorithm SHA256 $BotanArchive).Hash.ToLowerInvariant()
+if ($ActualBotanHash -ne $env:BOTAN_SHA256.ToLowerInvariant()) {
+    throw "Botan checksum mismatch: expected $($env:BOTAN_SHA256), got $ActualBotanHash"
+}
+tar -xJf $BotanArchive -C $WorkDir
+
+$BotanCpu = if ($env:PORTABLE_ARCH -eq "arm64") { "arm64" } else { "x86_64" }
+python (Join-Path $BotanSource "configure.py") --cc=msvc --os=windows --cpu=$BotanCpu `
+    --msvc-runtime=MT --disable-shared --minimized-build --enable-modules=streebog `
+    --without-documentation "--with-build-dir=$BotanBuild"
+if ($LASTEXITCODE -ne 0) { throw "Botan configure failed" }
+nmake /f (Join-Path $BotanBuild "Makefile") libs
+if ($LASTEXITCODE -ne 0) { throw "Botan build failed" }
+$BotanLibrary = Get-ChildItem -Path $BotanBuild -Filter "botan*.lib" | Select-Object -First 1
+if (-not $BotanLibrary) { throw "Botan static library was not produced" }
+
 $CMakeArch = if ($env:PORTABLE_ARCH -eq "arm64") { "ARM64" } else { "x64" }
 cmake -S $RootDir -B $BuildDir -A $CMakeArch `
     -DCMAKE_BUILD_TYPE=Release `
@@ -49,6 +72,9 @@ cmake -S $RootDir -B $BuildDir -A $CMakeArch `
     -DBUILD_TESTS=OFF `
     -DWITH_OBJECTSTORE_BACKEND_DB=OFF `
     -DWITH_CRYPTO_BACKEND=openssl `
+    -DENABLE_GOST_3411_2012=ON `
+    "-DBOTAN_STREEBOG_INCLUDE_DIR=$(Join-Path $BotanBuild 'build/include')" `
+    "-DBOTAN_STREEBOG_LIBRARY=$($BotanLibrary.FullName)" `
     "-DOPENSSL_ROOT_DIR=$OpenSSLPrefix"
 if ($LASTEXITCODE -ne 0) { throw "SoftHSM configure failed" }
 cmake --build $BuildDir --config Release --target softhsm2 --parallel
@@ -62,6 +88,7 @@ Copy-Item (Join-Path $RootDir "packaging/portable/softhsm.conf") (Join-Path $Sta
 Copy-Item (Join-Path $RootDir "packaging/portable/README.txt") (Join-Path $StageDir "README.txt")
 Copy-Item (Join-Path $RootDir "LICENSE") (Join-Path $StageDir "LICENSE-SoftHSM.txt")
 Copy-Item (Join-Path $OpenSSLSource "LICENSE.txt") (Join-Path $StageDir "LICENSE-OpenSSL.txt")
+Copy-Item (Join-Path $BotanSource "license.txt") (Join-Path $StageDir "LICENSE-Botan.txt")
 
 $UnexpectedDlls = & dumpbin /dependents (Join-Path $StageDir "softhsm2.dll") |
     Select-String -Pattern 'libcrypto|libssl|vcruntime|msvcp|ucrtbased' -CaseSensitive:$false

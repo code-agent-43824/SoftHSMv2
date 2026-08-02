@@ -4,12 +4,17 @@ set -euo pipefail
 : "${PORTABLE_ARCH:?PORTABLE_ARCH is required}"
 : "${OPENSSL_VERSION:?OPENSSL_VERSION is required}"
 : "${OPENSSL_SHA256:?OPENSSL_SHA256 is required}"
+: "${BOTAN_VERSION:?BOTAN_VERSION is required}"
+: "${BOTAN_SHA256:?BOTAN_SHA256 is required}"
 
 root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 work_dir="${RUNNER_TEMP:-$root_dir/.portable-work}/linux-$PORTABLE_ARCH"
 openssl_archive="$work_dir/openssl.tar.gz"
 openssl_source="$work_dir/openssl-$OPENSSL_VERSION"
 openssl_prefix="$work_dir/openssl-install"
+botan_archive="$work_dir/botan.tar.xz"
+botan_source="$work_dir/Botan-$BOTAN_VERSION"
+botan_build="$work_dir/botan-build"
 build_dir="$work_dir/softhsm-build"
 stage_dir="$work_dir/stage"
 output_dir="$root_dir/dist"
@@ -27,6 +32,15 @@ make -j"$(getconf _NPROCESSORS_ONLN)"
 make install_sw install_ssldirs
 popd
 
+curl --fail --location --retry 5 --output "$botan_archive" \
+  "https://botan.randombit.net/releases/Botan-$BOTAN_VERSION.tar.xz"
+printf '%s  %s\n' "$BOTAN_SHA256" "$botan_archive" | sha256sum --check
+tar -xJf "$botan_archive" -C "$work_dir"
+python3 "$botan_source/configure.py" \
+  --disable-shared --minimized-build --enable-modules=streebog \
+  --without-documentation --extra-cxxflags=-fPIC --with-build-dir="$botan_build"
+make -C "$botan_build" -j"$(getconf _NPROCESSORS_ONLN)" libs
+
 cmake -S "$root_dir" -B "$build_dir" \
   -DCMAKE_BUILD_TYPE=Release \
   -DENABLE_PORTABLE=ON \
@@ -35,6 +49,9 @@ cmake -S "$root_dir" -B "$build_dir" \
   -DBUILD_TESTS=OFF \
   -DWITH_OBJECTSTORE_BACKEND_DB=OFF \
   -DWITH_CRYPTO_BACKEND=openssl \
+  -DENABLE_GOST_3411_2012=ON \
+  -DBOTAN_STREEBOG_INCLUDE_DIR="$botan_build/build/include" \
+  -DBOTAN_STREEBOG_LIBRARY="$botan_build/libbotan-2.a" \
   -DOPENSSL_ROOT_DIR="$openssl_prefix"
 cmake --build "$build_dir" --parallel "$(getconf _NPROCESSORS_ONLN)"
 
@@ -45,6 +62,7 @@ cp "$root_dir/packaging/portable/softhsm.conf" "$stage_dir/softhsm.conf"
 cp "$root_dir/packaging/portable/README.txt" "$stage_dir/README.txt"
 cp "$root_dir/LICENSE" "$stage_dir/LICENSE-SoftHSM.txt"
 cp "$openssl_source/LICENSE.txt" "$stage_dir/LICENSE-OpenSSL.txt"
+cp "$botan_source/license.txt" "$stage_dir/LICENSE-Botan.txt"
 
 if ldd "$stage_dir/libsofthsm2.so" | grep -Eq 'lib(ssl|crypto|stdc\+\+|gcc_s)'; then
   echo "portable module has an unexpected non-system runtime dependency" >&2

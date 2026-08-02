@@ -42,6 +42,9 @@
 #include "OSSLSHA256.h"
 #include "OSSLSHA384.h"
 #include "OSSLSHA512.h"
+#ifdef WITH_GOST_3411_2012
+#include "BotanStreebog256.h"
+#endif
 #include "OSSLCMAC.h"
 #include "OSSLHMAC.h"
 #include "OSSLRSA.h"
@@ -393,6 +396,10 @@ HashAlgorithm* OSSLCryptoFactory::getHashAlgorithm(HashAlgo::Type algorithm)
 			return new OSSLSHA384();
 		case HashAlgo::SHA512:
 			return new OSSLSHA512();
+#ifdef WITH_GOST_3411_2012
+		case HashAlgo::GOST2012_256:
+			return new BotanStreebog256();
+#endif
 #ifdef WITH_GOST
 		case HashAlgo::GOST:
 			return new OSSLGOSTR3411();
@@ -455,4 +462,3 @@ RNG* OSSLCryptoFactory::getRNG(RNGImpl::Type name /* = RNGImpl::Default */)
 		return NULL;
 	}
 }
-

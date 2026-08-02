@@ -47,7 +47,8 @@ struct HashAlgo
 		SHA256,
 		SHA384,
 		SHA512,
-		GOST
+		GOST,
+		GOST2012_256
 	};
 };
 
@@ -77,4 +78,3 @@ protected:
 };
 
 #endif // !_SOFTHSM_V2_HASHALGORITHM_H
-

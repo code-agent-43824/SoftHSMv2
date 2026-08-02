@@ -191,6 +191,22 @@ static Bytes configuredObjectId()
     return result;
 }
 
+static Bytes bytesFromHex(const std::string& encoded)
+{
+    if (encoded.size() % 2 != 0) fail("hex string must contain an even number of digits");
+    Bytes result;
+    result.reserve(encoded.size() / 2);
+    for (size_t offset = 0; offset < encoded.size(); offset += 2)
+    {
+        const std::string byte = encoded.substr(offset, 2);
+        char* end = nullptr;
+        const unsigned long value = std::strtoul(byte.c_str(), &end, 16);
+        if (end == nullptr || *end != '\0' || value > 0xff) fail("invalid hexadecimal test value");
+        result.push_back(static_cast<unsigned char>(value));
+    }
+    return result;
+}
+
 static std::optional<CK_SLOT_ID> configuredSlot()
 {
     const std::string configured = environment("P11_TEST_SLOT_ID");
@@ -584,6 +600,7 @@ static const char* mechanismName(CK_MECHANISM_TYPE mechanism)
         case CKM_RSA_PKCS: return "CKM_RSA_PKCS";
         case CKM_SHA256_RSA_PKCS: return "CKM_SHA256_RSA_PKCS";
         case CKM_SHA256: return "CKM_SHA256";
+        case CKM_GOSTR3411_2012_256: return "CKM_GOSTR3411_2012_256";
         default: return "CKM_<unknown>";
     }
 }
@@ -686,9 +703,10 @@ static Bytes sign(Module& module, CK_SESSION_HANDLE session, CK_OBJECT_HANDLE ke
     return signature;
 }
 
-static Bytes digest(Module& module, CK_SESSION_HANDLE session, const Bytes& data)
+static Bytes digest(Module& module, CK_SESSION_HANDLE session,
+                    CK_MECHANISM_TYPE mechanismType, const Bytes& data, size_t expectedSize)
 {
-    CK_MECHANISM mechanism{CKM_SHA256, nullptr, 0};
+    CK_MECHANISM mechanism{mechanismType, nullptr, 0};
     callOk("C_DigestInit", "hSession=" + std::to_string(session) + ", pMechanism={mechanism=" +
            mechanismName(mechanism.mechanism) + ", pParameter=NULL_PTR, ulParameterLen=0}",
            [&] { return module->C_DigestInit(session, &mechanism); });
@@ -706,10 +724,82 @@ static Bytes digest(Module& module, CK_SESSION_HANDLE session, const Bytes& data
            [&] { return module->C_Digest(session, const_cast<CK_BYTE_PTR>(data.data()),
                                          static_cast<CK_ULONG>(data.size()), result.data(), &length); });
     result.resize(length);
-    if (result.size() != 32) fail("SHA-256 returned an unexpected size");
+    if (result.size() != expectedSize)
+        fail(std::string(mechanismName(mechanismType)) + " returned an unexpected size");
     trace("OUTPUT", "digest ulDigestLen=" + std::to_string(result.size()) +
                     ", hex=" + hexBytes(result.data(), result.size()));
     return result;
+}
+
+static Bytes digestMultipart(Module& module, CK_SESSION_HANDLE session,
+                             CK_MECHANISM_TYPE mechanismType, const Bytes& data,
+                             const std::vector<size_t>& partSizes, size_t expectedSize)
+{
+    CK_MECHANISM mechanism{mechanismType, nullptr, 0};
+    callOk("C_DigestInit", "hSession=" + std::to_string(session) + ", pMechanism={mechanism=" +
+           std::string(mechanismName(mechanism.mechanism)) + ", pParameter=NULL_PTR, ulParameterLen=0}",
+           [&] { return module->C_DigestInit(session, &mechanism); });
+
+    size_t offset = 0;
+    for (size_t partSize : partSizes)
+    {
+        if (partSize > data.size() - offset) fail("multipart digest split exceeds input size");
+        callOk("C_DigestUpdate", "hSession=" + std::to_string(session) + ", pPart=hex:" +
+               hexBytes(data.data() + offset, partSize) + ", ulPartLen=" + std::to_string(partSize),
+               [&] { return module->C_DigestUpdate(session,
+                                  const_cast<CK_BYTE_PTR>(data.data() + offset),
+                                  static_cast<CK_ULONG>(partSize)); });
+        offset += partSize;
+    }
+    if (offset != data.size()) fail("multipart digest split does not cover all input bytes");
+
+    CK_ULONG length = 0;
+    callOk("C_DigestFinal", "hSession=" + std::to_string(session) +
+           ", pDigest=NULL_PTR, pulDigestLen=&length",
+           [&] { return module->C_DigestFinal(session, nullptr, &length); });
+    trace("OUTPUT", "C_DigestFinal length query returned " + std::to_string(length) + " bytes");
+    Bytes result(length);
+    callOk("C_DigestFinal", "hSession=" + std::to_string(session) + ", pDigest=buffer[" +
+           std::to_string(result.size()) + "], pulDigestLen=&length",
+           [&] { return module->C_DigestFinal(session, result.data(), &length); });
+    result.resize(length);
+    if (result.size() != expectedSize)
+        fail(std::string(mechanismName(mechanismType)) + " multipart digest returned an unexpected size");
+    trace("OUTPUT", "multipart digest ulDigestLen=" + std::to_string(result.size()) +
+                    ", hex=" + hexBytes(result.data(), result.size()));
+    return result;
+}
+
+static void verifyStreebog256(Module& module, CK_SESSION_HANDLE session)
+{
+    // RFC 6986 section 10.1.2, message M1 and its 256-bit result.  The RFC
+    // prints vectors as a_(n-1)..a_0; these are the corresponding octets in
+    // normal byte-API order (the conventional published Streebog vector).
+    const Bytes message = bytesFromHex(
+        "3031323334353637383930313233343536373839303132333435363738393031"
+        "32333435363738393031323334353637383930313233343536373839303132");
+    const Bytes expected = bytesFromHex(
+        "9d151eefd8590b89daa6ba6cb74af9275dd051026bb149a452fd84e5e57b5500");
+
+    CK_BYTE invalidParameter = 0;
+    CK_MECHANISM invalidMechanism{CKM_GOSTR3411_2012_256, &invalidParameter, 1};
+    check(invoke("C_DigestInit", "hSession=" + std::to_string(session) +
+                 ", pMechanism={mechanism=CKM_GOSTR3411_2012_256, pParameter=byte[1], ulParameterLen=1}",
+                 [&] { return module->C_DigestInit(session, &invalidMechanism); }),
+          CKR_MECHANISM_PARAM_INVALID, "C_DigestInit(non-empty Streebog parameters)");
+    trace("STANDARD", "CKM_GOSTR3411_2012_256 rejects parameters as required by its parameterless definition");
+
+    const Bytes oneShot = digest(module, session, CKM_GOSTR3411_2012_256,
+                                 message, expected.size());
+    if (oneShot != expected)
+        fail("one-shot GOST R 34.11-2012/256 digest does not match RFC 6986");
+    trace("REFERENCE", "one-shot GOST R 34.11-2012/256 matches RFC 6986 section 10.1.2");
+
+    const Bytes multipart = digestMultipart(module, session, CKM_GOSTR3411_2012_256,
+                                            message, {1, 7, 13, 42}, expected.size());
+    if (multipart != expected)
+        fail("multipart GOST R 34.11-2012/256 digest does not match RFC 6986");
+    trace("REFERENCE", "multipart GOST R 34.11-2012/256 matches RFC 6986 section 10.1.2");
 }
 
 struct Tlv
@@ -815,7 +905,7 @@ static Bytes buildCms(Module& module, CK_SESSION_HANDLE session, CK_OBJECT_HANDL
         oid({0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x03}), cmsDataOid());
     Bytes messageDigestAttribute = cmsAttribute(
         oid({0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x04}),
-        der(0x04, digest(module, session, payload)));
+        der(0x04, digest(module, session, CKM_SHA256, payload, 32)));
     std::vector<Bytes> attributes = {contentTypeAttribute, messageDigestAttribute};
     std::sort(attributes.begin(), attributes.end());
     Bytes attributeContent = joined(attributes);
@@ -930,6 +1020,8 @@ static void prepare(const fs::path& modulePath, const fs::path& work)
     requireMechanism(module, slot, CKM_RSA_PKCS_KEY_PAIR_GEN, CKF_GENERATE_KEY_PAIR, 2048);
     requireMechanism(module, slot, CKM_SHA256_RSA_PKCS, CKF_SIGN, 2048);
     requireMechanism(module, slot, CKM_SHA256, CKF_DIGEST);
+    requireMechanism(module, slot, CKM_GOSTR3411_2012_256, CKF_DIGEST);
+    verifyStreebog256(module, session);
 
     CK_OBJECT_CLASS publicClass = CKO_PUBLIC_KEY;
     CK_OBJECT_CLASS privateClass = CKO_PRIVATE_KEY;

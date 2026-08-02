@@ -862,6 +862,9 @@ void SoftHSM::prepareSupportedMechanisms(std::map<std::string, CK_MECHANISM_TYPE
 	t["CKM_GOSTR3410"]		= CKM_GOSTR3410;
 	t["CKM_GOSTR3410_WITH_GOSTR3411"] = CKM_GOSTR3410_WITH_GOSTR3411;
 #endif
+#ifdef WITH_GOST_3411_2012
+	t["CKM_GOSTR3411_2012_256"] = CKM_GOSTR3411_2012_256;
+#endif
 #ifdef WITH_EDDSA
 	t["CKM_EC_EDWARDS_KEY_PAIR_GEN"] = CKM_EC_EDWARDS_KEY_PAIR_GEN;
 	t["CKM_EDDSA"]			= CKM_EDDSA;
@@ -1383,6 +1386,14 @@ CK_RV SoftHSM::C_GetMechanismInfo(CK_SLOT_ID slotID, CK_MECHANISM_TYPE type, CK_
 			pInfo->ulMinKeySize = 0;
 			pInfo->ulMaxKeySize = 0;
 			pInfo->flags = CKF_SIGN | CKF_VERIFY;
+			break;
+#endif
+#ifdef WITH_GOST_3411_2012
+		case CKM_GOSTR3411_2012_256:
+			// Key size is not in use
+			pInfo->ulMinKeySize = 0;
+			pInfo->ulMaxKeySize = 0;
+			pInfo->flags = CKF_DIGEST;
 			break;
 #endif
 #ifdef WITH_EDDSA
@@ -3846,6 +3857,13 @@ CK_RV SoftHSM::C_DigestInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMechan
 #ifdef WITH_GOST
 		case CKM_GOSTR3411:
 			algo = HashAlgo::GOST;
+			break;
+#endif
+#ifdef WITH_GOST_3411_2012
+		case CKM_GOSTR3411_2012_256:
+			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
+				return CKR_MECHANISM_PARAM_INVALID;
+			algo = HashAlgo::GOST2012_256;
 			break;
 #endif
 		default:

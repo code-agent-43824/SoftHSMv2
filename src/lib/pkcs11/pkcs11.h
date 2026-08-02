@@ -1200,6 +1200,12 @@ extern "C" {
 #define CKM_GOSTR3410_DERIVE                    (0x1204UL)
 #define CKM_GOSTR3411                           (0x1210UL)
 #define CKM_GOSTR3411_HMAC                      (0x1211UL)
+/* TC26 PKCS #11 extensions for GOST R 34.11-2012. */
+#define NSSCK_VENDOR_PKCS11_RU_TEAM             (0xD4321000UL)
+#define CK_VENDOR_PKCS11_RU_TEAM_TC26           NSSCK_VENDOR_PKCS11_RU_TEAM
+#define CKM_GOSTR3411_2012_256                  (CK_VENDOR_PKCS11_RU_TEAM_TC26 | 0x012UL)
+/* Compatibility spelling used by older TC26 and Rutoken headers. */
+#define CKM_GOSTR3411_12_256                    CKM_GOSTR3411_2012_256
 #define CKM_GOST28147_KEY_GEN                   (0x1220UL)
 #define CKM_GOST28147_ECB                       (0x1221UL)
 #define CKM_GOST28147                           (0x1222UL)

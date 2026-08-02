@@ -163,6 +163,9 @@
 /* Compile with GOST support */
 #cmakedefine WITH_GOST @WITH_GOST@
 
+/* Compile with digest-only GOST R 34.11-2012/256 support through Botan */
+#cmakedefine WITH_GOST_3411_2012 @WITH_GOST_3411_2012@
+
 /* Compile with OpenSSL support */
 #cmakedefine WITH_OPENSSL @WITH_OPENSSL@
 

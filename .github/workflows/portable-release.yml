@@ -6,7 +6,7 @@ on:
       release_tag:
         description: Release tag to create or update
         required: true
-        default: v2.7.0-portable.4
+        default: v2.7.0-portable.5
 
 permissions:
   contents: read
@@ -14,6 +14,8 @@ permissions:
 env:
   OPENSSL_VERSION: 3.5.7
   OPENSSL_SHA256: a8c0d28a529ca480f9f36cf5792e2cd21984552a3c8e4aa11a24aa31aeac98e8
+  BOTAN_VERSION: 2.19.5
+  BOTAN_SHA256: dfeea0e0a6f26d6724c4af01da9a7b88487adb2d81ba7c72fcaf52db522c9ad4
 
 jobs:
   build-linux-x64:
@@ -25,7 +27,7 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential ca-certificates cmake curl perl pkg-config zip
+            build-essential ca-certificates cmake curl perl pkg-config python3 xz-utils zip
       - uses: actions/checkout@v7
       - name: Build package
         env:
@@ -47,7 +49,7 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential ca-certificates cmake curl perl pkg-config zip
+            build-essential ca-certificates cmake curl perl pkg-config python3 xz-utils zip
       - uses: actions/checkout@v7
       - name: Build package
         env:
@@ -229,5 +231,5 @@ jobs:
             gh release create "$RELEASE_TAG" release-assets/* \
               --target "$GITHUB_SHA" \
               --title "SoftHSM portable $RELEASE_TAG" \
-              --notes "Portable, installer-free PKCS #11 modules for Linux, Windows, and macOS. Every package is built on one runner, uploaded, then downloaded and tested on a separate fresh runner using a vendor-neutral direct PKCS #11 C++ client and the OpenSSL command line. The test emits a redacted parameter-level trace of every PKCS #11 call and template."
+              --notes "Portable, installer-free PKCS #11 modules for Linux, Windows, and macOS. This release adds digest-only GOST R 34.11-2012/256 (Streebog-256) through the TC26 CKM_GOSTR3411_2012_256 mechanism, backed by a minimized static Botan build. Every package is built on one runner, uploaded, then downloaded and tested on a separate fresh runner using a vendor-neutral direct PKCS #11 C++ client and the OpenSSL command line. The test emits a redacted parameter-level trace of every PKCS #11 call and template and verifies one-shot and multipart Streebog-256 against RFC 6986."
           fi

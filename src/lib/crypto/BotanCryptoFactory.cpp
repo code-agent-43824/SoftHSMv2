@@ -48,6 +48,9 @@
 #include "BotanSHA256.h"
 #include "BotanSHA384.h"
 #include "BotanSHA512.h"
+#ifdef WITH_GOST_3411_2012
+#include "BotanStreebog256.h"
+#endif
 #ifdef WITH_GOST
 #include "BotanGOST.h"
 #include "BotanGOSTR3411.h"
@@ -177,6 +180,10 @@ HashAlgorithm* BotanCryptoFactory::getHashAlgorithm(HashAlgo::Type algorithm)
 			return new BotanSHA384();
 		case HashAlgo::SHA512:
 			return new BotanSHA512();
+#ifdef WITH_GOST_3411_2012
+		case HashAlgo::GOST2012_256:
+			return new BotanStreebog256();
+#endif
 #ifdef WITH_GOST
 		case HashAlgo::GOST:
 			return new BotanGOSTR3411();
