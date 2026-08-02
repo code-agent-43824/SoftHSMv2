@@ -607,6 +607,8 @@ static const char* mechanismName(CK_MECHANISM_TYPE mechanism)
         case CKM_SHA256_RSA_PKCS: return "CKM_SHA256_RSA_PKCS";
         case CKM_SHA256: return "CKM_SHA256";
         case CKM_GOSTR3410_KEY_PAIR_GEN: return "CKM_GOSTR3410_KEY_PAIR_GEN";
+        case CKM_GOSTR3410: return "CKM_GOSTR3410";
+        case CKM_GOSTR3410_WITH_GOSTR3411_2012_256: return "CKM_GOSTR3410_WITH_GOSTR3411_2012_256";
         case CKM_GOSTR3411_2012_256: return "CKM_GOSTR3411_2012_256";
         default: return "CKM_<unknown>";
     }
@@ -820,8 +822,15 @@ static CK_ULONG ulongAttribute(Module& module, CK_SESSION_HANDLE session,
     return value;
 }
 
-static void verifyGOST2012KeyGeneration(Module& module, CK_SESSION_HANDLE session,
-                                        const Bytes& baseObjectId)
+struct GOST2012KeyPair
+{
+    CK_OBJECT_HANDLE publicKey;
+    CK_OBJECT_HANDLE privateKey;
+    Bytes publicPoint;
+};
+
+static GOST2012KeyPair verifyGOST2012KeyGeneration(Module& module, CK_SESSION_HANDLE session,
+                                                    const Bytes& baseObjectId)
 {
     CK_OBJECT_CLASS publicClass = CKO_PUBLIC_KEY;
     CK_OBJECT_CLASS privateClass = CKO_PRIVATE_KEY;
@@ -930,6 +939,379 @@ static void verifyGOST2012KeyGeneration(Module& module, CK_SESSION_HANDLE sessio
         findOne(module, session, privateQuery) != privateKey)
         fail("generated GOST key pair was not persisted under its standard CKA_ID");
     trace("KEYGEN", "GOST R 34.10-2012/256 key pair generation and persisted attributes verified");
+    return {publicKey, privateKey, point};
+}
+
+struct U256
+{
+    std::array<std::uint64_t, 4> limb{};
+};
+
+static bool operator==(const U256& left, const U256& right) { return left.limb == right.limb; }
+static bool isZero(const U256& value) { return value == U256{}; }
+
+static int compare(const U256& left, const U256& right)
+{
+    for (size_t index = 4; index-- > 0;)
+    {
+        if (left.limb[index] < right.limb[index]) return -1;
+        if (left.limb[index] > right.limb[index]) return 1;
+    }
+    return 0;
+}
+
+static U256 addRaw(const U256& left, const U256& right)
+{
+    U256 result;
+    std::uint64_t carry = 0;
+    for (size_t index = 0; index < 4; ++index)
+    {
+        const std::uint64_t first = left.limb[index] + carry;
+        const std::uint64_t firstCarry = first < left.limb[index];
+        result.limb[index] = first + right.limb[index];
+        const std::uint64_t secondCarry = result.limb[index] < first;
+        carry = firstCarry | secondCarry;
+    }
+    return result;
+}
+
+static U256 subtractRaw(const U256& left, const U256& right)
+{
+    U256 result;
+    std::uint64_t borrow = 0;
+    for (size_t index = 0; index < 4; ++index)
+    {
+        const std::uint64_t first = left.limb[index] - borrow;
+        const std::uint64_t firstBorrow = first > left.limb[index];
+        result.limb[index] = first - right.limb[index];
+        const std::uint64_t secondBorrow = result.limb[index] > first;
+        borrow = firstBorrow | secondBorrow;
+    }
+    return result;
+}
+
+static U256 addMod(const U256& left, const U256& right, const U256& modulus)
+{
+    const U256 gap = subtractRaw(modulus, right);
+    return compare(left, gap) >= 0 ? subtractRaw(left, gap) : addRaw(left, right);
+}
+
+static U256 subtractMod(const U256& left, const U256& right, const U256& modulus)
+{
+    return compare(left, right) >= 0 ? subtractRaw(left, right)
+                                    : subtractRaw(modulus, subtractRaw(right, left));
+}
+
+static bool bit(const U256& value, size_t index)
+{
+    return ((value.limb[index / 64] >> (index % 64)) & 1U) != 0;
+}
+
+static U256 multiplyMod(U256 left, const U256& right, const U256& modulus)
+{
+    U256 result;
+    for (size_t index = 0; index < 256; ++index)
+    {
+        if (bit(right, index)) result = addMod(result, left, modulus);
+        left = addMod(left, left, modulus);
+    }
+    return result;
+}
+
+static U256 powerMod(U256 base, const U256& exponent, const U256& modulus)
+{
+    U256 result;
+    result.limb[0] = 1;
+    for (size_t index = 256; index-- > 0;)
+    {
+        result = multiplyMod(result, result, modulus);
+        if (bit(exponent, index)) result = multiplyMod(result, base, modulus);
+    }
+    return result;
+}
+
+static U256 inverseMod(const U256& value, const U256& modulus)
+{
+    U256 two;
+    two.limb[0] = 2;
+    return powerMod(value, subtractRaw(modulus, two), modulus);
+}
+
+static U256 fromBigEndian(const unsigned char* bytes, size_t length)
+{
+    if (length > 32) fail("U256 input exceeds 32 bytes");
+    U256 result;
+    for (size_t index = 0; index < length; ++index)
+    {
+        const size_t reverse = length - 1 - index;
+        result.limb[index / 8] |= static_cast<std::uint64_t>(bytes[reverse]) << ((index % 8) * 8);
+    }
+    return result;
+}
+
+static U256 fromLittleEndian(const unsigned char* bytes, size_t length)
+{
+    if (length > 32) fail("U256 input exceeds 32 bytes");
+    U256 result;
+    for (size_t index = 0; index < length; ++index)
+        result.limb[index / 8] |= static_cast<std::uint64_t>(bytes[index]) << ((index % 8) * 8);
+    return result;
+}
+
+static U256 u256Hex(const char* value)
+{
+    return fromBigEndian(bytesFromHex(value).data(), std::strlen(value) / 2);
+}
+
+struct AffinePoint
+{
+    U256 x;
+    U256 y;
+    bool infinity = true;
+};
+
+struct JacobianPoint
+{
+    U256 x;
+    U256 y;
+    U256 z;
+    bool infinity = true;
+};
+
+static U256 smallMod(const U256& value, unsigned int factor, const U256& modulus)
+{
+    U256 result;
+    for (unsigned int index = 0; index < factor; ++index) result = addMod(result, value, modulus);
+    return result;
+}
+
+static JacobianPoint doublePoint(const JacobianPoint& point, const U256& prime, const U256& curveA)
+{
+    if (point.infinity || isZero(point.y)) return {};
+    const U256 xx = multiplyMod(point.x, point.x, prime);
+    const U256 yy = multiplyMod(point.y, point.y, prime);
+    const U256 yyyy = multiplyMod(yy, yy, prime);
+    const U256 zz = multiplyMod(point.z, point.z, prime);
+    U256 s = multiplyMod(addMod(point.x, yy, prime), addMod(point.x, yy, prime), prime);
+    s = smallMod(subtractMod(subtractMod(s, xx, prime), yyyy, prime), 2, prime);
+    const U256 zz2 = multiplyMod(zz, zz, prime);
+    const U256 m = addMod(smallMod(xx, 3, prime), multiplyMod(curveA, zz2, prime), prime);
+    const U256 x3 = subtractMod(multiplyMod(m, m, prime), smallMod(s, 2, prime), prime);
+    const U256 y3 = subtractMod(multiplyMod(m, subtractMod(s, x3, prime), prime),
+                                smallMod(yyyy, 8, prime), prime);
+    const U256 z3 = subtractMod(subtractMod(
+        multiplyMod(addMod(point.y, point.z, prime), addMod(point.y, point.z, prime), prime),
+        yy, prime), zz, prime);
+    return {x3, y3, z3, false};
+}
+
+static JacobianPoint addMixed(const JacobianPoint& left, const AffinePoint& right,
+                              const U256& prime, const U256& curveA)
+{
+    if (left.infinity) return {right.x, right.y, U256{{1, 0, 0, 0}}, right.infinity};
+    if (right.infinity) return left;
+    const U256 z1z1 = multiplyMod(left.z, left.z, prime);
+    const U256 u2 = multiplyMod(right.x, z1z1, prime);
+    const U256 s2 = multiplyMod(right.y, multiplyMod(left.z, z1z1, prime), prime);
+    const U256 h = subtractMod(u2, left.x, prime);
+    if (isZero(h))
+    {
+        if (s2 == left.y) return doublePoint(left, prime, curveA);
+        return {};
+    }
+    const U256 hh = multiplyMod(h, h, prime);
+    const U256 i = smallMod(hh, 4, prime);
+    const U256 j = multiplyMod(h, i, prime);
+    const U256 r = smallMod(subtractMod(s2, left.y, prime), 2, prime);
+    const U256 v = multiplyMod(left.x, i, prime);
+    const U256 x3 = subtractMod(subtractMod(multiplyMod(r, r, prime), j, prime),
+                                smallMod(v, 2, prime), prime);
+    const U256 y3 = subtractMod(multiplyMod(r, subtractMod(v, x3, prime), prime),
+                                smallMod(multiplyMod(left.y, j, prime), 2, prime), prime);
+    const U256 zPlusH = addMod(left.z, h, prime);
+    const U256 z3 = subtractMod(subtractMod(multiplyMod(zPlusH, zPlusH, prime), z1z1, prime),
+                                hh, prime);
+    return {x3, y3, z3, false};
+}
+
+static AffinePoint affine(const JacobianPoint& point, const U256& prime)
+{
+    if (point.infinity) return {};
+    const U256 zInverse = inverseMod(point.z, prime);
+    const U256 zInverse2 = multiplyMod(zInverse, zInverse, prime);
+    return {multiplyMod(point.x, zInverse2, prime),
+            multiplyMod(point.y, multiplyMod(zInverse2, zInverse, prime), prime), false};
+}
+
+static AffinePoint scalarMultiply(const U256& scalar, const AffinePoint& point,
+                                  const U256& prime, const U256& curveA)
+{
+    JacobianPoint result;
+    for (size_t index = 256; index-- > 0;)
+    {
+        result = doublePoint(result, prime, curveA);
+        if (bit(scalar, index)) result = addMixed(result, point, prime, curveA);
+    }
+    return affine(result, prime);
+}
+
+static AffinePoint addAffine(const AffinePoint& left, const AffinePoint& right,
+                             const U256& prime, const U256& curveA)
+{
+    JacobianPoint jacobian{left.x, left.y, U256{{1, 0, 0, 0}}, left.infinity};
+    return affine(addMixed(jacobian, right, prime, curveA), prime);
+}
+
+static bool verifyGOST2012Signature(const Bytes& publicPoint, const Bytes& digestValue,
+                                    const Bytes& signature)
+{
+    if (publicPoint.size() != 64 || digestValue.size() != 32 || signature.size() != 64) return false;
+    const U256 prime = u256Hex("fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd97");
+    const U256 curveA = u256Hex("fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd94");
+    const U256 curveB = u256Hex("a6");
+    const U256 order = u256Hex("ffffffffffffffffffffffffffffffff6c611070995ad10045841b09b761b893");
+    const AffinePoint generator{u256Hex("01"),
+        u256Hex("8d91e471e0989cda27df505a453f2b7635294f2ddf23e3b122acc99c9e9f1e14"), false};
+    const AffinePoint publicKey{fromLittleEndian(publicPoint.data(), 32),
+                                fromLittleEndian(publicPoint.data() + 32, 32), false};
+
+    const U256 y2 = multiplyMod(publicKey.y, publicKey.y, prime);
+    const U256 x2 = multiplyMod(publicKey.x, publicKey.x, prime);
+    const U256 curveRight = addMod(addMod(multiplyMod(x2, publicKey.x, prime),
+                                          multiplyMod(curveA, publicKey.x, prime), prime),
+                                   curveB, prime);
+    if (!(y2 == curveRight)) return false;
+
+    const U256 s = fromBigEndian(signature.data(), 32);
+    const U256 r = fromBigEndian(signature.data() + 32, 32);
+    if (isZero(r) || isZero(s) || compare(r, order) >= 0 || compare(s, order) >= 0) return false;
+    U256 e = fromLittleEndian(digestValue.data(), digestValue.size());
+    while (compare(e, order) >= 0) e = subtractRaw(e, order);
+    if (isZero(e)) e.limb[0] = 1;
+    const U256 v = inverseMod(e, order);
+    const U256 z1 = multiplyMod(s, v, order);
+    const U256 z2 = multiplyMod(subtractRaw(order, r), v, order);
+    const AffinePoint result = addAffine(scalarMultiply(z1, generator, prime, curveA),
+                                         scalarMultiply(z2, publicKey, prime, curveA),
+                                         prime, curveA);
+    if (result.infinity) return false;
+    U256 x = result.x;
+    while (compare(x, order) >= 0) x = subtractRaw(x, order);
+    return x == r;
+}
+
+static Bytes gostSign(Module& module, CK_SESSION_HANDLE session, CK_OBJECT_HANDLE key,
+                      CK_MECHANISM_TYPE mechanismType, const Bytes& data)
+{
+    CK_MECHANISM mechanism{mechanismType, nullptr, 0};
+    callOk("C_SignInit", "hSession=" + std::to_string(session) + ", pMechanism={mechanism=" +
+           mechanismName(mechanismType) + ", pParameter=NULL_PTR, ulParameterLen=0}, hKey=" +
+           std::to_string(key), [&] { return module->C_SignInit(session, &mechanism, key); });
+    CK_ULONG length = 0;
+    callOk("C_Sign", "hSession=" + std::to_string(session) + ", pData=hex:" +
+           hexBytes(data.data(), data.size()) + ", ulDataLen=" + std::to_string(data.size()) +
+           ", pSignature=NULL_PTR, pulSignatureLen=&length",
+           [&] { return module->C_Sign(session, const_cast<CK_BYTE_PTR>(data.data()),
+                                       static_cast<CK_ULONG>(data.size()), nullptr, &length); });
+    if (length != 64) fail("GOST C_Sign length query did not return 64 bytes");
+    Bytes signature(length);
+    callOk("C_Sign", "hSession=" + std::to_string(session) + ", pData=hex:" +
+           hexBytes(data.data(), data.size()) + ", ulDataLen=" + std::to_string(data.size()) +
+           ", pSignature=buffer[64], pulSignatureLen=&length",
+           [&] { return module->C_Sign(session, const_cast<CK_BYTE_PTR>(data.data()),
+                                       static_cast<CK_ULONG>(data.size()), signature.data(), &length); });
+    signature.resize(length);
+    trace("OUTPUT", std::string(mechanismName(mechanismType)) + " signature hex=" +
+                    hexBytes(signature.data(), signature.size()));
+    return signature;
+}
+
+static Bytes gostSignMultipart(Module& module, CK_SESSION_HANDLE session, CK_OBJECT_HANDLE key,
+                               const Bytes& data, const std::vector<size_t>& chunks)
+{
+    CK_MECHANISM mechanism{CKM_GOSTR3410_WITH_GOSTR3411_2012_256, nullptr, 0};
+    callOk("C_SignInit", "hSession=" + std::to_string(session) +
+           ", pMechanism={mechanism=CKM_GOSTR3410_WITH_GOSTR3411_2012_256, pParameter=NULL_PTR, ulParameterLen=0}, hKey=" +
+           std::to_string(key), [&] { return module->C_SignInit(session, &mechanism, key); });
+    size_t offset = 0;
+    for (size_t chunk : chunks)
+    {
+        if (offset + chunk > data.size()) fail("GOST multipart signature chunk exceeds input");
+        callOk("C_SignUpdate", "hSession=" + std::to_string(session) + ", pPart=hex:" +
+               hexBytes(data.data() + offset, chunk) + ", ulPartLen=" + std::to_string(chunk),
+               [&] { return module->C_SignUpdate(session,
+                           const_cast<CK_BYTE_PTR>(data.data() + offset), static_cast<CK_ULONG>(chunk)); });
+        offset += chunk;
+    }
+    if (offset != data.size()) fail("GOST multipart signature chunks do not cover input");
+    CK_ULONG length = 0;
+    callOk("C_SignFinal", "hSession=" + std::to_string(session) +
+           ", pSignature=NULL_PTR, pulSignatureLen=&length",
+           [&] { return module->C_SignFinal(session, nullptr, &length); });
+    if (length != 64) fail("GOST C_SignFinal length query did not return 64 bytes");
+    Bytes signature(length);
+    callOk("C_SignFinal", "hSession=" + std::to_string(session) +
+           ", pSignature=buffer[64], pulSignatureLen=&length",
+           [&] { return module->C_SignFinal(session, signature.data(), &length); });
+    signature.resize(length);
+    trace("OUTPUT", "multipart GOST signature hex=" + hexBytes(signature.data(), signature.size()));
+    return signature;
+}
+
+static void verifyGOST2012Signing(Module& module, CK_SESSION_HANDLE session,
+                                  const GOST2012KeyPair& keyPair)
+{
+    // Reuse RFC 6986 section 10.1.2 so the combined mechanism is checked
+    // against a published digest, not merely against another call into the
+    // same implementation.
+    const std::string text = "012345678901234567890123456789012345678901234567890123456789012";
+    const Bytes message(text.begin(), text.end());
+    const Bytes referenceDigest = bytesFromHex(
+        "9d151eefd8590b89daa6ba6cb74af9275dd051026bb149a452fd84e5e57b5500");
+    const Bytes digestValue = digest(module, session, CKM_GOSTR3411_2012_256, message, 32);
+    if (digestValue != referenceDigest) fail("signing input digest does not match RFC 6986");
+
+    CK_BYTE invalidParameter = 0;
+    CK_MECHANISM invalid{CKM_GOSTR3410_WITH_GOSTR3411_2012_256, &invalidParameter, 1};
+    check(invoke("C_SignInit", "hSession=" + std::to_string(session) +
+                 ", pMechanism={mechanism=CKM_GOSTR3410_WITH_GOSTR3411_2012_256, pParameter=byte[1], ulParameterLen=1}, hKey=" +
+                 std::to_string(keyPair.privateKey),
+                 [&] { return module->C_SignInit(session, &invalid, keyPair.privateKey); }),
+          CKR_MECHANISM_PARAM_INVALID, "C_SignInit(non-empty GOST parameters)");
+
+    CK_MECHANISM rawMechanism{CKM_GOSTR3410, nullptr, 0};
+    callOk("C_SignInit", "hSession=" + std::to_string(session) +
+           ", pMechanism={mechanism=CKM_GOSTR3410, pParameter=NULL_PTR, ulParameterLen=0}, hKey=" +
+           std::to_string(keyPair.privateKey),
+           [&] { return module->C_SignInit(session, &rawMechanism, keyPair.privateKey); });
+    Bytes shortDigest(31, 0x5a);
+    Bytes rejectedSignature(64);
+    CK_ULONG rejectedLength = static_cast<CK_ULONG>(rejectedSignature.size());
+    check(invoke("C_Sign", "hSession=" + std::to_string(session) +
+                 ", pData=hex:" + hexBytes(shortDigest.data(), shortDigest.size()) +
+                 ", ulDataLen=31, pSignature=buffer[64], pulSignatureLen=&length",
+                 [&] { return module->C_Sign(session, shortDigest.data(),
+                                             static_cast<CK_ULONG>(shortDigest.size()),
+                                             rejectedSignature.data(), &rejectedLength); }),
+          CKR_DATA_LEN_RANGE, "C_Sign(31-byte raw GOST digest)");
+    trace("STANDARD", "raw CKM_GOSTR3410 rejects inputs other than one 32-byte digest");
+
+    const Bytes rawSignature = gostSign(module, session, keyPair.privateKey, CKM_GOSTR3410, digestValue);
+    if (!verifyGOST2012Signature(keyPair.publicPoint, digestValue, rawSignature))
+        fail("independent GOST verifier rejected CKM_GOSTR3410 signature");
+    trace("REFERENCE", "independent GOST R 34.10-2012 equation verified raw C_Sign signature");
+
+    const Bytes combinedSignature = gostSign(module, session, keyPair.privateKey,
+                                              CKM_GOSTR3410_WITH_GOSTR3411_2012_256, message);
+    if (!verifyGOST2012Signature(keyPair.publicPoint, digestValue, combinedSignature))
+        fail("independent GOST verifier rejected combined one-shot signature");
+    trace("REFERENCE", "independent verifier confirmed combined C_Sign uses Streebog-256");
+
+    const Bytes multipartSignature = gostSignMultipart(module, session, keyPair.privateKey,
+                                                        message, {1, 7, 13, 42});
+    if (!verifyGOST2012Signature(keyPair.publicPoint, digestValue, multipartSignature))
+        fail("independent GOST verifier rejected multipart signature");
+    trace("REFERENCE", "independent verifier confirmed C_SignUpdate/C_SignFinal signature");
 }
 
 struct Tlv
@@ -1152,8 +1534,11 @@ static void prepare(const fs::path& modulePath, const fs::path& work)
     requireMechanism(module, slot, CKM_SHA256, CKF_DIGEST);
     requireMechanism(module, slot, CKM_GOSTR3411_2012_256, CKF_DIGEST);
     requireMechanism(module, slot, CKM_GOSTR3410_KEY_PAIR_GEN, CKF_GENERATE_KEY_PAIR, 256);
+    requireMechanism(module, slot, CKM_GOSTR3410, CKF_SIGN, 256);
+    requireMechanism(module, slot, CKM_GOSTR3410_WITH_GOSTR3411_2012_256, CKF_SIGN, 256);
     verifyStreebog256(module, session);
-    verifyGOST2012KeyGeneration(module, session, objectId);
+    const GOST2012KeyPair gostKeyPair = verifyGOST2012KeyGeneration(module, session, objectId);
+    verifyGOST2012Signing(module, session, gostKeyPair);
 
     CK_OBJECT_CLASS publicClass = CKO_PUBLIC_KEY;
     CK_OBJECT_CLASS privateClass = CKO_PRIVATE_KEY;

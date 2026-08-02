@@ -37,7 +37,7 @@ curl --fail --location --retry 5 --output "$botan_archive" \
 printf '%s  %s\n' "$BOTAN_SHA256" "$botan_archive" | sha256sum --check
 tar -xJf "$botan_archive" -C "$work_dir"
 python3 "$botan_source/configure.py" \
-  --disable-shared --minimized-build --enable-modules=streebog,gost_3410 \
+  --disable-shared --minimized-build --enable-modules=streebog,gost_3410,emsa_raw \
   --without-documentation --extra-cxxflags=-fPIC --with-build-dir="$botan_build"
 make -C "$botan_build" -j"$(getconf _NPROCESSORS_ONLN)" libs
 

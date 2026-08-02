@@ -108,7 +108,8 @@ if(WITH_GOST_3411_2012)
 endif(WITH_GOST_3411_2012)
 
 if(WITH_GOST_3410_2012_256)
-    list(APPEND SOURCES BotanGOST2012KeyGenerator.cpp)
+    list(APPEND SOURCES BotanGOST2012KeyGenerator.cpp
+                        BotanGOST2012Signer.cpp)
 endif(WITH_GOST_3410_2012_256)
 
 if(WITH_BOTAN)

@@ -65,6 +65,7 @@
 #include "GOSTPrivateKey.h"
 #ifdef WITH_GOST_3410_2012_256
 #include "BotanGOST2012KeyGenerator.h"
+#include "BotanGOST2012Signer.h"
 #endif
 #ifdef WITH_ML_DSA
 #include "MLDSAParameters.h"
@@ -867,6 +868,8 @@ void SoftHSM::prepareSupportedMechanisms(std::map<std::string, CK_MECHANISM_TYPE
 #endif
 #if defined(WITH_GOST_3410_2012_256) && !defined(WITH_GOST)
 	t["CKM_GOSTR3410_KEY_PAIR_GEN"] = CKM_GOSTR3410_KEY_PAIR_GEN;
+	t["CKM_GOSTR3410"] = CKM_GOSTR3410;
+	t["CKM_GOSTR3410_WITH_GOSTR3411_2012_256"] = CKM_GOSTR3410_WITH_GOSTR3411_2012_256;
 #endif
 #ifdef WITH_GOST_3411_2012
 	t["CKM_GOSTR3411_2012_256"] = CKM_GOSTR3411_2012_256;
@@ -1399,6 +1402,12 @@ CK_RV SoftHSM::C_GetMechanismInfo(CK_SLOT_ID slotID, CK_MECHANISM_TYPE type, CK_
 			pInfo->ulMinKeySize = 256;
 			pInfo->ulMaxKeySize = 256;
 			pInfo->flags = CKF_GENERATE_KEY_PAIR;
+			break;
+		case CKM_GOSTR3410:
+		case CKM_GOSTR3410_WITH_GOSTR3411_2012_256:
+			pInfo->ulMinKeySize = 256;
+			pInfo->ulMaxKeySize = 256;
+			pInfo->flags = CKF_SIGN;
 			break;
 #endif
 #ifdef WITH_GOST_3411_2012
@@ -4346,7 +4355,7 @@ CK_RV SoftHSM::AsymSignInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMechan
 #ifdef WITH_ECC
 	bool isECDSA = false;
 #endif
-#ifdef WITH_GOST
+#if defined(WITH_GOST) || defined(WITH_GOST_3410_2012_256)
 	bool isGOST = false;
 #endif
 #ifdef WITH_EDDSA
@@ -4611,6 +4620,22 @@ CK_RV SoftHSM::AsymSignInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMechan
 			isGOST = true;
 			break;
 #endif
+#if defined(WITH_GOST_3410_2012_256) && !defined(WITH_GOST)
+		case CKM_GOSTR3410:
+			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
+				return CKR_MECHANISM_PARAM_INVALID;
+			mechanism = AsymMech::GOST;
+			bAllowMultiPartOp = false;
+			isGOST = true;
+			break;
+		case CKM_GOSTR3410_WITH_GOSTR3411_2012_256:
+			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
+				return CKR_MECHANISM_PARAM_INVALID;
+			mechanism = AsymMech::GOST_GOST;
+			bAllowMultiPartOp = true;
+			isGOST = true;
+			break;
+#endif
 #ifdef WITH_EDDSA
 		case CKM_EDDSA:
 			mechanism = AsymMech::EDDSA;
@@ -4782,13 +4807,17 @@ CK_RV SoftHSM::AsymSignInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMechan
 		}
 	}
 #endif
-#ifdef WITH_GOST
+#if defined(WITH_GOST) || defined(WITH_GOST_3410_2012_256)
 	else if (isGOST)
 	{
 		if (keyType != CKK_GOSTR3410)
 			return CKR_KEY_TYPE_INCONSISTENT;
 
+#ifdef WITH_GOST
 		asymCrypto = CryptoFactory::i()->getAsymmetricAlgorithm(AsymAlgo::GOST);
+#else
+		asymCrypto = new (std::nothrow) BotanGOST2012Signer();
+#endif
 		if (asymCrypto == NULL) return CKR_MECHANISM_INVALID;
 
 		privateKey = asymCrypto->newPrivateKey();
@@ -4939,6 +4968,17 @@ static CK_RV AsymSign(Session* session, CK_BYTE_PTR pData, CK_ULONG ulDataLen, C
 
 	// Get the data
 	ByteString data;
+
+#ifdef WITH_GOST_3410_2012_256
+	// CKM_GOSTR3410 signs one precomputed 256-bit digest.  Rejecting a
+	// differently-sized input here preserves the PKCS #11 error code instead
+	// of collapsing it into a generic backend failure.
+	if (mechanism == AsymMech::GOST && ulDataLen != 32)
+	{
+		session->resetOp();
+		return CKR_DATA_LEN_RANGE;
+	}
+#endif
 
 	// We must allow input length <= k and therfore need to prepend the data with zeroes.
 	if (mechanism == AsymMech::RSA) {
@@ -12307,8 +12347,7 @@ CK_RV SoftHSM::generateGOST
 }
 
 #ifdef WITH_GOST_3410_2012_256
-// Generate a GOST R 34.10-2012 256-bit key pair.  This deliberately stops at
-// object generation; signing and key-agreement mechanisms are not enabled.
+// Generate a GOST R 34.10-2012 256-bit key pair for the portable extension.
 CK_RV SoftHSM::generateGOST2012
 (CK_SESSION_HANDLE hSession,
 	CK_ATTRIBUTE_PTR pPublicKeyTemplate,

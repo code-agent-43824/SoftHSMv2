@@ -1,9 +1,10 @@
 # Portable PKCS #11 integration test
 
 `portable-token-e2e.cpp` is a dependency-light PKCS #11 consumer. It loads a
-module through the operating-system loader, obtains `CK_FUNCTION_LIST` through
-`C_GetFunctionList`, and uses only standard Cryptoki calls, mechanisms, object
-classes, and attributes. It has no SoftHSM or OpenSSL link dependency.
+module through the operating-system loader and obtains `CK_FUNCTION_LIST`
+through `C_GetFunctionList`. It uses standard Cryptoki calls, object classes,
+and attributes plus the published TC26 mechanism identifiers for GOST 2012.
+It has no SoftHSM, Botan, or OpenSSL link dependency.
 
 Every PKCS #11 call logs its input parameters, mechanism, templates, returned
 `CK_RV`, output lengths, object/session handles, and public output bytes. PIN
@@ -22,12 +23,21 @@ requires these standard capabilities from the selected token:
 - `CKM_RSA_PKCS_KEY_PAIR_GEN` with 2048-bit keys;
 - `CKM_SHA256_RSA_PKCS` signing;
 - `CKM_SHA256` digesting;
+- `CKM_GOSTR3411_2012_256` (TC26 `0xD4321012`) digesting;
+- `CKM_GOSTR3410_KEY_PAIR_GEN` with 256-bit GOST keys;
+- raw `CKM_GOSTR3410` and combined TC26
+  `CKM_GOSTR3410_WITH_GOSTR3411_2012_256` signing;
 - persistent RSA key and X.509 certificate objects.
 
 The runner queries and logs `C_GetMechanismInfo` before using each capability.
 A standards-compliant token that does not implement one of these optional
 mechanisms fails with an explicit capability error; PKCS #11 compliance alone
-does not require every token to implement RSA or SHA-256.
+does not require every token to implement RSA, SHA-256, or the TC26 extension.
+
+The GOST scenario generates a persistent 2012/256 key pair, signs a
+precomputed Streebog-256 digest, signs and hashes the same message in one-shot
+and multipart forms, and checks all three randomized signatures with a small
+independent implementation of the GOST verification equation in the C++ test.
 
 Rutoken's published matrices list all functions used here, plus
 `CKM_RSA_PKCS_KEY_PAIR_GEN`, `CKM_SHA256_RSA_PKCS`, and `CKM_SHA256`, for

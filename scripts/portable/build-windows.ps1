@@ -54,7 +54,7 @@ tar -xJf $BotanArchive -C $WorkDir
 
 $BotanCpu = if ($env:PORTABLE_ARCH -eq "arm64") { "arm64" } else { "x86_64" }
 python (Join-Path $BotanSource "configure.py") --cc=msvc --os=windows --cpu=$BotanCpu `
-    --msvc-runtime=MT --disable-shared --minimized-build --enable-modules=streebog,gost_3410 `
+    --msvc-runtime=MT --disable-shared --minimized-build --enable-modules=streebog,gost_3410,emsa_raw `
     --without-documentation "--with-build-dir=$BotanBuild"
 if ($LASTEXITCODE -ne 0) { throw "Botan configure failed" }
 nmake /f (Join-Path $BotanBuild "Makefile") libs

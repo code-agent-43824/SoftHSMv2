@@ -18,8 +18,8 @@ directory.
 SOFTHSM2_CONF can still override the adjacent configuration file when a custom
 location is needed.
 
-The module statically includes OpenSSL and the minimized Botan Streebog
-component. Linux and Windows builds also statically include their C/C++ runtime;
+The module statically includes OpenSSL and minimized Botan Streebog and GOST
+34.10 components. Linux and Windows builds also statically include their C/C++ runtime;
 macOS uses the operating system's libc++. There are no non-system runtime
 dependencies. Platform system libraries and the operating system loader remain
 required.
@@ -28,5 +28,7 @@ GOST R 34.11-2012/256 is available through the TC26
 CKM_GOSTR3411_2012_256 mechanism for one-shot and multipart PKCS #11 digest
 operations. GOST R 34.10-2012/256 key pairs can be generated with
 CKM_GOSTR3410_KEY_PAIR_GEN and explicit CKA_GOSTR3410_PARAMS and
-CKA_GOSTR3411_PARAMS attributes. No GOST signing, MAC, key agreement, or other
-GOST mechanism is enabled.
+CKA_GOSTR3411_PARAMS attributes. Those keys can sign a precomputed 32-byte
+digest with CKM_GOSTR3410, or hash and sign one-shot or multipart input with
+the TC26 CKM_GOSTR3410_WITH_GOSTR3411_2012_256 mechanism. GOST verification,
+MAC, key agreement, CMS construction, and other GOST mechanisms are not enabled.

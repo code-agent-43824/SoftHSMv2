@@ -51,7 +51,7 @@ for arch in arm64 x86_64; do
   python3 "$botan_source/configure.py" \
     --cc=clang --os=darwin --cpu="$arch" \
     --cc-abi-flags="-arch $arch -mmacosx-version-min=$deployment_target" \
-    --disable-shared --minimized-build --enable-modules=streebog,gost_3410 \
+    --disable-shared --minimized-build --enable-modules=streebog,gost_3410,emsa_raw \
     --without-documentation --with-build-dir="$botan_build"
   make -C "$botan_build" -j"$(sysctl -n hw.logicalcpu)" libs
 done
