@@ -103,3 +103,47 @@ The `run-fresh-integration.*` wrappers are CI adapters. They unpack a portable
 SoftHSM ZIP, explicitly enable initialization for that disposable token, call
 the same generic runner, and then perform the additional product-specific
 check that the portable module created `tokens` beside itself.
+
+## Downloadable test kits
+
+Every portable release publishes a separate self-contained test kit for each
+product platform:
+
+- `softhsm-testkit-linux-x64.zip`;
+- `softhsm-testkit-linux-arm64.zip`;
+- `softhsm-testkit-windows-x64.zip`;
+- `softhsm-testkit-windows-arm64.zip`;
+- `softhsm-testkit-macos-universal.zip`.
+
+Each verification job builds its kit on a fresh runner, extracts the resulting
+ZIP, and executes that exact packaged environment against the separately
+downloaded product artifact. Only a successful kit is uploaded to Actions and
+made eligible for the release aggregation job.
+
+The kit includes the precompiled C++ client, a pinned statically linked OpenSSL
+CLI, all runtime launchers, the test source and PKCS #11 headers, licenses, and
+`ENVIRONMENT.txt` with the runner and tool versions. No compiler, SDK, Java,
+Botan, or separately installed OpenSSL is needed to run it. Normal platform
+system libraries remain required.
+
+After downloading the matching product and test-kit ZIPs, extract only the
+test kit and pass the still-zipped product package to it:
+
+```sh
+unzip softhsm-testkit-linux-x64.zip -d softhsm-testkit-linux-x64
+bash softhsm-testkit-linux-x64/run-test.sh \
+  softhsm-portable-linux-x64.zip ./retained-evidence
+```
+
+On Windows:
+
+```bat
+powershell -NoProfile -Command "Expand-Archive softhsm-testkit-windows-x64.zip softhsm-testkit-windows-x64"
+softhsm-testkit-windows-x64\run-test.cmd softhsm-portable-windows-x64.zip retained-evidence
+```
+
+The optional second argument keeps all scenario files in a chosen directory.
+Without it, a temporary evidence directory is retained and printed. The
+product wrapper intentionally enables destructive `C_InitToken` against the
+disposable SoftHSM store created from that product ZIP; do not substitute a
+hardware-token module without first reviewing the generic-runner settings.

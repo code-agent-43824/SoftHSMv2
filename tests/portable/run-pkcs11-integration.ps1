@@ -31,7 +31,7 @@ if ($args.Count -eq 3) {
 }
 $BuildDir = Join-Path ([IO.Path]::GetTempPath()) ("pkcs11-client-build-" + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $BuildDir | Out-Null
-$Tester = Join-Path $BuildDir "portable-token-e2e.exe"
+$Tester = if ($env:P11_TEST_CLIENT) { (Resolve-Path $env:P11_TEST_CLIENT).Path } else { Join-Path $BuildDir "portable-token-e2e.exe" }
 
 $Initialize = if ($env:P11_TEST_INITIALIZE_TOKEN) { $env:P11_TEST_INITIALIZE_TOKEN } else { "NO" }
 $Slot = if ($env:P11_TEST_SLOT_ID) { $env:P11_TEST_SLOT_ID } else { "<automatic; exactly one matching token is required>" }
@@ -51,13 +51,17 @@ Write-Step "P11_TEST_OBJECT_ID_HEX=$ObjectId"
 Write-Step "P11_TEST_SO_PIN=<redacted,length=$SoPinLength>"
 Write-Step "P11_TEST_USER_PIN=<redacted,length=$UserPinLength>"
 
-$CompileArgs = @(
-    "/nologo", "/std:c++17", "/O2", "/EHsc", "/W4",
-    "/I$(Join-Path $RootDir 'src/lib/pkcs11')",
-    (Join-Path $RootDir "tests/portable/portable-token-e2e.cpp"),
-    "/Fe:$Tester"
-)
-Invoke-Native "cl" $CompileArgs "compile the dependency-light direct PKCS #11 client"
+if ($env:P11_TEST_CLIENT) {
+    Write-Step "using bundled precompiled PKCS #11 client=$Tester"
+} else {
+    $CompileArgs = @(
+        "/nologo", "/std:c++17", "/O2", "/EHsc", "/W4",
+        "/I$(Join-Path $RootDir 'src/lib/pkcs11')",
+        (Join-Path $RootDir "tests/portable/portable-token-e2e.cpp"),
+        "/Fe:$Tester"
+    )
+    Invoke-Native "cl" $CompileArgs "compile the dependency-light direct PKCS #11 client"
+}
 
 Push-Location ([IO.Path]::GetTempPath())
 try {

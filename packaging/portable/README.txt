@@ -39,3 +39,9 @@ scalar can be returned by C_GetAttributeValue only for keys created with
 CKA_SENSITIVE=CK_FALSE and CKA_EXTRACTABLE=CK_TRUE. Non-extractable or
 sensitive private key material remains unavailable. Public key components are
 readable as required by the PKCS #11 object model.
+
+A separately downloadable `softhsm-testkit-<platform>.zip` on the same release
+page contains the exact precompiled C++/OpenSSL environment used by the fresh
+verification runner. Extract that kit and pass this product ZIP to its
+`run-test.sh` or `run-test.cmd` launcher to reproduce the complete test without
+installing a compiler or a separate OpenSSL package.

@@ -1,16 +1,17 @@
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-if ($args.Count -ne 3) {
-    throw "usage: run-fresh-integration.ps1 <package.zip> <module-name> <openssl>"
+if ($args.Count -lt 3 -or $args.Count -gt 4) {
+    throw "usage: run-fresh-integration.ps1 <package.zip> <module-name> <openssl> [scenario-directory]"
 }
 
 $Archive = (Resolve-Path $args[0]).Path
 $ModuleName = $args[1]
 $OpenSSL = (Resolve-Path $args[2]).Path
-$WorkRoot = Join-Path $env:RUNNER_TEMP "softhsm-fresh-test"
+$TempRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [IO.Path]::GetTempPath() }
+$WorkRoot = Join-Path $TempRoot ("softhsm-fresh-test-" + [guid]::NewGuid())
 $PackageDir = Join-Path $WorkRoot "package"
-$ScenarioDir = Join-Path $WorkRoot "scenario"
+$ScenarioDir = if ($args.Count -eq 4) { [IO.Path]::GetFullPath($args[3]) } else { Join-Path $WorkRoot "scenario" }
 
 Write-Host "[SCRIPT] extracting downloaded package $Archive into $PackageDir"
 New-Item -ItemType Directory -Force -Path $PackageDir, $ScenarioDir | Out-Null

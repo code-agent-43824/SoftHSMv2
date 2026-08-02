@@ -6,7 +6,7 @@ on:
       release_tag:
         description: Release tag to create or update
         required: true
-        default: v2.7.0-portable.8
+        default: v2.7.0-portable.9
 
 permissions:
   contents: read
@@ -120,14 +120,25 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            ca-certificates g++ openssl unzip
+            build-essential ca-certificates curl file perl unzip zip
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           name: softhsm-portable-linux-x64
           path: downloaded
-      - name: Test downloaded package
-        run: tests/portable/run-fresh-integration.sh downloaded/softhsm-portable-linux-x64.zip libsofthsm2.so "$(command -v openssl)"
+      - name: Build and test downloadable test kit
+        run: |
+          scripts/portable/build-test-kit-unix.sh linux-x64
+          mkdir "$RUNNER_TEMP/packaged-testkit"
+          unzip -q dist/softhsm-testkit-linux-x64.zip -d "$RUNNER_TEMP/packaged-testkit"
+          bash "$RUNNER_TEMP/packaged-testkit/run-test.sh" \
+            downloaded/softhsm-portable-linux-x64.zip
+      - uses: actions/upload-artifact@v7
+        with:
+          name: softhsm-testkit-linux-x64
+          path: dist/softhsm-testkit-linux-x64.zip
+          if-no-files-found: error
+          retention-days: 90
 
   verify-linux-arm64:
     name: Verify downloaded Linux ARM64 package
@@ -139,14 +150,25 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            ca-certificates g++ openssl unzip
+            build-essential ca-certificates curl file perl unzip zip
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           name: softhsm-portable-linux-arm64
           path: downloaded
-      - name: Test downloaded package
-        run: tests/portable/run-fresh-integration.sh downloaded/softhsm-portable-linux-arm64.zip libsofthsm2.so "$(command -v openssl)"
+      - name: Build and test downloadable test kit
+        run: |
+          scripts/portable/build-test-kit-unix.sh linux-arm64
+          mkdir "$RUNNER_TEMP/packaged-testkit"
+          unzip -q dist/softhsm-testkit-linux-arm64.zip -d "$RUNNER_TEMP/packaged-testkit"
+          bash "$RUNNER_TEMP/packaged-testkit/run-test.sh" \
+            downloaded/softhsm-portable-linux-arm64.zip
+      - uses: actions/upload-artifact@v7
+        with:
+          name: softhsm-testkit-linux-arm64
+          path: dist/softhsm-testkit-linux-arm64.zip
+          if-no-files-found: error
+          retention-days: 90
 
   verify-windows-x64:
     name: Verify downloaded Windows x64 package
@@ -158,11 +180,20 @@ jobs:
         with:
           name: softhsm-portable-windows-x64
           path: downloaded
-      - name: Test downloaded package
+      - name: Build and test downloadable test kit
         shell: cmd
         env:
           PORTABLE_ARCH: x64
-        run: tests\portable\run-fresh-windows.cmd downloaded\softhsm-portable-windows-x64.zip
+        run: |
+          scripts\portable\build-test-kit-windows.cmd
+          powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-x64.zip' -DestinationPath $env:RUNNER_TEMP\packaged-testkit"
+          call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd" downloaded\softhsm-portable-windows-x64.zip
+      - uses: actions/upload-artifact@v7
+        with:
+          name: softhsm-testkit-windows-x64
+          path: dist/softhsm-testkit-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 90
 
   verify-windows-arm64:
     name: Verify downloaded Windows ARM64 package
@@ -174,11 +205,20 @@ jobs:
         with:
           name: softhsm-portable-windows-arm64
           path: downloaded
-      - name: Test downloaded package
+      - name: Build and test downloadable test kit
         shell: cmd
         env:
           PORTABLE_ARCH: arm64
-        run: tests\portable\run-fresh-windows.cmd downloaded\softhsm-portable-windows-arm64.zip
+        run: |
+          scripts\portable\build-test-kit-windows.cmd
+          powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-arm64.zip' -DestinationPath $env:RUNNER_TEMP\packaged-testkit"
+          call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd" downloaded\softhsm-portable-windows-arm64.zip
+      - uses: actions/upload-artifact@v7
+        with:
+          name: softhsm-testkit-windows-arm64
+          path: dist/softhsm-testkit-windows-arm64.zip
+          if-no-files-found: error
+          retention-days: 90
 
   verify-macos-universal:
     name: Verify downloaded macOS universal package
@@ -190,14 +230,19 @@ jobs:
         with:
           name: softhsm-portable-macos-universal
           path: downloaded
-      - name: Test downloaded package
-        env:
-          CXX: clang++
+      - name: Build and test downloadable test kit
         run: |
-          openssl="$(brew --prefix openssl@3)/bin/openssl"
-          tests/portable/run-fresh-integration.sh \
-            downloaded/softhsm-portable-macos-universal.zip \
-            libsofthsm2.dylib "$openssl"
+          scripts/portable/build-test-kit-unix.sh macos-universal
+          mkdir "$RUNNER_TEMP/packaged-testkit"
+          unzip -q dist/softhsm-testkit-macos-universal.zip -d "$RUNNER_TEMP/packaged-testkit"
+          bash "$RUNNER_TEMP/packaged-testkit/run-test.sh" \
+            downloaded/softhsm-portable-macos-universal.zip
+      - uses: actions/upload-artifact@v7
+        with:
+          name: softhsm-testkit-macos-universal
+          path: dist/softhsm-testkit-macos-universal.zip
+          if-no-files-found: error
+          retention-days: 90
 
   release:
     name: Publish all verified portable packages
@@ -214,7 +259,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
-          pattern: softhsm-portable-*
+          pattern: softhsm-*
           path: release-assets
           merge-multiple: true
       - name: Create checksums
@@ -231,5 +276,5 @@ jobs:
             gh release create "$RELEASE_TAG" release-assets/* \
               --target "$GITHUB_SHA" \
               --title "SoftHSM portable $RELEASE_TAG" \
-              --notes "Portable, installer-free PKCS #11 modules for Linux, Windows, and macOS. This release adds tested RSA and GOST R 34.10-2012/256 key import as separate public/private objects through standard C_CreateObject calls, plus private-component export through C_GetAttributeValue when CKA_SENSITIVE is false and CKA_EXTRACTABLE is true. Sensitive or non-extractable private material remains unavailable. Every package is built on one runner, uploaded, then downloaded and tested on a separate fresh runner. The direct PKCS #11 C++ test now performs complete generated-key export, import, re-export, component comparison, and signing round trips for RSA and GOST, while retaining GOST key generation/signing, RSA/CSR/certificate/CMS, and RFC 6986 checks."
+              --notes "Portable, installer-free PKCS #11 modules and independently downloadable self-contained test kits for Linux x64/ARM64, Windows x64/ARM64, and macOS universal. Each fresh verification runner builds its own test kit, executes that exact packaged kit against the separately downloaded product ZIP, and uploads both the precompiled C++ PKCS #11 client and pinned static OpenSSL reference environment. Test kits include launchers, source, PKCS #11 headers, licenses, and an exact environment manifest; no compiler, SDK, Java, Botan, or separately installed OpenSSL is required to rerun them. SHA256SUMS covers all five product archives and all five test-kit archives."
           fi

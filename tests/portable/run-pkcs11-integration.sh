@@ -44,15 +44,21 @@ log "P11_TEST_USER_PIN=<redacted,length=${#user_pin_value}>"
 
 test -f "$module"
 test -x "$openssl"
-cxx=${CXX:-c++}
-if [[ $(uname -s) == Linux ]]; then
-  run "$cxx" -std=c++17 -O2 -Wall -Wextra -Werror \
-    -I"$root_dir/src/lib/pkcs11" \
-    "$root_dir/tests/portable/portable-token-e2e.cpp" -ldl -o "$tester"
+if [[ -n ${P11_TEST_CLIENT:-} ]]; then
+  tester=$(cd "$(dirname "$P11_TEST_CLIENT")" && pwd)/$(basename "$P11_TEST_CLIENT")
+  test -x "$tester"
+  log "using bundled precompiled PKCS #11 client=$tester"
 else
-  run "$cxx" -std=c++17 -O2 -Wall -Wextra -Werror \
-    -I"$root_dir/src/lib/pkcs11" \
-    "$root_dir/tests/portable/portable-token-e2e.cpp" -o "$tester"
+  cxx=${CXX:-c++}
+  if [[ $(uname -s) == Linux ]]; then
+    run "$cxx" -std=c++17 -O2 -Wall -Wextra -Werror \
+      -I"$root_dir/src/lib/pkcs11" \
+      "$root_dir/tests/portable/portable-token-e2e.cpp" -ldl -o "$tester"
+  else
+    run "$cxx" -std=c++17 -O2 -Wall -Wextra -Werror \
+      -I"$root_dir/src/lib/pkcs11" \
+      "$root_dir/tests/portable/portable-token-e2e.cpp" -o "$tester"
+  fi
 fi
 
 log "PKCS #11 prepare phase: select token, optionally initialize it, log in, generate RSA-2048, create CSR"
