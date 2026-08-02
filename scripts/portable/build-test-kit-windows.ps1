@@ -75,7 +75,7 @@ $Environment = @(
     "Architecture: $([Runtime.InteropServices.RuntimeInformation]::OSArchitecture)",
     "",
     "C++ compiler:",
-    ((& cl 2>&1) -join "`n"),
+    ((& cmd.exe /d /c "cl 2>&1") -join "`n"),
     "",
     "Bundled OpenSSL:",
     ((& $OpenSSLExe version -a 2>&1) -join "`n")
