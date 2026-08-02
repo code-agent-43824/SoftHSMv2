@@ -185,7 +185,7 @@ jobs:
         env:
           PORTABLE_ARCH: x64
         run: |
-          scripts\portable\build-test-kit-windows.cmd
+          call scripts\portable\build-test-kit-windows.cmd
           powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-x64.zip' -DestinationPath $env:RUNNER_TEMP\packaged-testkit"
           call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd" downloaded\softhsm-portable-windows-x64.zip
       - uses: actions/upload-artifact@v7
@@ -210,7 +210,7 @@ jobs:
         env:
           PORTABLE_ARCH: arm64
         run: |
-          scripts\portable\build-test-kit-windows.cmd
+          call scripts\portable\build-test-kit-windows.cmd
           powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-arm64.zip' -DestinationPath $env:RUNNER_TEMP\packaged-testkit"
           call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd" downloaded\softhsm-portable-windows-arm64.zip
       - uses: actions/upload-artifact@v7
