@@ -32,3 +32,10 @@ CKA_GOSTR3411_PARAMS attributes. Those keys can sign a precomputed 32-byte
 digest with CKM_GOSTR3410, or hash and sign one-shot or multipart input with
 the TC26 CKM_GOSTR3410_WITH_GOSTR3411_2012_256 mechanism. GOST verification,
 MAC, key agreement, CMS construction, and other GOST mechanisms are not enabled.
+
+RSA and GOST public/private key objects can be imported separately with the
+standard C_CreateObject function. Private RSA components and the GOST private
+scalar can be returned by C_GetAttributeValue only for keys created with
+CKA_SENSITIVE=CK_FALSE and CKA_EXTRACTABLE=CK_TRUE. Non-extractable or
+sensitive private key material remains unavailable. Public key components are
+readable as required by the PKCS #11 object model.

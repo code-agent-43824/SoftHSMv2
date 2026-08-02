@@ -522,7 +522,15 @@ static const char* attributeName(CK_ATTRIBUTE_TYPE type)
         case CKA_MODULUS: return "CKA_MODULUS";
         case CKA_MODULUS_BITS: return "CKA_MODULUS_BITS";
         case CKA_PUBLIC_EXPONENT: return "CKA_PUBLIC_EXPONENT";
+        case CKA_PRIVATE_EXPONENT: return "CKA_PRIVATE_EXPONENT";
+        case CKA_PRIME_1: return "CKA_PRIME_1";
+        case CKA_PRIME_2: return "CKA_PRIME_2";
+        case CKA_EXPONENT_1: return "CKA_EXPONENT_1";
+        case CKA_EXPONENT_2: return "CKA_EXPONENT_2";
+        case CKA_COEFFICIENT: return "CKA_COEFFICIENT";
         case CKA_EXTRACTABLE: return "CKA_EXTRACTABLE";
+        case CKA_ALWAYS_SENSITIVE: return "CKA_ALWAYS_SENSITIVE";
+        case CKA_NEVER_EXTRACTABLE: return "CKA_NEVER_EXTRACTABLE";
         case CKA_LOCAL: return "CKA_LOCAL";
         case CKA_KEY_GEN_MECHANISM: return "CKA_KEY_GEN_MECHANISM";
         case CKA_GOSTR3410_PARAMS: return "CKA_GOSTR3410_PARAMS";
@@ -576,7 +584,8 @@ static std::string attributeValue(const CK_ATTRIBUTE& attribute)
          attribute.type == CKA_SENSITIVE || attribute.type == CKA_ENCRYPT ||
          attribute.type == CKA_DECRYPT || attribute.type == CKA_SIGN ||
          attribute.type == CKA_VERIFY || attribute.type == CKA_EXTRACTABLE ||
-         attribute.type == CKA_LOCAL) &&
+         attribute.type == CKA_LOCAL || attribute.type == CKA_ALWAYS_SENSITIVE ||
+         attribute.type == CKA_NEVER_EXTRACTABLE) &&
         attribute.ulValueLen == sizeof(CK_BBOOL))
         return *static_cast<const CK_BBOOL*>(attribute.pValue) == CK_TRUE ? "CK_TRUE" : "CK_FALSE";
     if (attribute.type == CKA_MODULUS_BITS && attribute.ulValueLen == sizeof(CK_ULONG))
@@ -586,15 +595,30 @@ static std::string attributeValue(const CK_ATTRIBUTE& attribute)
     return "hex=" + hexBytes(attribute.pValue, attribute.ulValueLen);
 }
 
+static bool privateKeyMaterial(CK_ATTRIBUTE_TYPE type)
+{
+    return type == CKA_VALUE || type == CKA_PRIVATE_EXPONENT || type == CKA_PRIME_1 ||
+           type == CKA_PRIME_2 || type == CKA_EXPONENT_1 || type == CKA_EXPONENT_2 ||
+           type == CKA_COEFFICIENT;
+}
+
 static void traceTemplate(const std::string& name, const CK_ATTRIBUTE* attributes, CK_ULONG count)
 {
+    bool privateKeyTemplate = false;
+    for (CK_ULONG index = 0; index < count; ++index)
+        if (attributes[index].type == CKA_CLASS && attributes[index].pValue != nullptr &&
+            attributes[index].ulValueLen == sizeof(CK_OBJECT_CLASS) &&
+            *static_cast<const CK_OBJECT_CLASS*>(attributes[index].pValue) == CKO_PRIVATE_KEY)
+            privateKeyTemplate = true;
     trace("TEMPLATE", name + " contains " + std::to_string(count) + " attributes");
     for (CK_ULONG index = 0; index < count; ++index)
     {
         const CK_ATTRIBUTE& attribute = attributes[index];
         trace("TEMPLATE", name + "[" + std::to_string(index) + "] " + attributeName(attribute.type) +
               " (type=" + hexNumber(attribute.type) + ", ulValueLen=" +
-              std::to_string(attribute.ulValueLen) + ") = " + attributeValue(attribute));
+              std::to_string(attribute.ulValueLen) + ") = " +
+              (privateKeyTemplate && privateKeyMaterial(attribute.type) && attribute.pValue != nullptr
+                   ? "<redacted private key material>" : attributeValue(attribute)));
     }
 }
 
@@ -633,7 +657,8 @@ static void requireMechanism(Module& module, CK_SLOT_ID slot, CK_MECHANISM_TYPE 
         fail(std::string(mechanismName(mechanism)) + " maximum key size is below requested size");
 }
 
-static Bytes attribute(Module& module, CK_SESSION_HANDLE session, CK_OBJECT_HANDLE object, CK_ATTRIBUTE_TYPE type)
+static Bytes attribute(Module& module, CK_SESSION_HANDLE session, CK_OBJECT_HANDLE object,
+                       CK_ATTRIBUTE_TYPE type, bool redact = false)
 {
     CK_ATTRIBUTE attr{type, nullptr, 0};
     traceTemplate("attribute length query", &attr, 1);
@@ -649,7 +674,9 @@ static Bytes attribute(Module& module, CK_SESSION_HANDLE session, CK_OBJECT_HAND
            [&] { return module->C_GetAttributeValue(session, object, &attr, 1); });
     value.resize(attr.ulValueLen);
     trace("ATTRIBUTE", std::string(attributeName(type)) + " returned ulValueLen=" +
-                       std::to_string(attr.ulValueLen) + ", hex=" + hexBytes(value.data(), value.size()));
+                       std::to_string(attr.ulValueLen) +
+                       (redact ? ", value=<redacted private key material>"
+                               : ", hex=" + hexBytes(value.data(), value.size())));
     return value;
 }
 
@@ -1314,6 +1341,248 @@ static void verifyGOST2012Signing(Module& module, CK_SESSION_HANDLE session,
     trace("REFERENCE", "independent verifier confirmed C_SignUpdate/C_SignFinal signature");
 }
 
+static CK_OBJECT_HANDLE createObject(Module& module, CK_SESSION_HANDLE session,
+                                     const std::string& name, CK_ATTRIBUTE* attributes,
+                                     CK_ULONG count)
+{
+    traceTemplate(name, attributes, count);
+    CK_OBJECT_HANDLE object = CK_INVALID_HANDLE;
+    callOk("C_CreateObject", "hSession=" + std::to_string(session) +
+           ", pTemplate=" + name + ", ulCount=" + std::to_string(count) +
+           ", phObject=&object",
+           [&] { return module->C_CreateObject(session, attributes, count, &object); });
+    if (object == CK_INVALID_HANDLE) fail("C_CreateObject returned CK_INVALID_HANDLE for " + name);
+    trace("OBJECT", "C_CreateObject created " + name + " handle=" + std::to_string(object));
+    return object;
+}
+
+static void destroyObject(Module& module, CK_SESSION_HANDLE session, CK_OBJECT_HANDLE object)
+{
+    callOk("C_DestroyObject", "hSession=" + std::to_string(session) +
+           ", hObject=" + std::to_string(object),
+           [&] { return module->C_DestroyObject(session, object); });
+}
+
+static void requireBooleanAttribute(Module& module, CK_SESSION_HANDLE session,
+                                    CK_OBJECT_HANDLE object, CK_ATTRIBUTE_TYPE type,
+                                    CK_BBOOL expected)
+{
+    const Bytes value = attribute(module, session, object, type);
+    if (value.size() != sizeof(CK_BBOOL) || value[0] != expected)
+        fail(std::string(attributeName(type)) + " has an unexpected value");
+}
+
+static void verifyGOSTCreateObjectRoundTrip(Module& module, CK_SESSION_HANDLE session)
+{
+    CK_OBJECT_CLASS publicClass = CKO_PUBLIC_KEY;
+    CK_OBJECT_CLASS privateClass = CKO_PRIVATE_KEY;
+    CK_KEY_TYPE keyType = CKK_GOSTR3410;
+    CK_BBOOL yes = CK_TRUE;
+    CK_BBOOL no = CK_FALSE;
+    Bytes curve = bytesFromHex("06072a850302022301");
+    Bytes digestParam = bytesFromHex("06082a85030701010202");
+    const std::string generatedLabel = "portable-ci-exportable-gost";
+    CK_ATTRIBUTE publicTemplate[] = {
+        {CKA_CLASS, &publicClass, sizeof(publicClass)},
+        {CKA_KEY_TYPE, &keyType, sizeof(keyType)},
+        {CKA_TOKEN, &no, sizeof(no)},
+        {CKA_PRIVATE, &no, sizeof(no)},
+        {CKA_VERIFY, &yes, sizeof(yes)},
+        {CKA_GOSTR3410_PARAMS, curve.data(), static_cast<CK_ULONG>(curve.size())},
+        {CKA_GOSTR3411_PARAMS, digestParam.data(), static_cast<CK_ULONG>(digestParam.size())},
+        {CKA_LABEL, const_cast<char*>(generatedLabel.data()), static_cast<CK_ULONG>(generatedLabel.size())}
+    };
+    CK_ATTRIBUTE privateTemplate[] = {
+        {CKA_CLASS, &privateClass, sizeof(privateClass)},
+        {CKA_KEY_TYPE, &keyType, sizeof(keyType)},
+        {CKA_TOKEN, &no, sizeof(no)},
+        {CKA_PRIVATE, &yes, sizeof(yes)},
+        {CKA_SENSITIVE, &no, sizeof(no)},
+        {CKA_SIGN, &yes, sizeof(yes)},
+        {CKA_EXTRACTABLE, &yes, sizeof(yes)},
+        {CKA_GOSTR3410_PARAMS, curve.data(), static_cast<CK_ULONG>(curve.size())},
+        {CKA_GOSTR3411_PARAMS, digestParam.data(), static_cast<CK_ULONG>(digestParam.size())},
+        {CKA_LABEL, const_cast<char*>(generatedLabel.data()), static_cast<CK_ULONG>(generatedLabel.size())}
+    };
+    const CK_ULONG publicCount = sizeof(publicTemplate) / sizeof(publicTemplate[0]);
+    const CK_ULONG privateCount = sizeof(privateTemplate) / sizeof(privateTemplate[0]);
+    traceTemplate("exportable GOST public-key generation template", publicTemplate, publicCount);
+    traceTemplate("exportable GOST private-key generation template", privateTemplate, privateCount);
+    CK_MECHANISM mechanism{CKM_GOSTR3410_KEY_PAIR_GEN, nullptr, 0};
+    CK_OBJECT_HANDLE generatedPublic = CK_INVALID_HANDLE;
+    CK_OBJECT_HANDLE generatedPrivate = CK_INVALID_HANDLE;
+    callOk("C_GenerateKeyPair", "hSession=" + std::to_string(session) +
+           ", pMechanism={mechanism=CKM_GOSTR3410_KEY_PAIR_GEN, pParameter=NULL_PTR, ulParameterLen=0}" +
+           ", pPublicKeyTemplate=exportablePublicTemplate, ulPublicKeyAttributeCount=" +
+           std::to_string(publicCount) + ", pPrivateKeyTemplate=exportablePrivateTemplate" +
+           ", ulPrivateKeyAttributeCount=" + std::to_string(privateCount),
+           [&] { return module->C_GenerateKeyPair(session, &mechanism, publicTemplate, publicCount,
+                                                   privateTemplate, privateCount,
+                                                   &generatedPublic, &generatedPrivate); });
+
+    const Bytes point = attribute(module, session, generatedPublic, CKA_VALUE);
+    const Bytes scalar = attribute(module, session, generatedPrivate, CKA_VALUE, true);
+    if (point.size() != 64 || scalar.size() != 32)
+        fail("exportable GOST key pair has unexpected component sizes");
+
+    const std::string importedLabel = "portable-ci-imported-gost";
+    CK_ATTRIBUTE importedPublicTemplate[] = {
+        {CKA_CLASS, &publicClass, sizeof(publicClass)},
+        {CKA_KEY_TYPE, &keyType, sizeof(keyType)},
+        {CKA_TOKEN, &no, sizeof(no)},
+        {CKA_PRIVATE, &no, sizeof(no)},
+        {CKA_VERIFY, &yes, sizeof(yes)},
+        {CKA_VALUE, const_cast<unsigned char*>(point.data()), static_cast<CK_ULONG>(point.size())},
+        {CKA_GOSTR3410_PARAMS, curve.data(), static_cast<CK_ULONG>(curve.size())},
+        {CKA_GOSTR3411_PARAMS, digestParam.data(), static_cast<CK_ULONG>(digestParam.size())},
+        {CKA_LABEL, const_cast<char*>(importedLabel.data()), static_cast<CK_ULONG>(importedLabel.size())}
+    };
+    CK_ATTRIBUTE importedPrivateTemplate[] = {
+        {CKA_CLASS, &privateClass, sizeof(privateClass)},
+        {CKA_KEY_TYPE, &keyType, sizeof(keyType)},
+        {CKA_TOKEN, &no, sizeof(no)},
+        {CKA_PRIVATE, &yes, sizeof(yes)},
+        {CKA_SENSITIVE, &no, sizeof(no)},
+        {CKA_SIGN, &yes, sizeof(yes)},
+        {CKA_EXTRACTABLE, &yes, sizeof(yes)},
+        {CKA_VALUE, const_cast<unsigned char*>(scalar.data()), static_cast<CK_ULONG>(scalar.size())},
+        {CKA_GOSTR3410_PARAMS, curve.data(), static_cast<CK_ULONG>(curve.size())},
+        {CKA_GOSTR3411_PARAMS, digestParam.data(), static_cast<CK_ULONG>(digestParam.size())},
+        {CKA_LABEL, const_cast<char*>(importedLabel.data()), static_cast<CK_ULONG>(importedLabel.size())}
+    };
+    const CK_ULONG importedPublicCount = sizeof(importedPublicTemplate) / sizeof(importedPublicTemplate[0]);
+    const CK_ULONG importedPrivateCount = sizeof(importedPrivateTemplate) / sizeof(importedPrivateTemplate[0]);
+    const CK_OBJECT_HANDLE importedPublic = createObject(module, session, "imported GOST public-key template",
+                                                          importedPublicTemplate, importedPublicCount);
+    const CK_OBJECT_HANDLE importedPrivate = createObject(module, session, "imported GOST private-key template",
+                                                           importedPrivateTemplate, importedPrivateCount);
+
+    if (attribute(module, session, importedPublic, CKA_VALUE) != point ||
+        attribute(module, session, importedPrivate, CKA_VALUE, true) != scalar ||
+        attribute(module, session, importedPrivate, CKA_GOSTR3410_PARAMS) != curve ||
+        attribute(module, session, importedPrivate, CKA_GOSTR3411_PARAMS) != digestParam)
+        fail("GOST C_CreateObject/C_GetAttributeValue round trip changed key material");
+    requireBooleanAttribute(module, session, importedPrivate, CKA_EXTRACTABLE, CK_TRUE);
+    requireBooleanAttribute(module, session, importedPrivate, CKA_SENSITIVE, CK_FALSE);
+    requireBooleanAttribute(module, session, importedPrivate, CKA_LOCAL, CK_FALSE);
+
+    const Bytes message = bytesFromHex("00112233445566778899aabbccddeeff");
+    const Bytes digestValue = digest(module, session, CKM_GOSTR3411_2012_256, message, 32);
+    const Bytes signature = gostSign(module, session, importedPrivate, CKM_GOSTR3410, digestValue);
+    if (!verifyGOST2012Signature(point, digestValue, signature))
+        fail("imported GOST private key produced a signature that does not match its imported public key");
+
+    destroyObject(module, session, importedPrivate);
+    destroyObject(module, session, importedPublic);
+    destroyObject(module, session, generatedPrivate);
+    destroyObject(module, session, generatedPublic);
+    trace("IMPORT", "GOST exportable generation, C_GetAttributeValue, two-object C_CreateObject import, re-export and signing verified");
+}
+
+static void verifyRSACreateObjectRoundTrip(Module& module, CK_SESSION_HANDLE session)
+{
+    CK_OBJECT_CLASS publicClass = CKO_PUBLIC_KEY;
+    CK_OBJECT_CLASS privateClass = CKO_PRIVATE_KEY;
+    CK_KEY_TYPE keyType = CKK_RSA;
+    CK_BBOOL yes = CK_TRUE;
+    CK_BBOOL no = CK_FALSE;
+    CK_ULONG bits = 2048;
+    CK_BYTE exponent[] = {0x01, 0x00, 0x01};
+    CK_ATTRIBUTE publicTemplate[] = {
+        {CKA_CLASS, &publicClass, sizeof(publicClass)}, {CKA_KEY_TYPE, &keyType, sizeof(keyType)},
+        {CKA_TOKEN, &no, sizeof(no)}, {CKA_PRIVATE, &no, sizeof(no)},
+        {CKA_VERIFY, &yes, sizeof(yes)}, {CKA_MODULUS_BITS, &bits, sizeof(bits)},
+        {CKA_PUBLIC_EXPONENT, exponent, sizeof(exponent)}
+    };
+    CK_ATTRIBUTE privateTemplate[] = {
+        {CKA_CLASS, &privateClass, sizeof(privateClass)}, {CKA_KEY_TYPE, &keyType, sizeof(keyType)},
+        {CKA_TOKEN, &no, sizeof(no)}, {CKA_PRIVATE, &yes, sizeof(yes)},
+        {CKA_SENSITIVE, &no, sizeof(no)}, {CKA_SIGN, &yes, sizeof(yes)},
+        {CKA_EXTRACTABLE, &yes, sizeof(yes)}
+    };
+    const CK_ULONG publicCount = sizeof(publicTemplate) / sizeof(publicTemplate[0]);
+    const CK_ULONG privateCount = sizeof(privateTemplate) / sizeof(privateTemplate[0]);
+    traceTemplate("exportable RSA public-key generation template", publicTemplate, publicCount);
+    traceTemplate("exportable RSA private-key generation template", privateTemplate, privateCount);
+    CK_MECHANISM mechanism{CKM_RSA_PKCS_KEY_PAIR_GEN, nullptr, 0};
+    CK_OBJECT_HANDLE generatedPublic = CK_INVALID_HANDLE;
+    CK_OBJECT_HANDLE generatedPrivate = CK_INVALID_HANDLE;
+    callOk("C_GenerateKeyPair", "hSession=" + std::to_string(session) +
+           ", pMechanism={mechanism=CKM_RSA_PKCS_KEY_PAIR_GEN, pParameter=NULL_PTR, ulParameterLen=0}" +
+           ", pPublicKeyTemplate=exportablePublicTemplate, ulPublicKeyAttributeCount=" +
+           std::to_string(publicCount) + ", pPrivateKeyTemplate=exportablePrivateTemplate" +
+           ", ulPrivateKeyAttributeCount=" + std::to_string(privateCount),
+           [&] { return module->C_GenerateKeyPair(session, &mechanism, publicTemplate, publicCount,
+                                                   privateTemplate, privateCount,
+                                                   &generatedPublic, &generatedPrivate); });
+
+    const Bytes modulus = attribute(module, session, generatedPrivate, CKA_MODULUS);
+    const Bytes publicExponent = attribute(module, session, generatedPrivate, CKA_PUBLIC_EXPONENT);
+    const Bytes privateExponent = attribute(module, session, generatedPrivate, CKA_PRIVATE_EXPONENT, true);
+    const Bytes prime1 = attribute(module, session, generatedPrivate, CKA_PRIME_1, true);
+    const Bytes prime2 = attribute(module, session, generatedPrivate, CKA_PRIME_2, true);
+    const Bytes exponent1 = attribute(module, session, generatedPrivate, CKA_EXPONENT_1, true);
+    const Bytes exponent2 = attribute(module, session, generatedPrivate, CKA_EXPONENT_2, true);
+    const Bytes coefficient = attribute(module, session, generatedPrivate, CKA_COEFFICIENT, true);
+
+    CK_ATTRIBUTE importedPublicTemplate[] = {
+        {CKA_CLASS, &publicClass, sizeof(publicClass)}, {CKA_KEY_TYPE, &keyType, sizeof(keyType)},
+        {CKA_TOKEN, &no, sizeof(no)}, {CKA_PRIVATE, &no, sizeof(no)},
+        {CKA_VERIFY, &yes, sizeof(yes)},
+        {CKA_MODULUS, const_cast<unsigned char*>(modulus.data()), static_cast<CK_ULONG>(modulus.size())},
+        {CKA_PUBLIC_EXPONENT, const_cast<unsigned char*>(publicExponent.data()), static_cast<CK_ULONG>(publicExponent.size())}
+    };
+    CK_ATTRIBUTE importedPrivateTemplate[] = {
+        {CKA_CLASS, &privateClass, sizeof(privateClass)}, {CKA_KEY_TYPE, &keyType, sizeof(keyType)},
+        {CKA_TOKEN, &no, sizeof(no)}, {CKA_PRIVATE, &yes, sizeof(yes)},
+        {CKA_SENSITIVE, &no, sizeof(no)}, {CKA_SIGN, &yes, sizeof(yes)},
+        {CKA_EXTRACTABLE, &yes, sizeof(yes)},
+        {CKA_MODULUS, const_cast<unsigned char*>(modulus.data()), static_cast<CK_ULONG>(modulus.size())},
+        {CKA_PUBLIC_EXPONENT, const_cast<unsigned char*>(publicExponent.data()), static_cast<CK_ULONG>(publicExponent.size())},
+        {CKA_PRIVATE_EXPONENT, const_cast<unsigned char*>(privateExponent.data()), static_cast<CK_ULONG>(privateExponent.size())},
+        {CKA_PRIME_1, const_cast<unsigned char*>(prime1.data()), static_cast<CK_ULONG>(prime1.size())},
+        {CKA_PRIME_2, const_cast<unsigned char*>(prime2.data()), static_cast<CK_ULONG>(prime2.size())},
+        {CKA_EXPONENT_1, const_cast<unsigned char*>(exponent1.data()), static_cast<CK_ULONG>(exponent1.size())},
+        {CKA_EXPONENT_2, const_cast<unsigned char*>(exponent2.data()), static_cast<CK_ULONG>(exponent2.size())},
+        {CKA_COEFFICIENT, const_cast<unsigned char*>(coefficient.data()), static_cast<CK_ULONG>(coefficient.size())}
+    };
+    const CK_ULONG importedPublicCount = sizeof(importedPublicTemplate) / sizeof(importedPublicTemplate[0]);
+    const CK_ULONG importedPrivateCount = sizeof(importedPrivateTemplate) / sizeof(importedPrivateTemplate[0]);
+    const CK_OBJECT_HANDLE importedPublic = createObject(module, session, "imported RSA public-key template",
+                                                          importedPublicTemplate, importedPublicCount);
+    const CK_OBJECT_HANDLE importedPrivate = createObject(module, session, "imported RSA private-key template",
+                                                           importedPrivateTemplate, importedPrivateCount);
+
+    const std::pair<CK_ATTRIBUTE_TYPE, const Bytes*> privateComponents[] = {
+        {CKA_MODULUS, &modulus}, {CKA_PUBLIC_EXPONENT, &publicExponent},
+        {CKA_PRIVATE_EXPONENT, &privateExponent}, {CKA_PRIME_1, &prime1},
+        {CKA_PRIME_2, &prime2}, {CKA_EXPONENT_1, &exponent1},
+        {CKA_EXPONENT_2, &exponent2}, {CKA_COEFFICIENT, &coefficient}
+    };
+    for (const auto& component : privateComponents)
+        if (attribute(module, session, importedPrivate, component.first,
+                      privateKeyMaterial(component.first)) != *component.second)
+            fail(std::string("RSA C_CreateObject/C_GetAttributeValue changed ") + attributeName(component.first));
+    if (attribute(module, session, importedPublic, CKA_MODULUS) != modulus ||
+        attribute(module, session, importedPublic, CKA_PUBLIC_EXPONENT) != publicExponent)
+        fail("RSA public-key C_CreateObject/C_GetAttributeValue round trip changed key material");
+    requireBooleanAttribute(module, session, importedPrivate, CKA_EXTRACTABLE, CK_TRUE);
+    requireBooleanAttribute(module, session, importedPrivate, CKA_SENSITIVE, CK_FALSE);
+    requireBooleanAttribute(module, session, importedPrivate, CKA_LOCAL, CK_FALSE);
+    requireBooleanAttribute(module, session, importedPrivate, CKA_ALWAYS_SENSITIVE, CK_FALSE);
+    requireBooleanAttribute(module, session, importedPrivate, CKA_NEVER_EXTRACTABLE, CK_FALSE);
+
+    const Bytes message = bytesFromHex("52534120696d706f72742f6578706f727420726f756e642074726970");
+    if (sign(module, session, generatedPrivate, message) != sign(module, session, importedPrivate, message))
+        fail("imported RSA private key does not reproduce the generated key's deterministic signature");
+
+    destroyObject(module, session, importedPrivate);
+    destroyObject(module, session, importedPublic);
+    destroyObject(module, session, generatedPrivate);
+    destroyObject(module, session, generatedPublic);
+    trace("IMPORT", "RSA exportable generation, eight-component C_GetAttributeValue, two-object C_CreateObject import, re-export and signing verified");
+}
+
 struct Tlv
 {
     unsigned char tag;
@@ -1539,6 +1808,8 @@ static void prepare(const fs::path& modulePath, const fs::path& work)
     verifyStreebog256(module, session);
     const GOST2012KeyPair gostKeyPair = verifyGOST2012KeyGeneration(module, session, objectId);
     verifyGOST2012Signing(module, session, gostKeyPair);
+    verifyGOSTCreateObjectRoundTrip(module, session);
+    verifyRSACreateObjectRoundTrip(module, session);
 
     CK_OBJECT_CLASS publicClass = CKO_PUBLIC_KEY;
     CK_OBJECT_CLASS privateClass = CKO_PRIVATE_KEY;
@@ -1588,6 +1859,16 @@ static void prepare(const fs::path& modulePath, const fs::path& work)
                             &publicKey, &privateKey); });
     trace("OBJECT", "generated publicKey handle=" + std::to_string(publicKey) +
                     ", privateKey handle=" + std::to_string(privateKey));
+
+    CK_ATTRIBUTE privateExponent{CKA_PRIVATE_EXPONENT, nullptr, 0};
+    check(invoke("C_GetAttributeValue", "hSession=" + std::to_string(session) +
+                 ", hObject=" + std::to_string(privateKey) +
+                 ", pTemplate={CKA_PRIVATE_EXPONENT,NULL_PTR,0}, ulCount=1",
+                 [&] { return module->C_GetAttributeValue(session, privateKey, &privateExponent, 1); }),
+          CKR_ATTRIBUTE_SENSITIVE, "C_GetAttributeValue(non-extractable RSA CKA_PRIVATE_EXPONENT)");
+    if (privateExponent.ulValueLen != CK_UNAVAILABLE_INFORMATION)
+        fail("non-extractable RSA private exponent did not return CK_UNAVAILABLE_INFORMATION");
+    trace("SECURITY", "non-extractable RSA private components remain unavailable through C_GetAttributeValue");
 
     writePem(work / "request.pem", "CERTIFICATE REQUEST", buildCsr(module, session, publicKey, privateKey));
     trace("FILESYSTEM", "wrote PKCS#10 CSR: " + (work / "request.pem").string());

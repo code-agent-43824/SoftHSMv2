@@ -6,7 +6,7 @@ on:
       release_tag:
         description: Release tag to create or update
         required: true
-        default: v2.7.0-portable.7
+        default: v2.7.0-portable.8
 
 permissions:
   contents: read
@@ -231,5 +231,5 @@ jobs:
             gh release create "$RELEASE_TAG" release-assets/* \
               --target "$GITHUB_SHA" \
               --title "SoftHSM portable $RELEASE_TAG" \
-              --notes "Portable, installer-free PKCS #11 modules for Linux, Windows, and macOS. This release adds minimal GOST R 34.10-2012/256 signing: raw 32-byte-digest CKM_GOSTR3410 and the TC26 CKM_GOSTR3410_WITH_GOSTR3411_2012_256 mechanism in one-shot and multipart C_Sign operations. Key generation and Streebog-256 remain supported, backed by a minimized static Botan build; GOST verification, key agreement, and CMS remain disabled. Every package is built on one runner, uploaded, then downloaded and tested on a separate fresh runner. The direct PKCS #11 C++ test generates a GOST key pair, signs raw and internally hashed data, and independently checks every signature with the GOST verification equation, while retaining the RSA/CSR/certificate/CMS and RFC 6986 checks."
+              --notes "Portable, installer-free PKCS #11 modules for Linux, Windows, and macOS. This release adds tested RSA and GOST R 34.10-2012/256 key import as separate public/private objects through standard C_CreateObject calls, plus private-component export through C_GetAttributeValue when CKA_SENSITIVE is false and CKA_EXTRACTABLE is true. Sensitive or non-extractable private material remains unavailable. Every package is built on one runner, uploaded, then downloaded and tested on a separate fresh runner. The direct PKCS #11 C++ test now performs complete generated-key export, import, re-export, component comparison, and signing round trips for RSA and GOST, while retaining GOST key generation/signing, RSA/CSR/certificate/CMS, and RFC 6986 checks."
           fi

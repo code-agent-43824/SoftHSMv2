@@ -8,7 +8,8 @@ It has no SoftHSM, Botan, or OpenSSL link dependency.
 
 Every PKCS #11 call logs its input parameters, mechanism, templates, returned
 `CK_RV`, output lengths, object/session handles, and public output bytes. PIN
-values are always redacted; only their byte lengths are logged. The shell and
+values and imported/exported private key components are always redacted; their
+attribute types and byte lengths remain in the trace. The shell and
 PowerShell launchers likewise log every compiler, test-client, OpenSSL, and
 content-comparison command.
 
@@ -27,6 +28,9 @@ requires these standard capabilities from the selected token:
 - `CKM_GOSTR3410_KEY_PAIR_GEN` with 256-bit GOST keys;
 - raw `CKM_GOSTR3410` and combined TC26
   `CKM_GOSTR3410_WITH_GOSTR3411_2012_256` signing;
+- RSA and GOST public/private key import with two standard `C_CreateObject`
+  calls, and private-component export through `C_GetAttributeValue` when
+  `CKA_SENSITIVE=CK_FALSE` and `CKA_EXTRACTABLE=CK_TRUE`;
 - persistent RSA key and X.509 certificate objects.
 
 The runner queries and logs `C_GetMechanismInfo` before using each capability.
@@ -38,6 +42,18 @@ The GOST scenario generates a persistent 2012/256 key pair, signs a
 precomputed Streebog-256 digest, signs and hashes the same message in one-shot
 and multipart forms, and checks all three randomized signatures with a small
 independent implementation of the GOST verification equation in the C++ test.
+It also generates exportable RSA and GOST pairs, reads every private component,
+imports each pair as separate public and private objects with `C_CreateObject`,
+reads the imported values back, and proves the imported private keys by signing.
+Negative checks confirm that private components of the normal non-extractable
+RSA and GOST keys return `CKR_ATTRIBUTE_SENSITIVE` and
+`CK_UNAVAILABLE_INFORMATION`.
+
+PKCS #11 has no single "create key pair" object call: `C_CreateObject` imports
+the public and private objects separately. The standard exportability control
+is `CKA_EXTRACTABLE`; private values are revealable only when the key is also
+non-sensitive (`CKA_SENSITIVE=CK_FALSE`). Public-key material is public and is
+readable independently of the private key's extraction policy.
 
 Rutoken's published matrices list all functions used here, plus
 `CKM_RSA_PKCS_KEY_PAIR_GEN`, `CKM_SHA256_RSA_PKCS`, and `CKM_SHA256`, for
