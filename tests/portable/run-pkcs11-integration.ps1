@@ -68,7 +68,7 @@ if ($env:P11_TEST_CLIENT) {
 Push-Location ([IO.Path]::GetTempPath())
 try {
     Invoke-Native $Tester @("prepare", $Module, $ScenarioDir) `
-        "PKCS #11 prepare phase: select token, optionally initialize it, log in, generate RSA-2048, create CSR"
+        "PKCS #11 prepare phase: select token, optionally initialize it, run isolated GOST checks, then generate RSA-2048 and create CSR"
 } finally { Pop-Location }
 
 Invoke-Native $OpenSSL @("req", "-in", (Join-Path $ScenarioDir "request.pem"), "-verify", "-noout") `

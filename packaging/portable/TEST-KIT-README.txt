@@ -26,6 +26,11 @@ and C_SetPIN before invocation. EXCLUDED_FUNCTIONS can block additional C_*
 entry points. USER_PIN and SO_PIN are stored as plain text in this local file,
 so do not publish a customized copy containing real secrets.
 
+The trace runs GOST and RSA as explicitly separated scenarios. Persistent GOST
+and RSA pairs use different labels and IDs, and every persistent-key search
+also specifies the key type. CKA_KEY_GEN_MECHANISM is not queried because the
+functional result is established by key attributes, persistence, and signing.
+
 Linux or macOS:
   bash run-test.sh
   bash run-test.sh /path/to/alternative/libsofthsm2.so

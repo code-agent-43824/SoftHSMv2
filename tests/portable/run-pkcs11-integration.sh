@@ -62,7 +62,7 @@ else
   fi
 fi
 
-log "PKCS #11 prepare phase: select token, optionally initialize it, log in, generate RSA-2048, create CSR"
+log "PKCS #11 prepare phase: select token, optionally initialize it, run isolated GOST checks, then generate RSA-2048 and create CSR"
 (cd /tmp && run "$tester" prepare "$module" "$scenario_dir")
 
 log "independently verify the token-signed PKCS#10 request"

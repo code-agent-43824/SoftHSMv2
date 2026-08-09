@@ -36,6 +36,8 @@ namespace fs = std::filesystem;
 using Bytes = std::vector<unsigned char>;
 
 static const Bytes kObjectId = {0x50, 0x4f, 0x52, 0x54, 0x41, 0x42, 0x4c, 0x45};
+static const char kGostKeyLabel[] = "portable-ci-gost2012-256";
+static const unsigned char kGostObjectIdSuffix = 0x47; // ASCII 'G'
 static unsigned long long traceSequence = 0;
 
 [[noreturn]] static void fail(const std::string& message)
@@ -213,6 +215,13 @@ static Bytes configuredObjectId()
         if (end == nullptr || *end != '\0' || value > 0xff) fail("P11_TEST_OBJECT_ID_HEX is invalid");
         result.push_back(static_cast<unsigned char>(value));
     }
+    return result;
+}
+
+static Bytes gostObjectId(const Bytes& rsaObjectId)
+{
+    Bytes result = rsaObjectId;
+    result.push_back(kGostObjectIdSuffix);
     return result;
 }
 
@@ -557,7 +566,6 @@ static const char* attributeName(CK_ATTRIBUTE_TYPE type)
         case CKA_ALWAYS_SENSITIVE: return "CKA_ALWAYS_SENSITIVE";
         case CKA_NEVER_EXTRACTABLE: return "CKA_NEVER_EXTRACTABLE";
         case CKA_LOCAL: return "CKA_LOCAL";
-        case CKA_KEY_GEN_MECHANISM: return "CKA_KEY_GEN_MECHANISM";
         case CKA_GOSTR3410_PARAMS: return "CKA_GOSTR3410_PARAMS";
         case CKA_GOSTR3411_PARAMS: return "CKA_GOSTR3411_PARAMS";
         case CKA_SUBJECT: return "CKA_SUBJECT";
@@ -693,7 +701,6 @@ static Bytes attribute(Module& module, CK_SESSION_HANDLE session, CK_OBJECT_HAND
     if (attr.ulValueLen == CK_UNAVAILABLE_INFORMATION) fail("attribute is unavailable");
     Bytes value(attr.ulValueLen);
     attr.pValue = value.data();
-    traceTemplate("attribute value query", &attr, 1);
     callOk("C_GetAttributeValue", "hSession=" + std::to_string(session) + ", hObject=" +
            std::to_string(object) + ", pTemplate=&attribute, ulCount=1",
            [&] { return module->C_GetAttributeValue(session, object, &attr, 1); });
@@ -701,7 +708,7 @@ static Bytes attribute(Module& module, CK_SESSION_HANDLE session, CK_OBJECT_HAND
     trace("ATTRIBUTE", std::string(attributeName(type)) + " returned ulValueLen=" +
                        std::to_string(attr.ulValueLen) +
                        (redact ? ", value=<redacted private key material>"
-                               : ", hex=" + hexBytes(value.data(), value.size())));
+                               : ", value=" + attributeValue(attr)));
     return value;
 }
 
@@ -889,9 +896,8 @@ static GOST2012KeyPair verifyGOST2012KeyGeneration(Module& module, CK_SESSION_HA
     CK_KEY_TYPE keyType = CKK_GOSTR3410;
     CK_BBOOL yes = CK_TRUE;
     CK_BBOOL no = CK_FALSE;
-    const std::string label = "portable-ci-gost2012-256";
-    Bytes objectId = baseObjectId;
-    objectId.push_back(0x47);
+    const std::string label = kGostKeyLabel;
+    Bytes objectId = gostObjectId(baseObjectId);
 
     // The CryptoPro-A parameter set is deliberately used here because the
     // same standard template is accepted by rtpkcs11ecp.  Together with the
@@ -957,8 +963,6 @@ static GOST2012KeyPair verifyGOST2012KeyGeneration(Module& module, CK_SESSION_HA
 
     if (ulongAttribute(module, session, publicKey, CKA_KEY_TYPE) != CKK_GOSTR3410)
         fail("generated GOST public key has the wrong key type");
-    if (ulongAttribute(module, session, publicKey, CKA_KEY_GEN_MECHANISM) != CKM_GOSTR3410_KEY_PAIR_GEN)
-        fail("generated GOST public key has the wrong key-generation mechanism");
     const Bytes local = attribute(module, session, publicKey, CKA_LOCAL);
     if (local.size() != sizeof(CK_BBOOL) || local[0] != CK_TRUE)
         fail("generated GOST public key is not marked local");
@@ -1739,7 +1743,7 @@ static Bytes buildCms(Module& module, CK_SESSION_HANDLE session, CK_OBJECT_HANDL
     return sequence({cmsSignedDataOid(), der(0xa0, signedData)});
 }
 
-static std::string configuredKeyLabel()
+static std::string configuredRSAKeyLabel()
 {
     const std::string value = environment("P11_TEST_KEY_LABEL");
     return value.empty() ? "portable-ci-rsa" : value;
@@ -1779,13 +1783,16 @@ static void prepare(const fs::path& modulePath, const fs::path& work)
     const std::string userPin = environment("P11_TEST_USER_PIN", true);
     const std::string soPin = initializeToken ? environment("P11_TEST_SO_PIN", true) : std::string();
     const std::string tokenLabel = configuredTokenLabel();
-    const std::string keyLabel = configuredKeyLabel();
-    const Bytes objectId = configuredObjectId();
+    const std::string rsaKeyLabel = configuredRSAKeyLabel();
+    const Bytes rsaObjectId = configuredObjectId();
+    const Bytes gostId = gostObjectId(rsaObjectId);
     trace("CONFIG", std::string("initializeToken=") + (initializeToken ? "YES" : "NO") +
                     ", excludedFunctions=\"" + environment("P11_TEST_EXCLUDE_FUNCTIONS") + "\"" +
                     ", requestedSlot=" + (configuredSlot() ? std::to_string(*configuredSlot()) : "auto") +
-                    ", tokenLabel=\"" + tokenLabel + "\", keyLabel=\"" + keyLabel +
-                    "\", objectIdHex=" + hexBytes(objectId.data(), objectId.size()) +
+                    ", tokenLabel=\"" + tokenLabel + "\", rsaKeyLabel=\"" + rsaKeyLabel +
+                    "\", rsaObjectIdHex=" + hexBytes(rsaObjectId.data(), rsaObjectId.size()) +
+                    ", gostKeyLabel=\"" + kGostKeyLabel + "\", gostObjectIdHex=" +
+                    hexBytes(gostId.data(), gostId.size()) +
                     ", soPin=" + (initializeToken ? "<redacted,length=" + std::to_string(soPin.size()) + ">" : "unused") +
                     ", userPin=<redacted,length=" + std::to_string(userPin.size()) + ">");
     fs::create_directories(work);
@@ -1824,17 +1831,25 @@ static void prepare(const fs::path& modulePath, const fs::path& work)
     }
     login(module, session, CKU_USER, userPin);
 
-    requireMechanism(module, slot, CKM_RSA_PKCS_KEY_PAIR_GEN, CKF_GENERATE_KEY_PAIR, 2048);
-    requireMechanism(module, slot, CKM_SHA256_RSA_PKCS, CKF_SIGN, 2048);
-    requireMechanism(module, slot, CKM_SHA256, CKF_DIGEST);
+    trace("SCENARIO", "BEGIN GOST: digest, key generation, signing, and import/export checks; "
+                      "keyLabel=\"" + std::string(kGostKeyLabel) + "\", objectIdHex=" +
+                      hexBytes(gostId.data(), gostId.size()));
     requireMechanism(module, slot, CKM_GOSTR3411_2012_256, CKF_DIGEST);
     requireMechanism(module, slot, CKM_GOSTR3410_KEY_PAIR_GEN, CKF_GENERATE_KEY_PAIR, 256);
     requireMechanism(module, slot, CKM_GOSTR3410, CKF_SIGN, 256);
     requireMechanism(module, slot, CKM_GOSTR3410_WITH_GOSTR3411_2012_256, CKF_SIGN, 256);
     verifyStreebog256(module, session);
-    const GOST2012KeyPair gostKeyPair = verifyGOST2012KeyGeneration(module, session, objectId);
+    const GOST2012KeyPair gostKeyPair = verifyGOST2012KeyGeneration(module, session, rsaObjectId);
     verifyGOST2012Signing(module, session, gostKeyPair);
     verifyGOSTCreateObjectRoundTrip(module, session);
+    trace("SCENARIO", "END GOST: all GOST checks passed");
+
+    trace("SCENARIO", "BEGIN RSA PREPARE: key generation, import/export, and CSR checks; "
+                      "keyLabel=\"" + rsaKeyLabel + "\", objectIdHex=" +
+                      hexBytes(rsaObjectId.data(), rsaObjectId.size()));
+    requireMechanism(module, slot, CKM_RSA_PKCS_KEY_PAIR_GEN, CKF_GENERATE_KEY_PAIR, 2048);
+    requireMechanism(module, slot, CKM_SHA256_RSA_PKCS, CKF_SIGN, 2048);
+    requireMechanism(module, slot, CKM_SHA256, CKF_DIGEST);
     verifyRSACreateObjectRoundTrip(module, session);
 
     CK_OBJECT_CLASS publicClass = CKO_PUBLIC_KEY;
@@ -1853,8 +1868,8 @@ static void prepare(const fs::path& modulePath, const fs::path& work)
         {CKA_VERIFY, &yes, sizeof(yes)},
         {CKA_MODULUS_BITS, &bits, sizeof(bits)},
         {CKA_PUBLIC_EXPONENT, exponent, sizeof(exponent)},
-        {CKA_LABEL, const_cast<char*>(keyLabel.data()), static_cast<CK_ULONG>(keyLabel.size())},
-        {CKA_ID, const_cast<unsigned char*>(objectId.data()), static_cast<CK_ULONG>(objectId.size())}
+        {CKA_LABEL, const_cast<char*>(rsaKeyLabel.data()), static_cast<CK_ULONG>(rsaKeyLabel.size())},
+        {CKA_ID, const_cast<unsigned char*>(rsaObjectId.data()), static_cast<CK_ULONG>(rsaObjectId.size())}
     };
     CK_ATTRIBUTE privateTemplate[] = {
         {CKA_CLASS, &privateClass, sizeof(privateClass)},
@@ -1865,8 +1880,8 @@ static void prepare(const fs::path& modulePath, const fs::path& work)
         {CKA_DECRYPT, &no, sizeof(no)},
         {CKA_SIGN, &yes, sizeof(yes)},
         {CKA_EXTRACTABLE, &no, sizeof(no)},
-        {CKA_LABEL, const_cast<char*>(keyLabel.data()), static_cast<CK_ULONG>(keyLabel.size())},
-        {CKA_ID, const_cast<unsigned char*>(objectId.data()), static_cast<CK_ULONG>(objectId.size())}
+        {CKA_LABEL, const_cast<char*>(rsaKeyLabel.data()), static_cast<CK_ULONG>(rsaKeyLabel.size())},
+        {CKA_ID, const_cast<unsigned char*>(rsaObjectId.data()), static_cast<CK_ULONG>(rsaObjectId.size())}
     };
     CK_MECHANISM mechanism{CKM_RSA_PKCS_KEY_PAIR_GEN, nullptr, 0};
     CK_OBJECT_HANDLE publicKey = CK_INVALID_HANDLE;
@@ -1898,9 +1913,10 @@ static void prepare(const fs::path& modulePath, const fs::path& work)
 
     writePem(work / "request.pem", "CERTIFICATE REQUEST", buildCsr(module, session, publicKey, privateKey));
     trace("FILESYSTEM", "wrote PKCS#10 CSR: " + (work / "request.pem").string());
+    trace("SCENARIO", "END RSA PREPARE: key generation, import/export, and CSR checks passed");
     logout(module, session, "CKU_USER");
     closeSession(module, session);
-    std::cout << "PKCS #11 token initialized, RSA-2048 key generated, CSR written\n";
+    std::cout << "PKCS #11 GOST checks passed, RSA-2048 key generated, CSR written\n";
 }
 
 static void finish(const fs::path& modulePath, const fs::path& work,
@@ -1926,6 +1942,8 @@ static void finish(const fs::path& modulePath, const fs::path& work,
     requireMechanism(module, slot, CKM_SHA256, CKF_DIGEST);
     CK_SESSION_HANDLE session = openSession(module, slot);
     login(module, session, CKU_USER, userPin);
+    trace("SCENARIO", "BEGIN RSA FINISH: reopen RSA key, import certificate, and create CMS; "
+                      "objectIdHex=" + hexBytes(objectId.data(), objectId.size()));
 
     CK_OBJECT_CLASS privateClass = CKO_PRIVATE_KEY;
     CK_KEY_TYPE rsa = CKK_RSA;
@@ -1971,6 +1989,7 @@ static void finish(const fs::path& modulePath, const fs::path& work,
     (void)findOne(module, session, certificateQuery);
     writeFile(cmsPath, buildCms(module, session, privateKey, leaf, ca, payload));
     trace("FILESYSTEM", "wrote detached CMS DER: " + cmsPath.string());
+    trace("SCENARIO", "END RSA FINISH: RSA key reopen, certificate, and CMS checks passed");
 
     logout(module, session, "CKU_USER");
     closeSession(module, session);

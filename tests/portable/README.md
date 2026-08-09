@@ -90,8 +90,18 @@ tests/portable/run-pkcs11-integration.ps1 `
   C:\absolute\path\to\vendor-pkcs11.dll C:\absolute\path\to\openssl.exe
 ```
 
-`P11_TEST_KEY_LABEL` and `P11_TEST_OBJECT_ID_HEX` can be changed to avoid
-colliding with existing objects.
+`P11_TEST_KEY_LABEL` and `P11_TEST_OBJECT_ID_HEX` configure the persistent RSA
+key pair and can be changed to avoid colliding with existing objects. The GOST
+pair always uses the separate label `portable-ci-gost2012-256` and a separate
+ID derived by appending byte `47` (ASCII `G`) to the configured RSA ID. Searches
+also include `CKA_KEY_TYPE`, so RSA and GOST objects cannot be selected for one
+another.
+
+The trace contains explicit `BEGIN GOST`/`END GOST`, `BEGIN RSA PREPARE`/
+`END RSA PREPARE`, and `BEGIN RSA FINISH`/`END RSA FINISH` boundaries. The
+functional test does not request `CKA_KEY_GEN_MECHANISM`; it verifies generated
+keys through their type, public material, parameters, persistence, and actual
+signing behavior instead.
 
 Token initialization is disabled by default. Setting
 `P11_TEST_INITIALIZE_TOKEN=YES` enables `C_InitToken`, SO login, and

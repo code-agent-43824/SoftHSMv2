@@ -78,11 +78,12 @@ Each platform archive is produced and uploaded by a build job. A separate,
 fresh runner of the same architecture then downloads the archive and tests it
 as an external consumer. The dependency-light client in
 `tests/portable/portable-token-e2e.cpp` loads the packaged module directly and
-uses only PKCS #11 calls to initialise a token, log in, generate persistent
-RSA-2048 keys, create a PKCS#10 request, import the issued certificate, and
-produce detached CMS. Shell and PowerShell launchers use the OpenSSL command
-line as the independent CSR, CA, certificate, and CMS verifier. The release
-job runs only after all five fresh-runner verification jobs have passed.
+uses only PKCS #11 calls to run separate GOST digest/key/signing checks and RSA
+key/import/export/CSR/CMS checks. The two key families use distinct labels and
+IDs, key-type-qualified searches, and explicit trace boundaries. Shell and
+PowerShell launchers use the OpenSSL command line as the independent RSA CSR,
+CA, certificate, and CMS verifier. The release job runs only after all five
+fresh-runner verification jobs have passed.
 
 Each release also provides a self-contained test-kit ZIP per platform. Extract
 it and run `run-test.cmd` or `bash run-test.sh` with no arguments; the bundled

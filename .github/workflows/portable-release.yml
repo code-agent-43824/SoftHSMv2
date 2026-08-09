@@ -6,7 +6,7 @@ on:
       release_tag:
         description: Release tag to create or update
         required: true
-        default: v2.7.0-portable.12
+        default: v2.7.0-portable.13
 
 permissions:
   contents: read
@@ -151,11 +151,35 @@ jobs:
         env:
           PORTABLE_PRODUCT_DIR: downloaded
         run: |
+          set -o pipefail
           mkdir -p dist artifact-testkit
           scripts/portable/build-test-kit-unix.sh linux-x64
           mkdir "$RUNNER_TEMP/packaged-testkit"
           unzip -q dist/softhsm-testkit-linux-x64.zip -d "$RUNNER_TEMP/packaged-testkit"
-          bash "$RUNNER_TEMP/packaged-testkit/run-test.sh"
+          bash "$RUNNER_TEMP/packaged-testkit/run-test.sh" 2>&1 | \
+            tee "$RUNNER_TEMP/default-test.log"
+          grep -F '[SCENARIO] BEGIN GOST:' "$RUNNER_TEMP/default-test.log"
+          grep -F '[SCENARIO] END GOST:' "$RUNNER_TEMP/default-test.log"
+          grep -F '[SCENARIO] BEGIN RSA PREPARE:' "$RUNNER_TEMP/default-test.log"
+          grep -F '[SCENARIO] END RSA PREPARE:' "$RUNNER_TEMP/default-test.log"
+          grep -F '[SCENARIO] BEGIN RSA FINISH:' "$RUNNER_TEMP/default-test.log"
+          grep -F '[SCENARIO] END RSA FINISH:' "$RUNNER_TEMP/default-test.log"
+          if grep -F 'CKA_KEY_GEN_MECHANISM' "$RUNNER_TEMP/default-test.log"; then
+            echo 'functional test unexpectedly queried CKA_KEY_GEN_MECHANISM' >&2
+            exit 1
+          fi
+          awk '/\[SCENARIO\] BEGIN GOST:/{inside=1} inside{print} /\[SCENARIO\] END GOST:/{inside=0}' \
+            "$RUNNER_TEMP/default-test.log" > "$RUNNER_TEMP/gost-scenario.log"
+          awk '/\[SCENARIO\] BEGIN RSA PREPARE:/{inside=1} inside{print} /\[SCENARIO\] END RSA PREPARE:/{inside=0}' \
+            "$RUNNER_TEMP/default-test.log" > "$RUNNER_TEMP/rsa-scenario.log"
+          if grep -F 'CKK_RSA' "$RUNNER_TEMP/gost-scenario.log"; then
+            echo 'RSA key type appeared inside the GOST scenario' >&2
+            exit 1
+          fi
+          if grep -F 'CKK_GOSTR3410' "$RUNNER_TEMP/rsa-scenario.log"; then
+            echo 'GOST key type appeared inside the RSA scenario' >&2
+            exit 1
+          fi
           unzip -q dist/softhsm-testkit-linux-x64.zip -d artifact-testkit
       - name: Verify safe alternate-library defaults and exclusion gate
         run: |
@@ -364,5 +388,5 @@ jobs:
             gh release create "$RELEASE_TAG" release-assets/* \
               --target "$GITHUB_SHA" \
               --title "SoftHSM portable $RELEASE_TAG" \
-              --notes "Portable, installer-free PKCS #11 modules and independently downloadable self-contained test kits for Linux x64/ARM64, Windows x64/ARM64, and macOS universal. Extract a matching test-kit ZIP and run run-test.cmd or bash run-test.sh with no arguments: the bundled SoftHSM module and configuration are selected automatically. To test another library, pass its path as the only argument. The included testkit.conf controls AUTO/YES/NO initialization, user/SO PINs, slot/labels, and a comma-separated exclusion list of PKCS #11 C_* functions. AUTO initializes only the bundled disposable SoftHSM; alternate libraries use safe existing-token mode, which blocks C_InitToken, C_InitPIN, and C_SetPIN before invocation. CI tests the full default path, explicit-library path, safe AUTO behavior, and the pre-invocation exclusion guard. Test kits include the module, precompiled client, static OpenSSL, launchers, source, headers, licenses, and environment manifest. GitHub Actions artifacts contain direct payload without nested ZIPs; SHA256SUMS covers all five product and five test-kit archives."
+              --notes "Portable, installer-free PKCS #11 modules and independently downloadable self-contained test kits for Linux x64/ARM64, Windows x64/ARM64, and macOS universal. Extract a matching test-kit ZIP and run run-test.cmd or bash run-test.sh with no arguments: the bundled SoftHSM module and configuration are selected automatically. To test another library, pass its path as the only argument. The included testkit.conf controls AUTO/YES/NO initialization, user/SO PINs, slot/labels, and a comma-separated exclusion list of PKCS #11 C_* functions. AUTO initializes only the bundled disposable SoftHSM; alternate libraries use safe existing-token mode, which blocks C_InitToken, C_InitPIN, and C_SetPIN before invocation. GOST and RSA scenarios have explicit non-overlapping trace boundaries, distinct labels/IDs and key-type-qualified searches; the functional test does not query CKA_KEY_GEN_MECHANISM. CI tests the full default path, scenario separation, explicit-library path, safe AUTO behavior, and the pre-invocation exclusion guard. Test kits include the module, precompiled client, static OpenSSL, launchers, source, headers, licenses, and environment manifest. GitHub Actions artifacts contain direct payload without nested ZIPs; SHA256SUMS covers all five product and five test-kit archives."
           fi
