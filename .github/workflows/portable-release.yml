@@ -318,7 +318,7 @@ jobs:
         run: |
           test "$(find release-assets -maxdepth 1 -type f -name '*.zip' | wc -l)" -eq 10
           for archive in release-assets/*.zip; do
-            if unzip -Z1 "$archive" | grep -Eq '\.zip$'; then
+            if zipinfo -1 "$archive" | grep -Eq '\.zip$'; then
               echo "nested ZIP found in $archive" >&2
               exit 1
             fi
