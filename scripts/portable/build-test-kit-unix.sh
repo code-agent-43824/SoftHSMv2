@@ -7,6 +7,7 @@ if [[ $# -ne 1 ]]; then
 fi
 : "${OPENSSL_VERSION:?OPENSSL_VERSION is required}"
 : "${OPENSSL_SHA256:?OPENSSL_SHA256 is required}"
+: "${PORTABLE_PRODUCT_DIR:?PORTABLE_PRODUCT_DIR is required}"
 
 platform=$1
 case "$platform" in
@@ -17,6 +18,7 @@ case "$platform" in
 esac
 
 root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+product_dir=$(cd "$PORTABLE_PRODUCT_DIR" && pwd)
 work_dir="${RUNNER_TEMP:-$root_dir/.portable-work}/testkit-$platform"
 archive="$work_dir/openssl.tar.gz"
 source_dir="$work_dir/openssl-$OPENSSL_VERSION"
@@ -84,6 +86,19 @@ cp "$root_dir/src/lib/pkcs11/"*.h "$stage_dir/src/pkcs11/"
 cp "$root_dir/packaging/portable/TEST-KIT-README.txt" "$stage_dir/README.txt"
 cp "$root_dir/LICENSE" "$stage_dir/LICENSE-TestClient.txt"
 cp "$source_dir/LICENSE.txt" "$stage_dir/LICENSE-OpenSSL.txt"
+for required in "$module_name" softhsm.conf LICENSE-SoftHSM.txt LICENSE-Botan.txt; do
+  if [[ ! -f "$product_dir/$required" ]]; then
+    echo "required product file is missing: $product_dir/$required" >&2
+    exit 1
+  fi
+done
+cp "$product_dir/$module_name" "$stage_dir/$module_name"
+cp "$product_dir/softhsm.conf" "$stage_dir/softhsm.conf"
+cp "$product_dir/LICENSE-SoftHSM.txt" "$stage_dir/LICENSE-SoftHSM.txt"
+cp "$product_dir/LICENSE-Botan.txt" "$stage_dir/LICENSE-Botan.txt"
+if [[ -f "$product_dir/README.txt" ]]; then
+  cp "$product_dir/README.txt" "$stage_dir/PRODUCT-README.txt"
+fi
 printf 'PLATFORM=%s\nMODULE_NAME=%s\nOPENSSL_VERSION=%s\n' \
   "$platform" "$module_name" "$OPENSSL_VERSION" > "$stage_dir/testkit.env"
 {

@@ -115,46 +115,43 @@ product platform:
 - `softhsm-testkit-windows-arm64.zip`;
 - `softhsm-testkit-macos-universal.zip`.
 
-Each verification job builds its kit on a fresh runner, extracts the resulting
-ZIP, and executes that exact packaged environment against the separately
-downloaded product artifact. Only a successful kit is uploaded to Actions and
-made eligible for the release aggregation job.
+Each verification job downloads the separately built product artifact, bundles
+its module and configuration into the kit, extracts the resulting ZIP, and
+executes that exact packaged environment. Only a successful kit is uploaded to
+Actions and made eligible for the release aggregation job.
 
-The kit includes the precompiled C++ client, a pinned statically linked OpenSSL
-CLI, all runtime launchers, the test source and PKCS #11 headers, licenses, and
-`ENVIRONMENT.txt` with the runner and tool versions. No compiler, SDK, Java,
-Botan, or separately installed OpenSSL is needed to run it. Normal platform
-system libraries remain required.
+The kit includes the matching portable SoftHSM module and configuration, the
+precompiled C++ client, a pinned statically linked OpenSSL CLI, all runtime
+launchers, the test source and PKCS #11 headers, licenses, and `ENVIRONMENT.txt`
+with the runner and tool versions. No compiler, SDK, Java, Botan, or separately
+installed OpenSSL is needed to run it. Normal platform system libraries remain
+required.
 
 The downloadable GitHub Actions artifacts contain their files directly; there
 is no ZIP nested inside the artifact ZIP. Release assets remain ordinary ZIPs.
 
-After downloading the matching product and test-kit ZIPs, extract the test kit
-and pass either the still-zipped product package or its extracted directory:
+After downloading a matching test-kit ZIP, extract it and run the launcher with
+no arguments. It automatically selects the bundled SoftHSM library:
 
 ```sh
 unzip softhsm-testkit-linux-x64.zip -d softhsm-testkit-linux-x64
-bash softhsm-testkit-linux-x64/run-test.sh \
-  softhsm-portable-linux-x64.zip ./retained-evidence
+bash softhsm-testkit-linux-x64/run-test.sh
 ```
 
 On Windows:
 
 ```bat
 powershell -NoProfile -Command "Expand-Archive softhsm-testkit-windows-x64.zip softhsm-testkit-windows-x64"
-softhsm-testkit-windows-x64\run-test.cmd softhsm-portable-windows-x64.zip retained-evidence
+softhsm-testkit-windows-x64\run-test.cmd
 ```
 
-The product may also be extracted into the test-kit directory. In that layout,
-Windows can be run exactly as follows (the same `.` form works on Unix):
+To test a different library, provide its path as the only argument:
 
 ```bat
-cd softhsm-testkit-windows-x64
-run-test.cmd . retained-evidence
+softhsm-testkit-windows-x64\run-test.cmd C:\path\to\alternative\softhsm2.dll
 ```
 
-The optional second argument keeps all scenario files in a chosen directory.
-Without it, a temporary evidence directory is retained and printed. The
-product wrapper intentionally enables destructive `C_InitToken` against the
-disposable SoftHSM store created from that product ZIP; do not substitute a
-hardware-token module without first reviewing the generic-runner settings.
+The launcher creates a disposable copy and retains the temporary evidence
+directory printed at the end. It intentionally enables destructive
+`C_InitToken`; do not point it at a hardware-token module without first
+reviewing the generic-runner settings.

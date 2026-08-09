@@ -6,6 +6,7 @@ by a fresh GitHub Actions verification runner. It is separate from the product
 archive so either file can be downloaded independently.
 
 The kit contains:
+- the matching portable SoftHSM module and configuration;
 - a precompiled dependency-light C++ PKCS #11 client;
 - a pinned, statically linked OpenSSL CLI used as the independent reference;
 - shell or PowerShell launchers;
@@ -13,22 +14,22 @@ The kit contains:
 - the exact environment/tool versions in ENVIRONMENT.txt;
 - applicable license texts.
 
-To run, keep the test-kit directory intact and pass either the matching product
-ZIP or a directory containing the extracted product files. You may extract the
-product directly into the test-kit directory and pass `.`.
+To run the bundled SoftHSM module, keep the test-kit directory intact and start
+the launcher with no arguments. To test another SoftHSM/PKCS #11 module, pass
+the path to that library as the only argument.
 The test initializes a disposable token and therefore must not be pointed at a
 real token unless you have reviewed the P11_TEST_* settings and explicitly want
 that destructive operation.
 
 Linux or macOS:
-  bash run-test.sh ../softhsm-portable-<platform>.zip
+  bash run-test.sh
+  bash run-test.sh /path/to/alternative/libsofthsm2.so
 
 Windows:
-  run-test.cmd ..\softhsm-portable-windows-<architecture>.zip
-  run-test.cmd .
+  run-test.cmd
+  run-test.cmd C:\path\to\alternative\softhsm2.dll
 
-An optional second argument selects the directory in which test evidence is
-retained. No compiler, SDK, Java, Botan, or separately installed OpenSSL is
-required at runtime. Normal operating-system libraries are still required.
+No compiler, SDK, Java, Botan, or separately installed OpenSSL is required at
+runtime. Normal operating-system libraries are still required.
 The shell launcher restores executable permissions if the ZIP extractor did
 not preserve them.

@@ -1,37 +1,29 @@
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-if ($args.Count -lt 3 -or $args.Count -gt 4) {
-    throw "usage: run-fresh-integration.ps1 <package.zip-or-directory> <module-name> <openssl> [scenario-directory]"
+if ($args.Count -ne 3) {
+    throw "usage: run-fresh-integration.ps1 <pkcs11-library> <openssl> <softhsm.conf>"
 }
 
-$Product = (Resolve-Path -LiteralPath $args[0]).Path
-$ModuleName = $args[1]
-$OpenSSL = (Resolve-Path $args[2]).Path
+$ModuleSource = (Resolve-Path -LiteralPath $args[0]).Path
+$OpenSSL = (Resolve-Path -LiteralPath $args[1]).Path
+$ConfigSource = (Resolve-Path -LiteralPath $args[2]).Path
 $TempRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [IO.Path]::GetTempPath() }
 $WorkRoot = Join-Path $TempRoot ("softhsm-fresh-test-" + [guid]::NewGuid())
 $PackageDir = Join-Path $WorkRoot "package"
-$ScenarioDir = if ($args.Count -eq 4) { [IO.Path]::GetFullPath($args[3]) } else { Join-Path $WorkRoot "scenario" }
+$ScenarioDir = Join-Path $WorkRoot "scenario"
 
 New-Item -ItemType Directory -Force -Path $PackageDir, $ScenarioDir | Out-Null
-if (Test-Path -LiteralPath $Product -PathType Container) {
-    Write-Host "[SCRIPT] copying product directory $Product into $PackageDir"
-    Get-ChildItem -LiteralPath $Product -Force |
-        Copy-Item -Destination $PackageDir -Recurse -Force
+if (-not (Test-Path -LiteralPath $ModuleSource -PathType Leaf)) {
+    throw "PKCS #11 library is not a file: $ModuleSource"
 }
-else {
-    if ([IO.Path]::GetExtension($Product) -ne ".zip") {
-        throw "product source must be a ZIP archive or directory: $Product"
-    }
-    Write-Host "[SCRIPT] extracting downloaded package $Product into $PackageDir"
-    Expand-Archive -LiteralPath $Product -DestinationPath $PackageDir -Force
+if (-not (Test-Path -LiteralPath $ConfigSource -PathType Leaf)) {
+    throw "softhsm.conf is not a file: $ConfigSource"
 }
-$ModulePath = Join-Path $PackageDir $ModuleName
-if (-not (Test-Path -LiteralPath $ModulePath -PathType Leaf)) {
-    throw "$ModuleName is missing; a product directory must contain the extracted product files"
-}
-$Module = (Resolve-Path -LiteralPath $ModulePath).Path
-if (-not (Test-Path (Join-Path $PackageDir "softhsm.conf"))) { throw "softhsm.conf is missing" }
+$Module = Join-Path $PackageDir (Split-Path -Leaf $ModuleSource)
+Write-Host "[SCRIPT] copying PKCS #11 library $ModuleSource into disposable package $PackageDir"
+Copy-Item -LiteralPath $ModuleSource -Destination $Module
+Copy-Item -LiteralPath $ConfigSource -Destination (Join-Path $PackageDir "softhsm.conf")
 
 Remove-Item Env:SOFTHSM2_CONF -ErrorAction SilentlyContinue
 $env:P11_TEST_INITIALIZE_TOKEN = "YES"
@@ -46,4 +38,4 @@ if ($LASTEXITCODE -ne 0) { throw "generic PKCS #11 integration test failed" }
 if (-not (Test-Path -PathType Container (Join-Path $PackageDir "tokens"))) {
     throw "module did not create its tokens directory beside itself"
 }
-Write-Host "[SCRIPT] verified portable-only behavior: tokens directory exists beside downloaded module"
+Write-Host "[SCRIPT] verified portable-only behavior: tokens directory exists beside tested module"

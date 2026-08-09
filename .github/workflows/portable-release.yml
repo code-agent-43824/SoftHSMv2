@@ -6,7 +6,7 @@ on:
       release_tag:
         description: Release tag to create or update
         required: true
-        default: v2.7.0-portable.10
+        default: v2.7.0-portable.11
 
 permissions:
   contents: read
@@ -148,14 +148,14 @@ jobs:
           name: softhsm-portable-linux-x64
           path: downloaded
       - name: Build and test downloadable test kit
+        env:
+          PORTABLE_PRODUCT_DIR: downloaded
         run: |
           mkdir -p dist artifact-testkit
-          (cd downloaded && zip -X -9 -r "$GITHUB_WORKSPACE/dist/softhsm-portable-linux-x64.zip" .)
           scripts/portable/build-test-kit-unix.sh linux-x64
           mkdir "$RUNNER_TEMP/packaged-testkit"
           unzip -q dist/softhsm-testkit-linux-x64.zip -d "$RUNNER_TEMP/packaged-testkit"
-          bash "$RUNNER_TEMP/packaged-testkit/run-test.sh" \
-            dist/softhsm-portable-linux-x64.zip
+          bash "$RUNNER_TEMP/packaged-testkit/run-test.sh"
           unzip -q dist/softhsm-testkit-linux-x64.zip -d artifact-testkit
       - uses: actions/upload-artifact@v7
         with:
@@ -181,14 +181,14 @@ jobs:
           name: softhsm-portable-linux-arm64
           path: downloaded
       - name: Build and test downloadable test kit
+        env:
+          PORTABLE_PRODUCT_DIR: downloaded
         run: |
           mkdir -p dist artifact-testkit
-          (cd downloaded && zip -X -9 -r "$GITHUB_WORKSPACE/dist/softhsm-portable-linux-arm64.zip" .)
           scripts/portable/build-test-kit-unix.sh linux-arm64
           mkdir "$RUNNER_TEMP/packaged-testkit"
           unzip -q dist/softhsm-testkit-linux-arm64.zip -d "$RUNNER_TEMP/packaged-testkit"
-          bash "$RUNNER_TEMP/packaged-testkit/run-test.sh" \
-            dist/softhsm-portable-linux-arm64.zip
+          bash "$RUNNER_TEMP/packaged-testkit/run-test.sh"
           unzip -q dist/softhsm-testkit-linux-arm64.zip -d artifact-testkit
       - uses: actions/upload-artifact@v7
         with:
@@ -211,15 +211,14 @@ jobs:
         shell: cmd
         env:
           PORTABLE_ARCH: x64
+          PORTABLE_PRODUCT_DIR: downloaded
         run: |
           call scripts\portable\build-test-kit-windows.cmd
-          powershell -NoProfile -Command "Compress-Archive -Path 'downloaded\*' -DestinationPath 'dist\softhsm-portable-windows-x64.zip' -CompressionLevel Optimal -Force"
           powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-x64.zip' -DestinationPath $env:RUNNER_TEMP\packaged-testkit"
-          pushd downloaded
-          call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd" .
-          set "TEST_EXIT=%ERRORLEVEL%"
-          popd
-          if not "%TEST_EXIT%"=="0" exit /b %TEST_EXIT%
+          call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd"
+          if errorlevel 1 exit /b %ERRORLEVEL%
+          call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd" "%CD%\downloaded\softhsm2.dll"
+          if errorlevel 1 exit /b %ERRORLEVEL%
           powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-x64.zip' -DestinationPath 'artifact-testkit'"
       - uses: actions/upload-artifact@v7
         with:
@@ -242,15 +241,14 @@ jobs:
         shell: cmd
         env:
           PORTABLE_ARCH: arm64
+          PORTABLE_PRODUCT_DIR: downloaded
         run: |
           call scripts\portable\build-test-kit-windows.cmd
-          powershell -NoProfile -Command "Compress-Archive -Path 'downloaded\*' -DestinationPath 'dist\softhsm-portable-windows-arm64.zip' -CompressionLevel Optimal -Force"
           powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-arm64.zip' -DestinationPath $env:RUNNER_TEMP\packaged-testkit"
-          pushd downloaded
-          call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd" .
-          set "TEST_EXIT=%ERRORLEVEL%"
-          popd
-          if not "%TEST_EXIT%"=="0" exit /b %TEST_EXIT%
+          call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd"
+          if errorlevel 1 exit /b %ERRORLEVEL%
+          call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd" "%CD%\downloaded\softhsm2.dll"
+          if errorlevel 1 exit /b %ERRORLEVEL%
           powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-arm64.zip' -DestinationPath 'artifact-testkit'"
       - uses: actions/upload-artifact@v7
         with:
@@ -270,14 +268,14 @@ jobs:
           name: softhsm-portable-macos-universal
           path: downloaded
       - name: Build and test downloadable test kit
+        env:
+          PORTABLE_PRODUCT_DIR: downloaded
         run: |
           mkdir -p dist artifact-testkit
-          (cd downloaded && zip -X -9 -r "$GITHUB_WORKSPACE/dist/softhsm-portable-macos-universal.zip" .)
           scripts/portable/build-test-kit-unix.sh macos-universal
           mkdir "$RUNNER_TEMP/packaged-testkit"
           unzip -q dist/softhsm-testkit-macos-universal.zip -d "$RUNNER_TEMP/packaged-testkit"
-          bash "$RUNNER_TEMP/packaged-testkit/run-test.sh" \
-            dist/softhsm-portable-macos-universal.zip
+          bash "$RUNNER_TEMP/packaged-testkit/run-test.sh"
           unzip -q dist/softhsm-testkit-macos-universal.zip -d artifact-testkit
       - uses: actions/upload-artifact@v7
         with:
@@ -334,5 +332,5 @@ jobs:
             gh release create "$RELEASE_TAG" release-assets/* \
               --target "$GITHUB_SHA" \
               --title "SoftHSM portable $RELEASE_TAG" \
-              --notes "Portable, installer-free PKCS #11 modules and independently downloadable self-contained test kits for Linux x64/ARM64, Windows x64/ARM64, and macOS universal. GitHub Actions artifacts contain their payload directly, without a second ZIP nested inside the artifact ZIP; the release page provides ordinary standalone ZIP assets. Each fresh verification runner builds its own test kit and executes that exact packaged kit against the separately downloaded product payload. Windows verification explicitly exercises run-test.cmd . with an extracted product directory. Test kits include a precompiled C++ PKCS #11 client, pinned static OpenSSL, launchers, source, PKCS #11 headers, licenses, and an exact environment manifest; no compiler, SDK, Java, Botan, or separately installed OpenSSL is required to rerun them. SHA256SUMS covers all five product archives and all five test-kit archives."
+              --notes "Portable, installer-free PKCS #11 modules and independently downloadable self-contained test kits for Linux x64/ARM64, Windows x64/ARM64, and macOS universal. Extract a matching test-kit ZIP and run run-test.cmd or bash run-test.sh with no arguments: the bundled SoftHSM module and configuration are selected automatically. To test another SoftHSM/PKCS #11 library, pass its library path as the only argument. GitHub Actions artifacts contain their payload directly, without a second ZIP nested inside the artifact ZIP; the release page provides ordinary standalone ZIP assets. Each fresh verification runner builds and executes the exact packaged kit. Both Windows runners test the zero-argument bundled mode and the explicit-library mode. Test kits include the module, a precompiled C++ PKCS #11 client, pinned static OpenSSL, launchers, source, headers, licenses, and an exact environment manifest; no compiler, SDK, Java, Botan, or separately installed OpenSSL is required. SHA256SUMS covers all five product archives and all five test-kit archives."
           fi

@@ -84,6 +84,11 @@ produce detached CMS. Shell and PowerShell launchers use the OpenSSL command
 line as the independent CSR, CA, certificate, and CMS verifier. The release
 job runs only after all five fresh-runner verification jobs have passed.
 
+Each release also provides a self-contained test-kit ZIP per platform. Extract
+it and run `run-test.cmd` or `bash run-test.sh` with no arguments; the bundled
+module is selected automatically. A different library path can be supplied as
+the launcher's only argument.
+
 The reusable `tests/portable/run-pkcs11-integration.sh` and `.ps1` launchers
 can run the same traced scenario against another vendor's PKCS #11 module.
 They use only standard Cryptoki entry points and do not initialize a token

@@ -41,7 +41,7 @@ sensitive private key material remains unavailable. Public key components are
 readable as required by the PKCS #11 object model.
 
 A separately downloadable `softhsm-testkit-<platform>.zip` on the same release
-page contains the exact precompiled C++/OpenSSL environment used by the fresh
-verification runner. Extract that kit and pass this product ZIP to its
-`run-test.sh` or `run-test.cmd` launcher to reproduce the complete test without
-installing a compiler or a separate OpenSSL package.
+page contains this module and configuration together with the exact precompiled
+C++/OpenSSL environment used by the fresh verification runner. Extract that kit
+and start `run-test.sh` or `run-test.cmd` with no arguments to reproduce the
+complete test. A path to another library may be supplied as the only argument.

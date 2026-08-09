@@ -4,8 +4,10 @@ Set-StrictMode -Version Latest
 if (-not $env:PORTABLE_ARCH) { throw "PORTABLE_ARCH is required" }
 if (-not $env:OPENSSL_VERSION) { throw "OPENSSL_VERSION is required" }
 if (-not $env:OPENSSL_SHA256) { throw "OPENSSL_SHA256 is required" }
+if (-not $env:PORTABLE_PRODUCT_DIR) { throw "PORTABLE_PRODUCT_DIR is required" }
 
 $RootDir = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
+$ProductDir = (Resolve-Path -LiteralPath $env:PORTABLE_PRODUCT_DIR).Path
 $WorkRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { Join-Path $RootDir ".portable-work" }
 $Platform = "windows-$($env:PORTABLE_ARCH)"
 $WorkDir = Join-Path $WorkRoot "testkit-$Platform"
@@ -61,6 +63,18 @@ Copy-Item (Join-Path $RootDir "src/lib/pkcs11/*.h") (Join-Path $StageDir "src/pk
 Copy-Item (Join-Path $RootDir "packaging/portable/TEST-KIT-README.txt") (Join-Path $StageDir "README.txt")
 Copy-Item (Join-Path $RootDir "LICENSE") (Join-Path $StageDir "LICENSE-TestClient.txt")
 Copy-Item (Join-Path $OpenSSLSource "LICENSE.txt") (Join-Path $StageDir "LICENSE-OpenSSL.txt")
+$RequiredProductFiles = @("softhsm2.dll", "softhsm.conf", "LICENSE-SoftHSM.txt", "LICENSE-Botan.txt")
+foreach ($Name in $RequiredProductFiles) {
+    $Source = Join-Path $ProductDir $Name
+    if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) {
+        throw "required product file is missing: $Source"
+    }
+    Copy-Item -LiteralPath $Source -Destination (Join-Path $StageDir $Name)
+}
+$ProductReadme = Join-Path $ProductDir "README.txt"
+if (Test-Path -LiteralPath $ProductReadme -PathType Leaf) {
+    Copy-Item -LiteralPath $ProductReadme -Destination (Join-Path $StageDir "PRODUCT-README.txt")
+}
 @(
     "PLATFORM=$Platform",
     "MODULE_NAME=softhsm2.dll",
