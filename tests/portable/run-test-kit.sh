@@ -67,10 +67,9 @@ add_excluded() {
 normalized=${excluded//;/,}
 normalized=${normalized// /,}
 excluded=
-IFS=',' read -r -a configured_exclusions <<< "$normalized"
-for function_name in "${configured_exclusions[@]}"; do
+while IFS= read -r function_name; do
   [[ -n "$function_name" ]] && add_excluded "$function_name"
-done
+done < <(printf '%s' "$normalized" | tr ',' '\n')
 if [[ "$initialize" == NO ]]; then
   add_excluded C_InitToken
   add_excluded C_InitPIN
