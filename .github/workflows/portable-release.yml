@@ -148,6 +148,7 @@ jobs:
           name: softhsm-portable-linux-x64
           path: downloaded
       - name: Build and test downloadable test kit
+        shell: bash
         env:
           PORTABLE_PRODUCT_DIR: downloaded
         run: |
