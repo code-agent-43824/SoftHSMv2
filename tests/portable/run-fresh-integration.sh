@@ -2,11 +2,11 @@
 set -euo pipefail
 
 if [[ $# -lt 3 || $# -gt 4 ]]; then
-  echo "usage: run-fresh-integration.sh <package.zip> <module-name> <openssl> [scenario-directory]" >&2
+  echo "usage: run-fresh-integration.sh <package.zip-or-directory> <module-name> <openssl> [scenario-directory]" >&2
   exit 2
 fi
 
-archive=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
+product=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 module_name=$2
 openssl=$(cd "$(dirname "$3")" && pwd)/$(basename "$3")
 work_root=$(mktemp -d "${RUNNER_TEMP:-/tmp}/softhsm-fresh-test.XXXXXX")
@@ -18,10 +18,25 @@ else
 fi
 
 mkdir -p "$package_dir" "$scenario_dir"
-printf '[SCRIPT] extracting downloaded package %q into %q\n' "$archive" "$package_dir"
-unzip -q "$archive" -d "$package_dir"
-test -f "$package_dir/$module_name"
-test -f "$package_dir/softhsm.conf"
+if [[ -d "$product" ]]; then
+  printf '[SCRIPT] copying product directory %q into %q\n' "$product" "$package_dir"
+  cp -R "$product"/. "$package_dir"/
+elif [[ "$product" == *.zip ]]; then
+  printf '[SCRIPT] extracting downloaded package %q into %q\n' "$product" "$package_dir"
+  unzip -q "$product" -d "$package_dir"
+else
+  printf 'product source must be a ZIP archive or directory: %s\n' "$product" >&2
+  exit 2
+fi
+if [[ ! -f "$package_dir/$module_name" ]]; then
+  printf '%s is missing; a product directory must contain the extracted product files\n' \
+    "$module_name" >&2
+  exit 2
+fi
+if [[ ! -f "$package_dir/softhsm.conf" ]]; then
+  echo 'softhsm.conf is missing from the product source' >&2
+  exit 2
+fi
 
 unset SOFTHSM2_CONF
 export P11_TEST_INITIALIZE_TOKEN=YES

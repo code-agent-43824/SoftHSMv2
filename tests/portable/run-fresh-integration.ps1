@@ -2,10 +2,10 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 if ($args.Count -lt 3 -or $args.Count -gt 4) {
-    throw "usage: run-fresh-integration.ps1 <package.zip> <module-name> <openssl> [scenario-directory]"
+    throw "usage: run-fresh-integration.ps1 <package.zip-or-directory> <module-name> <openssl> [scenario-directory]"
 }
 
-$Archive = (Resolve-Path $args[0]).Path
+$Product = (Resolve-Path -LiteralPath $args[0]).Path
 $ModuleName = $args[1]
 $OpenSSL = (Resolve-Path $args[2]).Path
 $TempRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [IO.Path]::GetTempPath() }
@@ -13,10 +13,24 @@ $WorkRoot = Join-Path $TempRoot ("softhsm-fresh-test-" + [guid]::NewGuid())
 $PackageDir = Join-Path $WorkRoot "package"
 $ScenarioDir = if ($args.Count -eq 4) { [IO.Path]::GetFullPath($args[3]) } else { Join-Path $WorkRoot "scenario" }
 
-Write-Host "[SCRIPT] extracting downloaded package $Archive into $PackageDir"
 New-Item -ItemType Directory -Force -Path $PackageDir, $ScenarioDir | Out-Null
-Expand-Archive -Path $Archive -DestinationPath $PackageDir -Force
-$Module = (Resolve-Path (Join-Path $PackageDir $ModuleName)).Path
+if (Test-Path -LiteralPath $Product -PathType Container) {
+    Write-Host "[SCRIPT] copying product directory $Product into $PackageDir"
+    Get-ChildItem -LiteralPath $Product -Force |
+        Copy-Item -Destination $PackageDir -Recurse -Force
+}
+else {
+    if ([IO.Path]::GetExtension($Product) -ne ".zip") {
+        throw "product source must be a ZIP archive or directory: $Product"
+    }
+    Write-Host "[SCRIPT] extracting downloaded package $Product into $PackageDir"
+    Expand-Archive -LiteralPath $Product -DestinationPath $PackageDir -Force
+}
+$ModulePath = Join-Path $PackageDir $ModuleName
+if (-not (Test-Path -LiteralPath $ModulePath -PathType Leaf)) {
+    throw "$ModuleName is missing; a product directory must contain the extracted product files"
+}
+$Module = (Resolve-Path -LiteralPath $ModulePath).Path
 if (-not (Test-Path (Join-Path $PackageDir "softhsm.conf"))) { throw "softhsm.conf is missing" }
 
 Remove-Item Env:SOFTHSM2_CONF -ErrorAction SilentlyContinue

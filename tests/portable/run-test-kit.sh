@@ -2,12 +2,12 @@
 set -euo pipefail
 
 if [[ $# -lt 1 || $# -gt 2 ]]; then
-  echo "usage: run-test.sh <softhsm-portable-package.zip> [scenario-directory]" >&2
+  echo "usage: run-test.sh <product-package.zip-or-directory> [scenario-directory]" >&2
   exit 2
 fi
 
 kit_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-archive=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
+product=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 scenario=${2:-}
 module_name=$(sed -n 's/^MODULE_NAME=//p' "$kit_dir/testkit.env")
 test -n "$module_name"
@@ -25,14 +25,14 @@ if [[ -n "$scenario" ]]; then
 fi
 
 printf '[TEST-KIT] platform=%s\n' "$(sed -n 's/^PLATFORM=//p' "$kit_dir/testkit.env")"
-printf '[TEST-KIT] product package=%s\n' "$archive"
+printf '[TEST-KIT] product source=%s\n' "$product"
 printf '[TEST-KIT] precompiled client=%s\n' "$P11_TEST_CLIENT"
 printf '[TEST-KIT] bundled OpenSSL=%s\n' "$kit_dir/bin/openssl"
 
 if [[ -n "$scenario" ]]; then
-  "$kit_dir/scripts/run-fresh-integration.sh" "$archive" "$module_name" \
+  "$kit_dir/scripts/run-fresh-integration.sh" "$product" "$module_name" \
     "$kit_dir/bin/openssl" "$scenario"
 else
-  "$kit_dir/scripts/run-fresh-integration.sh" "$archive" "$module_name" \
+  "$kit_dir/scripts/run-fresh-integration.sh" "$product" "$module_name" \
     "$kit_dir/bin/openssl"
 fi

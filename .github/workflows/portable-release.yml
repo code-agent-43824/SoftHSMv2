@@ -6,7 +6,7 @@ on:
       release_tag:
         description: Release tag to create or update
         required: true
-        default: v2.7.0-portable.9
+        default: v2.7.0-portable.10
 
 permissions:
   contents: read
@@ -27,16 +27,21 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential ca-certificates cmake curl perl pkg-config python3 xz-utils zip
+            build-essential ca-certificates cmake curl perl pkg-config python3 unzip xz-utils zip
       - uses: actions/checkout@v7
       - name: Build package
         env:
           PORTABLE_ARCH: x64
         run: scripts/portable/build-linux.sh
+      - name: Prepare flat Actions artifact
+        run: |
+          mkdir -p artifact/softhsm-portable-linux-x64
+          unzip -q dist/softhsm-portable-linux-x64.zip \
+            -d artifact/softhsm-portable-linux-x64
       - uses: actions/upload-artifact@v7
         with:
           name: softhsm-portable-linux-x64
-          path: dist/softhsm-portable-linux-x64.zip
+          path: artifact/softhsm-portable-linux-x64/
           if-no-files-found: error
           retention-days: 90
 
@@ -49,16 +54,21 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential ca-certificates cmake curl perl pkg-config python3 xz-utils zip
+            build-essential ca-certificates cmake curl perl pkg-config python3 unzip xz-utils zip
       - uses: actions/checkout@v7
       - name: Build package
         env:
           PORTABLE_ARCH: arm64
         run: scripts/portable/build-linux.sh
+      - name: Prepare flat Actions artifact
+        run: |
+          mkdir -p artifact/softhsm-portable-linux-arm64
+          unzip -q dist/softhsm-portable-linux-arm64.zip \
+            -d artifact/softhsm-portable-linux-arm64
       - uses: actions/upload-artifact@v7
         with:
           name: softhsm-portable-linux-arm64
-          path: dist/softhsm-portable-linux-arm64.zip
+          path: artifact/softhsm-portable-linux-arm64/
           if-no-files-found: error
           retention-days: 90
 
@@ -72,10 +82,13 @@ jobs:
         env:
           PORTABLE_ARCH: x64
         run: scripts\portable\build-windows.cmd
+      - name: Prepare flat Actions artifact
+        shell: powershell
+        run: Expand-Archive -LiteralPath dist\softhsm-portable-windows-x64.zip -DestinationPath artifact\softhsm-portable-windows-x64
       - uses: actions/upload-artifact@v7
         with:
           name: softhsm-portable-windows-x64
-          path: dist/softhsm-portable-windows-x64.zip
+          path: artifact/softhsm-portable-windows-x64/
           if-no-files-found: error
           retention-days: 90
 
@@ -89,10 +102,13 @@ jobs:
         env:
           PORTABLE_ARCH: arm64
         run: scripts\portable\build-windows.cmd
+      - name: Prepare flat Actions artifact
+        shell: powershell
+        run: Expand-Archive -LiteralPath dist\softhsm-portable-windows-arm64.zip -DestinationPath artifact\softhsm-portable-windows-arm64
       - uses: actions/upload-artifact@v7
         with:
           name: softhsm-portable-windows-arm64
-          path: dist/softhsm-portable-windows-arm64.zip
+          path: artifact/softhsm-portable-windows-arm64/
           if-no-files-found: error
           retention-days: 90
 
@@ -103,10 +119,15 @@ jobs:
       - uses: actions/checkout@v7
       - name: Build package
         run: scripts/portable/build-macos.sh
+      - name: Prepare flat Actions artifact
+        run: |
+          mkdir -p artifact/softhsm-portable-macos-universal
+          unzip -q dist/softhsm-portable-macos-universal.zip \
+            -d artifact/softhsm-portable-macos-universal
       - uses: actions/upload-artifact@v7
         with:
           name: softhsm-portable-macos-universal
-          path: dist/softhsm-portable-macos-universal.zip
+          path: artifact/softhsm-portable-macos-universal/
           if-no-files-found: error
           retention-days: 90
 
@@ -128,15 +149,18 @@ jobs:
           path: downloaded
       - name: Build and test downloadable test kit
         run: |
+          mkdir -p dist artifact-testkit
+          (cd downloaded && zip -X -9 -r "$GITHUB_WORKSPACE/dist/softhsm-portable-linux-x64.zip" .)
           scripts/portable/build-test-kit-unix.sh linux-x64
           mkdir "$RUNNER_TEMP/packaged-testkit"
           unzip -q dist/softhsm-testkit-linux-x64.zip -d "$RUNNER_TEMP/packaged-testkit"
           bash "$RUNNER_TEMP/packaged-testkit/run-test.sh" \
-            downloaded/softhsm-portable-linux-x64.zip
+            dist/softhsm-portable-linux-x64.zip
+          unzip -q dist/softhsm-testkit-linux-x64.zip -d artifact-testkit
       - uses: actions/upload-artifact@v7
         with:
           name: softhsm-testkit-linux-x64
-          path: dist/softhsm-testkit-linux-x64.zip
+          path: artifact-testkit/
           if-no-files-found: error
           retention-days: 90
 
@@ -158,15 +182,18 @@ jobs:
           path: downloaded
       - name: Build and test downloadable test kit
         run: |
+          mkdir -p dist artifact-testkit
+          (cd downloaded && zip -X -9 -r "$GITHUB_WORKSPACE/dist/softhsm-portable-linux-arm64.zip" .)
           scripts/portable/build-test-kit-unix.sh linux-arm64
           mkdir "$RUNNER_TEMP/packaged-testkit"
           unzip -q dist/softhsm-testkit-linux-arm64.zip -d "$RUNNER_TEMP/packaged-testkit"
           bash "$RUNNER_TEMP/packaged-testkit/run-test.sh" \
-            downloaded/softhsm-portable-linux-arm64.zip
+            dist/softhsm-portable-linux-arm64.zip
+          unzip -q dist/softhsm-testkit-linux-arm64.zip -d artifact-testkit
       - uses: actions/upload-artifact@v7
         with:
           name: softhsm-testkit-linux-arm64
-          path: dist/softhsm-testkit-linux-arm64.zip
+          path: artifact-testkit/
           if-no-files-found: error
           retention-days: 90
 
@@ -186,12 +213,18 @@ jobs:
           PORTABLE_ARCH: x64
         run: |
           call scripts\portable\build-test-kit-windows.cmd
+          powershell -NoProfile -Command "Compress-Archive -Path 'downloaded\*' -DestinationPath 'dist\softhsm-portable-windows-x64.zip' -CompressionLevel Optimal -Force"
           powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-x64.zip' -DestinationPath $env:RUNNER_TEMP\packaged-testkit"
-          call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd" downloaded\softhsm-portable-windows-x64.zip
+          pushd downloaded
+          call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd" .
+          set "TEST_EXIT=%ERRORLEVEL%"
+          popd
+          if not "%TEST_EXIT%"=="0" exit /b %TEST_EXIT%
+          powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-x64.zip' -DestinationPath 'artifact-testkit'"
       - uses: actions/upload-artifact@v7
         with:
           name: softhsm-testkit-windows-x64
-          path: dist/softhsm-testkit-windows-x64.zip
+          path: artifact-testkit/
           if-no-files-found: error
           retention-days: 90
 
@@ -211,12 +244,18 @@ jobs:
           PORTABLE_ARCH: arm64
         run: |
           call scripts\portable\build-test-kit-windows.cmd
+          powershell -NoProfile -Command "Compress-Archive -Path 'downloaded\*' -DestinationPath 'dist\softhsm-portable-windows-arm64.zip' -CompressionLevel Optimal -Force"
           powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-arm64.zip' -DestinationPath $env:RUNNER_TEMP\packaged-testkit"
-          call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd" downloaded\softhsm-portable-windows-arm64.zip
+          pushd downloaded
+          call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd" .
+          set "TEST_EXIT=%ERRORLEVEL%"
+          popd
+          if not "%TEST_EXIT%"=="0" exit /b %TEST_EXIT%
+          powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-arm64.zip' -DestinationPath 'artifact-testkit'"
       - uses: actions/upload-artifact@v7
         with:
           name: softhsm-testkit-windows-arm64
-          path: dist/softhsm-testkit-windows-arm64.zip
+          path: artifact-testkit/
           if-no-files-found: error
           retention-days: 90
 
@@ -232,15 +271,18 @@ jobs:
           path: downloaded
       - name: Build and test downloadable test kit
         run: |
+          mkdir -p dist artifact-testkit
+          (cd downloaded && zip -X -9 -r "$GITHUB_WORKSPACE/dist/softhsm-portable-macos-universal.zip" .)
           scripts/portable/build-test-kit-unix.sh macos-universal
           mkdir "$RUNNER_TEMP/packaged-testkit"
           unzip -q dist/softhsm-testkit-macos-universal.zip -d "$RUNNER_TEMP/packaged-testkit"
           bash "$RUNNER_TEMP/packaged-testkit/run-test.sh" \
-            downloaded/softhsm-portable-macos-universal.zip
+            dist/softhsm-portable-macos-universal.zip
+          unzip -q dist/softhsm-testkit-macos-universal.zip -d artifact-testkit
       - uses: actions/upload-artifact@v7
         with:
           name: softhsm-testkit-macos-universal
-          path: dist/softhsm-testkit-macos-universal.zip
+          path: artifact-testkit/
           if-no-files-found: error
           retention-days: 90
 
@@ -260,11 +302,27 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           pattern: softhsm-*
-          path: release-assets
-          merge-multiple: true
-      - name: Create checksums
-        working-directory: release-assets
-        run: sha256sum *.zip > SHA256SUMS
+          path: release-input
+      - name: Create release archives and checksums
+        run: |
+          mkdir release-assets
+          count=0
+          for source in release-input/softhsm-*; do
+            name=$(basename "$source")
+            (cd "$source" && zip -X -9 -r "$GITHUB_WORKSPACE/release-assets/$name.zip" .)
+            count=$((count + 1))
+          done
+          test "$count" -eq 10
+          (cd release-assets && sha256sum *.zip > SHA256SUMS)
+      - name: Verify release archive layout
+        run: |
+          test "$(find release-assets -maxdepth 1 -type f -name '*.zip' | wc -l)" -eq 10
+          for archive in release-assets/*.zip; do
+            if unzip -Z1 "$archive" | grep -Eq '\.zip$'; then
+              echo "nested ZIP found in $archive" >&2
+              exit 1
+            fi
+          done
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -276,5 +334,5 @@ jobs:
             gh release create "$RELEASE_TAG" release-assets/* \
               --target "$GITHUB_SHA" \
               --title "SoftHSM portable $RELEASE_TAG" \
-              --notes "Portable, installer-free PKCS #11 modules and independently downloadable self-contained test kits for Linux x64/ARM64, Windows x64/ARM64, and macOS universal. Each fresh verification runner builds its own test kit, executes that exact packaged kit against the separately downloaded product ZIP, and uploads both the precompiled C++ PKCS #11 client and pinned static OpenSSL reference environment. Test kits include launchers, source, PKCS #11 headers, licenses, and an exact environment manifest; no compiler, SDK, Java, Botan, or separately installed OpenSSL is required to rerun them. SHA256SUMS covers all five product archives and all five test-kit archives."
+              --notes "Portable, installer-free PKCS #11 modules and independently downloadable self-contained test kits for Linux x64/ARM64, Windows x64/ARM64, and macOS universal. GitHub Actions artifacts contain their payload directly, without a second ZIP nested inside the artifact ZIP; the release page provides ordinary standalone ZIP assets. Each fresh verification runner builds its own test kit and executes that exact packaged kit against the separately downloaded product payload. Windows verification explicitly exercises run-test.cmd . with an extracted product directory. Test kits include a precompiled C++ PKCS #11 client, pinned static OpenSSL, launchers, source, PKCS #11 headers, licenses, and an exact environment manifest; no compiler, SDK, Java, Botan, or separately installed OpenSSL is required to rerun them. SHA256SUMS covers all five product archives and all five test-kit archives."
           fi

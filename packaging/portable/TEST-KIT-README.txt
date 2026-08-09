@@ -13,7 +13,9 @@ The kit contains:
 - the exact environment/tool versions in ENVIRONMENT.txt;
 - applicable license texts.
 
-To run, keep the test-kit directory intact and pass the matching product ZIP.
+To run, keep the test-kit directory intact and pass either the matching product
+ZIP or a directory containing the extracted product files. You may extract the
+product directly into the test-kit directory and pass `.`.
 The test initializes a disposable token and therefore must not be pointed at a
 real token unless you have reviewed the P11_TEST_* settings and explicitly want
 that destructive operation.
@@ -23,6 +25,7 @@ Linux or macOS:
 
 Windows:
   run-test.cmd ..\softhsm-portable-windows-<architecture>.zip
+  run-test.cmd .
 
 An optional second argument selects the directory in which test evidence is
 retained. No compiler, SDK, Java, Botan, or separately installed OpenSSL is

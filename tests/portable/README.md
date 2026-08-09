@@ -126,8 +126,11 @@ CLI, all runtime launchers, the test source and PKCS #11 headers, licenses, and
 Botan, or separately installed OpenSSL is needed to run it. Normal platform
 system libraries remain required.
 
-After downloading the matching product and test-kit ZIPs, extract only the
-test kit and pass the still-zipped product package to it:
+The downloadable GitHub Actions artifacts contain their files directly; there
+is no ZIP nested inside the artifact ZIP. Release assets remain ordinary ZIPs.
+
+After downloading the matching product and test-kit ZIPs, extract the test kit
+and pass either the still-zipped product package or its extracted directory:
 
 ```sh
 unzip softhsm-testkit-linux-x64.zip -d softhsm-testkit-linux-x64
@@ -140,6 +143,14 @@ On Windows:
 ```bat
 powershell -NoProfile -Command "Expand-Archive softhsm-testkit-windows-x64.zip softhsm-testkit-windows-x64"
 softhsm-testkit-windows-x64\run-test.cmd softhsm-portable-windows-x64.zip retained-evidence
+```
+
+The product may also be extracted into the test-kit directory. In that layout,
+Windows can be run exactly as follows (the same `.` form works on Unix):
+
+```bat
+cd softhsm-testkit-windows-x64
+run-test.cmd . retained-evidence
 ```
 
 The optional second argument keeps all scenario files in a chosen directory.
