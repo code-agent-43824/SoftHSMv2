@@ -87,7 +87,8 @@ job runs only after all five fresh-runner verification jobs have passed.
 Each release also provides a self-contained test-kit ZIP per platform. Extract
 it and run `run-test.cmd` or `bash run-test.sh` with no arguments; the bundled
 module is selected automatically. A different library path can be supplied as
-the launcher's only argument.
+the launcher's only argument. Token initialization, excluded PKCS #11 functions,
+PINs, slot, and labels are controlled by the included `testkit.conf`.
 
 The reusable `tests/portable/run-pkcs11-integration.sh` and `.ps1` launchers
 can run the same traced scenario against another vendor's PKCS #11 module.

@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 3 ]]; then
-  echo "usage: run-fresh-integration.sh <pkcs11-library> <openssl> <softhsm.conf>" >&2
+if [[ $# -ne 4 ]]; then
+  echo "usage: run-fresh-integration.sh <pkcs11-library> <openssl> <softhsm.conf> <expect-portable-token-dir>" >&2
   exit 2
 fi
 
 module_source=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 openssl=$(cd "$(dirname "$2")" && pwd)/$(basename "$2")
 config_source=$(cd "$(dirname "$3")" && pwd)/$(basename "$3")
+expect_portable_token_dir=$4
+[[ "$expect_portable_token_dir" == YES || "$expect_portable_token_dir" == NO ]] || {
+  echo 'expect-portable-token-dir must be YES or NO' >&2
+  exit 2
+}
 work_root=$(mktemp -d "${RUNNER_TEMP:-/tmp}/softhsm-fresh-test.XXXXXX")
 package_dir="$work_root/package"
 scenario_dir="$work_root/scenario"
@@ -29,15 +34,15 @@ cp "$module_source" "$module"
 cp "$config_source" "$package_dir/softhsm.conf"
 
 unset SOFTHSM2_CONF
-export P11_TEST_INITIALIZE_TOKEN=YES
-export P11_TEST_SO_PIN=12345678
-export P11_TEST_USER_PIN=12345678
-export P11_TEST_TOKEN_LABEL=portable-ci-token
-export P11_TEST_KEY_LABEL=portable-ci-rsa
-export P11_TEST_OBJECT_ID_HEX=504f525441424c45
+if [[ -z ${P11_TEST_USER_PIN:-} ]]; then
+  echo 'USER_PIN is missing from testkit.conf' >&2
+  exit 2
+fi
 
 "$(dirname "${BASH_SOURCE[0]}")/run-pkcs11-integration.sh" \
   "$module" "$openssl" "$scenario_dir"
 
-test -d "$package_dir/tokens"
-printf '[SCRIPT] verified portable-only behavior: tokens directory exists beside tested module\n'
+if [[ "$expect_portable_token_dir" == YES ]]; then
+  test -d "$package_dir/tokens"
+  printf '[SCRIPT] verified portable-only behavior: tokens directory exists beside tested module\n'
+fi

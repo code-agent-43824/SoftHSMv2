@@ -17,9 +17,14 @@ The kit contains:
 To run the bundled SoftHSM module, keep the test-kit directory intact and start
 the launcher with no arguments. To test another SoftHSM/PKCS #11 module, pass
 the path to that library as the only argument.
-The test initializes a disposable token and therefore must not be pointed at a
-real token unless you have reviewed the P11_TEST_* settings and explicitly want
-that destructive operation.
+
+Edit testkit.conf to select token handling and PINs. INITIALIZE_TOKEN=AUTO
+initializes only the bundled disposable SoftHSM module; an explicitly supplied
+library uses existing-token mode. YES enables destructive C_InitToken and
+C_InitPIN. NO disables them and automatically blocks C_InitToken, C_InitPIN,
+and C_SetPIN before invocation. EXCLUDED_FUNCTIONS can block additional C_*
+entry points. USER_PIN and SO_PIN are stored as plain text in this local file,
+so do not publish a customized copy containing real secrets.
 
 Linux or macOS:
   bash run-test.sh

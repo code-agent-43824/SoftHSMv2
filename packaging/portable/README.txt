@@ -45,3 +45,5 @@ page contains this module and configuration together with the exact precompiled
 C++/OpenSSL environment used by the fresh verification runner. Extract that kit
 and start `run-test.sh` or `run-test.cmd` with no arguments to reproduce the
 complete test. A path to another library may be supplied as the only argument.
+The included `testkit.conf` controls initialization, excluded C_* functions,
+PINs, slot, and labels.

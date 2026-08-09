@@ -75,6 +75,7 @@ On Linux or macOS:
 
 ```sh
 export P11_TEST_INITIALIZE_TOKEN=NO
+export P11_TEST_EXCLUDE_FUNCTIONS='C_InitToken,C_InitPIN,C_SetPIN'
 export P11_TEST_USER_PIN='user-pin'
 export P11_TEST_SLOT_ID='12345'             # recommended when several slots exist
 export P11_TEST_TOKEN_LABEL='existing-label' # optional exact selector
@@ -97,12 +98,14 @@ Token initialization is disabled by default. Setting
 `C_InitPIN`; this is destructive and can erase all objects on the selected
 hardware token. `P11_TEST_SO_PIN` is required in that mode. If multiple tokens
 match, the test stops and requires an explicit `P11_TEST_SLOT_ID` instead of
-guessing.
+guessing. `P11_TEST_EXCLUDE_FUNCTIONS` accepts comma-separated exact `C_*`
+names and blocks matching calls before the module receives them.
 
-The `run-fresh-integration.*` wrappers are CI adapters. They unpack a portable
-SoftHSM ZIP, explicitly enable initialization for that disposable token, call
-the same generic runner, and then perform the additional product-specific
-check that the portable module created `tokens` beside itself.
+The `run-fresh-integration.*` wrappers are test-kit adapters. They copy the
+selected library and configuration into a disposable directory, preserve the
+settings selected by `testkit.conf`, call the same generic runner, and then
+perform the additional product-specific `tokens`-directory check only for the
+module bundled in the kit.
 
 ## Downloadable test kits
 
@@ -151,7 +154,34 @@ To test a different library, provide its path as the only argument:
 softhsm-testkit-windows-x64\run-test.cmd C:\path\to\alternative\softhsm2.dll
 ```
 
+The root `testkit.conf` controls the standalone launcher:
+
+```ini
+INITIALIZE_TOKEN=AUTO
+EXCLUDED_FUNCTIONS=
+USER_PIN=12345678
+SO_PIN=12345678
+SLOT_ID=
+TOKEN_LABEL=
+KEY_LABEL=portable-ci-rsa
+OBJECT_ID_HEX=504f525441424c45
+```
+
+`AUTO` enables initialization only for the module bundled in the kit. Supplying
+an alternate library automatically selects existing-token mode. `YES` permits
+destructive `C_InitToken` and `C_InitPIN`; `NO` skips them and automatically
+adds `C_InitToken,C_InitPIN,C_SetPIN` to the exclusion list. Additional exact
+PKCS #11 entry-point names can be placed in `EXCLUDED_FUNCTIONS`, separated by
+commas. An excluded function is blocked before the module receives the call;
+if the selected scenario requires it, the test stops with an explicit safety
+error rather than silently weakening the result.
+
+`USER_PIN` is required. `SO_PIN` is required only when initialization is `YES`.
+PIN values are never printed, but this file stores them as plain text; keep a
+customized copy containing real credentials private. Use `SLOT_ID` or
+`TOKEN_LABEL` when several initialized tokens are visible.
+
 The launcher creates a disposable copy and retains the temporary evidence
-directory printed at the end. It intentionally enables destructive
-`C_InitToken`; do not point it at a hardware-token module without first
-reviewing the generic-runner settings.
+directory printed at the end. Existing-token mode still generates test keys and
+certificate objects on the selected token; review the scenario before pointing
+it at hardware containing valuable objects.

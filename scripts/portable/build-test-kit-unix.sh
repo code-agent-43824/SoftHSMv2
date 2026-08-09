@@ -84,6 +84,7 @@ cp "$root_dir/tests/portable/run-pkcs11-integration.sh" "$stage_dir/scripts/run-
 cp "$root_dir/tests/portable/portable-token-e2e.cpp" "$stage_dir/src/portable-token-e2e.cpp"
 cp "$root_dir/src/lib/pkcs11/"*.h "$stage_dir/src/pkcs11/"
 cp "$root_dir/packaging/portable/TEST-KIT-README.txt" "$stage_dir/README.txt"
+cp "$root_dir/packaging/portable/testkit.conf" "$stage_dir/testkit.conf"
 cp "$root_dir/LICENSE" "$stage_dir/LICENSE-TestClient.txt"
 cp "$source_dir/LICENSE.txt" "$stage_dir/LICENSE-OpenSSL.txt"
 for required in "$module_name" softhsm.conf LICENSE-SoftHSM.txt LICENSE-Botan.txt; do

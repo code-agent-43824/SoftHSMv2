@@ -123,9 +123,34 @@ static void trace(const std::string& category, const std::string& message)
     std::cout.flush();
 }
 
+static bool functionExcluded(const char* operation)
+{
+    const char* configured = std::getenv("P11_TEST_EXCLUDE_FUNCTIONS");
+    if (configured == nullptr) return false;
+    std::string name;
+    for (const char character : std::string(configured) + ',')
+    {
+        if (character == ',' || character == ';' || std::isspace(static_cast<unsigned char>(character)))
+        {
+            if (name == operation) return true;
+            name.clear();
+        }
+        else
+        {
+            name.push_back(character);
+        }
+    }
+    return false;
+}
+
 template<typename Function>
 static CK_RV invoke(const char* operation, const std::string& parameters, Function function)
 {
+    if (functionExcluded(operation))
+    {
+        trace("SAFETY", std::string("blocked excluded PKCS #11 function before invocation: ") + operation);
+        fail(std::string(operation) + " is excluded by P11_TEST_EXCLUDE_FUNCTIONS");
+    }
     trace("PKCS11", std::string("-> ") + operation + "(" + parameters + ")");
     const CK_RV rv = function();
     trace("PKCS11", std::string("<- ") + operation + " = " + rvName(rv) + " (" + hexNumber(rv) + ")");
@@ -1757,6 +1782,7 @@ static void prepare(const fs::path& modulePath, const fs::path& work)
     const std::string keyLabel = configuredKeyLabel();
     const Bytes objectId = configuredObjectId();
     trace("CONFIG", std::string("initializeToken=") + (initializeToken ? "YES" : "NO") +
+                    ", excludedFunctions=\"" + environment("P11_TEST_EXCLUDE_FUNCTIONS") + "\"" +
                     ", requestedSlot=" + (configuredSlot() ? std::to_string(*configuredSlot()) : "auto") +
                     ", tokenLabel=\"" + tokenLabel + "\", keyLabel=\"" + keyLabel +
                     "\", objectIdHex=" + hexBytes(objectId.data(), objectId.size()) +
@@ -1973,6 +1999,7 @@ int main(int argc, char** argv)
                   << "  P11_TEST_USER_PIN=<required secret>\n"
                   << "  P11_TEST_INITIALIZE_TOKEN=YES|NO (default NO)\n"
                   << "  P11_TEST_SO_PIN=<required only when initialization is YES>\n"
+                  << "  P11_TEST_EXCLUDE_FUNCTIONS=<optional comma-separated C_* names>\n"
                   << "  P11_TEST_SLOT_ID=<optional decimal or 0x-prefixed slot ID>\n"
                   << "  P11_TEST_TOKEN_LABEL=<optional exact token label>\n"
                   << "  P11_TEST_KEY_LABEL=<optional generated-key label>\n"

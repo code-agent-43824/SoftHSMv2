@@ -6,7 +6,7 @@ on:
       release_tag:
         description: Release tag to create or update
         required: true
-        default: v2.7.0-portable.11
+        default: v2.7.0-portable.12
 
 permissions:
   contents: read
@@ -157,6 +157,34 @@ jobs:
           unzip -q dist/softhsm-testkit-linux-x64.zip -d "$RUNNER_TEMP/packaged-testkit"
           bash "$RUNNER_TEMP/packaged-testkit/run-test.sh"
           unzip -q dist/softhsm-testkit-linux-x64.zip -d artifact-testkit
+      - name: Verify safe alternate-library defaults and exclusion gate
+        run: |
+          kit="$RUNNER_TEMP/packaged-testkit"
+          if bash "$kit/run-test.sh" "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so" \
+              > "$RUNNER_TEMP/safe-alternate.log" 2>&1; then
+            echo "uninitialized alternate module unexpectedly passed" >&2
+            exit 1
+          fi
+          grep -F '[TEST-KIT] initialize token=NO' "$RUNNER_TEMP/safe-alternate.log"
+          grep -F '[TEST-KIT] excluded functions=C_InitToken,C_InitPIN,C_SetPIN' \
+            "$RUNNER_TEMP/safe-alternate.log"
+          if grep -F -- '-> C_InitToken' "$RUNNER_TEMP/safe-alternate.log"; then
+            echo "safe alternate mode invoked C_InitToken" >&2
+            exit 1
+          fi
+          sed -i 's/^INITIALIZE_TOKEN=AUTO$/INITIALIZE_TOKEN=YES/' "$kit/testkit.conf"
+          sed -i 's/^EXCLUDED_FUNCTIONS=$/EXCLUDED_FUNCTIONS=C_InitToken,C_InitPIN,C_SetPIN/' \
+            "$kit/testkit.conf"
+          if bash "$kit/run-test.sh" > "$RUNNER_TEMP/exclusion-gate.log" 2>&1; then
+            echo "excluded C_InitToken unexpectedly passed" >&2
+            exit 1
+          fi
+          grep -F 'blocked excluded PKCS #11 function before invocation: C_InitToken' \
+            "$RUNNER_TEMP/exclusion-gate.log"
+          if grep -F -- '-> C_InitToken' "$RUNNER_TEMP/exclusion-gate.log"; then
+            echo "excluded C_InitToken reached the module" >&2
+            exit 1
+          fi
       - uses: actions/upload-artifact@v7
         with:
           name: softhsm-testkit-linux-x64
@@ -217,8 +245,10 @@ jobs:
           powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-x64.zip' -DestinationPath $env:RUNNER_TEMP\packaged-testkit"
           call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd"
           if errorlevel 1 exit /b %ERRORLEVEL%
+          set "P11_TEST_INITIALIZE_TOKEN=YES"
           call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd" "%CD%\downloaded\softhsm2.dll"
           if errorlevel 1 exit /b %ERRORLEVEL%
+          set "P11_TEST_INITIALIZE_TOKEN="
           powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-x64.zip' -DestinationPath 'artifact-testkit'"
       - uses: actions/upload-artifact@v7
         with:
@@ -247,8 +277,10 @@ jobs:
           powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-arm64.zip' -DestinationPath $env:RUNNER_TEMP\packaged-testkit"
           call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd"
           if errorlevel 1 exit /b %ERRORLEVEL%
+          set "P11_TEST_INITIALIZE_TOKEN=YES"
           call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd" "%CD%\downloaded\softhsm2.dll"
           if errorlevel 1 exit /b %ERRORLEVEL%
+          set "P11_TEST_INITIALIZE_TOKEN="
           powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-arm64.zip' -DestinationPath 'artifact-testkit'"
       - uses: actions/upload-artifact@v7
         with:
@@ -332,5 +364,5 @@ jobs:
             gh release create "$RELEASE_TAG" release-assets/* \
               --target "$GITHUB_SHA" \
               --title "SoftHSM portable $RELEASE_TAG" \
-              --notes "Portable, installer-free PKCS #11 modules and independently downloadable self-contained test kits for Linux x64/ARM64, Windows x64/ARM64, and macOS universal. Extract a matching test-kit ZIP and run run-test.cmd or bash run-test.sh with no arguments: the bundled SoftHSM module and configuration are selected automatically. To test another SoftHSM/PKCS #11 library, pass its library path as the only argument. GitHub Actions artifacts contain their payload directly, without a second ZIP nested inside the artifact ZIP; the release page provides ordinary standalone ZIP assets. Each fresh verification runner builds and executes the exact packaged kit. Both Windows runners test the zero-argument bundled mode and the explicit-library mode. Test kits include the module, a precompiled C++ PKCS #11 client, pinned static OpenSSL, launchers, source, headers, licenses, and an exact environment manifest; no compiler, SDK, Java, Botan, or separately installed OpenSSL is required. SHA256SUMS covers all five product archives and all five test-kit archives."
+              --notes "Portable, installer-free PKCS #11 modules and independently downloadable self-contained test kits for Linux x64/ARM64, Windows x64/ARM64, and macOS universal. Extract a matching test-kit ZIP and run run-test.cmd or bash run-test.sh with no arguments: the bundled SoftHSM module and configuration are selected automatically. To test another library, pass its path as the only argument. The included testkit.conf controls AUTO/YES/NO initialization, user/SO PINs, slot/labels, and a comma-separated exclusion list of PKCS #11 C_* functions. AUTO initializes only the bundled disposable SoftHSM; alternate libraries use safe existing-token mode, which blocks C_InitToken, C_InitPIN, and C_SetPIN before invocation. CI tests the full default path, explicit-library path, safe AUTO behavior, and the pre-invocation exclusion guard. Test kits include the module, precompiled client, static OpenSSL, launchers, source, headers, licenses, and environment manifest. GitHub Actions artifacts contain direct payload without nested ZIPs; SHA256SUMS covers all five product and five test-kit archives."
           fi
