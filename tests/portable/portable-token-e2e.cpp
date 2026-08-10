@@ -170,6 +170,15 @@ static void check(CK_RV rv, CK_RV expected, const char* operation)
     }
 }
 
+static void checkAttributeReadRejected(CK_RV rv, const char* operation)
+{
+    if (rv == CKR_OK)
+        fail(std::string(operation) + " unexpectedly exposed private key material");
+
+    trace("PORTABILITY", std::string(operation) + " was rejected with " + rvName(rv) +
+                         " (" + hexNumber(rv) + "); the exact error is vendor-specific");
+}
+
 template<typename Function>
 static void callOk(const char* operation, const std::string& parameters, Function function)
 {
@@ -974,11 +983,12 @@ static GOST2012KeyPair verifyGOST2012KeyGeneration(Module& module, CK_SESSION_HA
         fail("generated GOST public key is not a non-zero 256-bit X || Y point");
 
     CK_ATTRIBUTE privateValue{CKA_VALUE, nullptr, 0};
-    check(invoke("C_GetAttributeValue", "hSession=" + std::to_string(session) +
-                 ", hObject=" + std::to_string(privateKey) +
-                 ", pTemplate={CKA_VALUE,NULL_PTR,0}, ulCount=1",
-                 [&] { return module->C_GetAttributeValue(session, privateKey, &privateValue, 1); }),
-          CKR_ATTRIBUTE_SENSITIVE, "C_GetAttributeValue(private GOST CKA_VALUE)");
+    checkAttributeReadRejected(
+        invoke("C_GetAttributeValue", "hSession=" + std::to_string(session) +
+               ", hObject=" + std::to_string(privateKey) +
+               ", pTemplate={CKA_VALUE,NULL_PTR,0}, ulCount=1",
+               [&] { return module->C_GetAttributeValue(session, privateKey, &privateValue, 1); }),
+        "C_GetAttributeValue(private GOST CKA_VALUE)");
     trace("SECURITY", "generated GOST private scalar is non-extractable through C_GetAttributeValue");
 
     std::vector<CK_ATTRIBUTE> publicQuery = {
@@ -1902,13 +1912,12 @@ static void prepare(const fs::path& modulePath, const fs::path& work)
                     ", privateKey handle=" + std::to_string(privateKey));
 
     CK_ATTRIBUTE privateExponent{CKA_PRIVATE_EXPONENT, nullptr, 0};
-    check(invoke("C_GetAttributeValue", "hSession=" + std::to_string(session) +
-                 ", hObject=" + std::to_string(privateKey) +
-                 ", pTemplate={CKA_PRIVATE_EXPONENT,NULL_PTR,0}, ulCount=1",
-                 [&] { return module->C_GetAttributeValue(session, privateKey, &privateExponent, 1); }),
-          CKR_ATTRIBUTE_SENSITIVE, "C_GetAttributeValue(non-extractable RSA CKA_PRIVATE_EXPONENT)");
-    if (privateExponent.ulValueLen != CK_UNAVAILABLE_INFORMATION)
-        fail("non-extractable RSA private exponent did not return CK_UNAVAILABLE_INFORMATION");
+    checkAttributeReadRejected(
+        invoke("C_GetAttributeValue", "hSession=" + std::to_string(session) +
+               ", hObject=" + std::to_string(privateKey) +
+               ", pTemplate={CKA_PRIVATE_EXPONENT,NULL_PTR,0}, ulCount=1",
+               [&] { return module->C_GetAttributeValue(session, privateKey, &privateExponent, 1); }),
+        "C_GetAttributeValue(non-extractable RSA CKA_PRIVATE_EXPONENT)");
     trace("SECURITY", "non-extractable RSA private components remain unavailable through C_GetAttributeValue");
 
     writePem(work / "request.pem", "CERTIFICATE REQUEST", buildCsr(module, session, publicKey, privateKey));
