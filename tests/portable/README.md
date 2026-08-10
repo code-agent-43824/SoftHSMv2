@@ -28,11 +28,8 @@ requires these standard capabilities from the selected token:
 - `CKM_GOSTR3410_KEY_PAIR_GEN` with 256-bit GOST keys;
 - raw `CKM_GOSTR3410` and combined TC26
   `CKM_GOSTR3410_WITH_GOSTR3411_2012_256` signing;
-- RSA public/private key import with two standard `C_CreateObject` calls, and
-  private-component export through `C_GetAttributeValue` when
-  `CKA_SENSITIVE=CK_FALSE` and `CKA_EXTRACTABLE=CK_TRUE`;
-- the same GOST private-key import/export round trip when testing the bundled
-  SoftHSM module; it is an optional capability for external modules;
+- RSA and GOST private-key import/export round trips when testing the bundled
+  SoftHSM module; both are optional capabilities for external modules;
 - persistent RSA key and X.509 certificate objects.
 
 The runner queries and logs `C_GetMechanismInfo` before using each capability.
@@ -44,13 +41,13 @@ The GOST scenario generates a persistent 2012/256 key pair, signs a
 precomputed Streebog-256 digest, signs and hashes the same message in one-shot
 and multipart forms, and checks all three randomized signatures with a small
 independent implementation of the GOST verification equation in the C++ test.
-It also generates exportable RSA and GOST pairs, reads every private component,
-imports each pair as separate public and private objects with `C_CreateObject`,
-reads the imported values back, and proves the imported private keys by signing.
-The complete GOST import/export round trip is required for the bundled SoftHSM
-module, but skipped for an external module because hardware tokens may
-deliberately forbid exportable generated GOST keys or GOST private-key import.
-Normal GOST generation, public-key reading, and signing remain mandatory.
+For the bundled SoftHSM module it also generates exportable RSA and GOST pairs,
+reads every private component, imports each pair as separate public and private
+objects with `C_CreateObject`, reads the imported values back, and proves the
+imported private keys by signing. Both private-key import/export round trips are
+skipped for an external module because hardware tokens may deliberately forbid
+exportable generated keys or private-key import. Normal RSA key generation,
+CSR/CMS signing, and GOST generation/signing remain mandatory.
 Negative checks confirm that private components of the normal non-extractable
 RSA and GOST keys cannot be read. The exact rejection code is vendor-specific
 and remains visible in the trace.
@@ -86,6 +83,7 @@ export P11_TEST_USER_PIN='user-pin'
 export P11_TEST_SLOT_ID='12345'             # recommended when several slots exist
 export P11_TEST_TOKEN_LABEL='existing-label' # optional exact selector
 export P11_TEST_REQUIRE_GOST_IMPORT_EXPORT=NO
+export P11_TEST_REQUIRE_RSA_IMPORT_EXPORT=NO
 tests/portable/run-pkcs11-integration.sh \
   /absolute/path/to/vendor-pkcs11.so "$(command -v openssl)"
 ```
@@ -104,12 +102,13 @@ ID derived by appending byte `47` (ASCII `G`) to the configured RSA ID. Searches
 also include `CKA_KEY_TYPE`, so RSA and GOST objects cannot be selected for one
 another.
 
-The downloadable test-kit launchers set
-`P11_TEST_REQUIRE_GOST_IMPORT_EXPORT=YES` for their bundled SoftHSM module and
-`NO` when an alternate PKCS #11 library is supplied. The generic runner defaults
-to `YES`; set it to `NO` explicitly for a vendor module. This switch affects
-only the coupled GOST export/import round trip, not ordinary GOST generation or
-signing checks.
+The downloadable test-kit launchers set both
+`P11_TEST_REQUIRE_GOST_IMPORT_EXPORT` and
+`P11_TEST_REQUIRE_RSA_IMPORT_EXPORT` to `YES` for their bundled SoftHSM module
+and `NO` when an alternate PKCS #11 library is supplied. The generic runner
+defaults both to `YES`; set them to `NO` explicitly for a vendor module. These
+switches affect only the coupled private-key export/import round trips, not
+ordinary RSA/GOST generation, CSR/CMS, or signing checks.
 
 The trace contains explicit `BEGIN GOST`/`END GOST`, `BEGIN RSA PREPARE`/
 `END RSA PREPARE`, and `BEGIN RSA FINISH`/`END RSA FINISH` boundaries. The

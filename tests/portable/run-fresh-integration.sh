@@ -41,6 +41,9 @@ fi
 if [[ -z ${P11_TEST_REQUIRE_GOST_IMPORT_EXPORT:-} ]]; then
   export P11_TEST_REQUIRE_GOST_IMPORT_EXPORT=$expect_portable_token_dir
 fi
+if [[ -z ${P11_TEST_REQUIRE_RSA_IMPORT_EXPORT:-} ]]; then
+  export P11_TEST_REQUIRE_RSA_IMPORT_EXPORT=$expect_portable_token_dir
+fi
 
 "$(dirname "${BASH_SOURCE[0]}")/run-pkcs11-integration.sh" \
   "$module" "$openssl" "$scenario_dir"

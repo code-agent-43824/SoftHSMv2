@@ -1865,13 +1865,24 @@ static void prepare(const fs::path& modulePath, const fs::path& work)
     }
     trace("SCENARIO", "END GOST: all required GOST checks passed");
 
-    trace("SCENARIO", "BEGIN RSA PREPARE: key generation, import/export, and CSR checks; "
+    trace("SCENARIO", "BEGIN RSA PREPARE: key generation, optional import/export, and CSR checks; "
                       "keyLabel=\"" + rsaKeyLabel + "\", objectIdHex=" +
                       hexBytes(rsaObjectId.data(), rsaObjectId.size()));
     requireMechanism(module, slot, CKM_RSA_PKCS_KEY_PAIR_GEN, CKF_GENERATE_KEY_PAIR, 2048);
     requireMechanism(module, slot, CKM_SHA256_RSA_PKCS, CKF_SIGN, 2048);
     requireMechanism(module, slot, CKM_SHA256, CKF_DIGEST);
-    verifyRSACreateObjectRoundTrip(module, session);
+    const std::string requireRSAImportExportSetting = environment("P11_TEST_REQUIRE_RSA_IMPORT_EXPORT");
+    const bool requireRSAImportExport = requireRSAImportExportSetting.empty() ||
+                                        environmentYes("P11_TEST_REQUIRE_RSA_IMPORT_EXPORT");
+    if (requireRSAImportExport)
+    {
+        verifyRSACreateObjectRoundTrip(module, session);
+    }
+    else
+    {
+        trace("SKIP", "RSA private-key import/export round trip is optional for an external module; "
+                      "normal RSA generation, CSR, and CMS signing remain required");
+    }
 
     CK_OBJECT_CLASS publicClass = CKO_PUBLIC_KEY;
     CK_OBJECT_CLASS privateClass = CKO_PRIVATE_KEY;
@@ -1933,7 +1944,7 @@ static void prepare(const fs::path& modulePath, const fs::path& work)
 
     writePem(work / "request.pem", "CERTIFICATE REQUEST", buildCsr(module, session, publicKey, privateKey));
     trace("FILESYSTEM", "wrote PKCS#10 CSR: " + (work / "request.pem").string());
-    trace("SCENARIO", "END RSA PREPARE: key generation, import/export, and CSR checks passed");
+    trace("SCENARIO", "END RSA PREPARE: all required RSA key generation and CSR checks passed");
     logout(module, session, "CKU_USER");
     closeSession(module, session);
     std::cout << "PKCS #11 GOST checks passed, RSA-2048 key generated, CSR written\n";

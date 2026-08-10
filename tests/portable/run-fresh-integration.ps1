@@ -34,6 +34,9 @@ if (-not $env:P11_TEST_USER_PIN) { throw "USER_PIN is missing from testkit.conf"
 if (-not $env:P11_TEST_REQUIRE_GOST_IMPORT_EXPORT) {
     $env:P11_TEST_REQUIRE_GOST_IMPORT_EXPORT = $ExpectPortableTokenDir
 }
+if (-not $env:P11_TEST_REQUIRE_RSA_IMPORT_EXPORT) {
+    $env:P11_TEST_REQUIRE_RSA_IMPORT_EXPORT = $ExpectPortableTokenDir
+}
 
 & (Join-Path $PSScriptRoot "run-pkcs11-integration.ps1") $Module $OpenSSL $ScenarioDir
 if ($LASTEXITCODE -ne 0) { throw "generic PKCS #11 integration test failed" }

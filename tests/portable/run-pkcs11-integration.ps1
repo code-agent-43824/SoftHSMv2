@@ -39,6 +39,7 @@ $TokenLabel = if ($env:P11_TEST_TOKEN_LABEL) { $env:P11_TEST_TOKEN_LABEL } else 
 $KeyLabel = if ($env:P11_TEST_KEY_LABEL) { $env:P11_TEST_KEY_LABEL } else { "portable-ci-rsa" }
 $ObjectId = if ($env:P11_TEST_OBJECT_ID_HEX) { $env:P11_TEST_OBJECT_ID_HEX } else { "504f525441424c45" }
 $RequireGostImportExport = if ($env:P11_TEST_REQUIRE_GOST_IMPORT_EXPORT) { $env:P11_TEST_REQUIRE_GOST_IMPORT_EXPORT } else { "YES" }
+$RequireRsaImportExport = if ($env:P11_TEST_REQUIRE_RSA_IMPORT_EXPORT) { $env:P11_TEST_REQUIRE_RSA_IMPORT_EXPORT } else { "YES" }
 $ExcludedFunctions = if ($env:P11_TEST_EXCLUDE_FUNCTIONS) { $env:P11_TEST_EXCLUDE_FUNCTIONS } else { "<none>" }
 $SoPinLength = if ($env:P11_TEST_SO_PIN) { $env:P11_TEST_SO_PIN.Length } else { 0 }
 $UserPinLength = if ($env:P11_TEST_USER_PIN) { $env:P11_TEST_USER_PIN.Length } else { 0 }
@@ -51,6 +52,7 @@ Write-Step "P11_TEST_TOKEN_LABEL=$TokenLabel"
 Write-Step "P11_TEST_KEY_LABEL=$KeyLabel"
 Write-Step "P11_TEST_OBJECT_ID_HEX=$ObjectId"
 Write-Step "P11_TEST_REQUIRE_GOST_IMPORT_EXPORT=$RequireGostImportExport"
+Write-Step "P11_TEST_REQUIRE_RSA_IMPORT_EXPORT=$RequireRsaImportExport"
 Write-Step "P11_TEST_EXCLUDE_FUNCTIONS=$ExcludedFunctions"
 Write-Step "P11_TEST_SO_PIN=<redacted,length=$SoPinLength>"
 Write-Step "P11_TEST_USER_PIN=<redacted,length=$UserPinLength>"
