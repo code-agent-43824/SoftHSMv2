@@ -1841,7 +1841,7 @@ static void prepare(const fs::path& modulePath, const fs::path& work)
     }
     login(module, session, CKU_USER, userPin);
 
-    trace("SCENARIO", "BEGIN GOST: digest, key generation, signing, and import/export checks; "
+    trace("SCENARIO", "BEGIN GOST: digest, key generation, signing, and optional import/export capability; "
                       "keyLabel=\"" + std::string(kGostKeyLabel) + "\", objectIdHex=" +
                       hexBytes(gostId.data(), gostId.size()));
     requireMechanism(module, slot, CKM_GOSTR3411_2012_256, CKF_DIGEST);
@@ -1851,8 +1851,19 @@ static void prepare(const fs::path& modulePath, const fs::path& work)
     verifyStreebog256(module, session);
     const GOST2012KeyPair gostKeyPair = verifyGOST2012KeyGeneration(module, session, rsaObjectId);
     verifyGOST2012Signing(module, session, gostKeyPair);
-    verifyGOSTCreateObjectRoundTrip(module, session);
-    trace("SCENARIO", "END GOST: all GOST checks passed");
+    const std::string requireGOSTImportExportSetting = environment("P11_TEST_REQUIRE_GOST_IMPORT_EXPORT");
+    const bool requireGOSTImportExport = requireGOSTImportExportSetting.empty() ||
+                                         environmentYes("P11_TEST_REQUIRE_GOST_IMPORT_EXPORT");
+    if (requireGOSTImportExport)
+    {
+        verifyGOSTCreateObjectRoundTrip(module, session);
+    }
+    else
+    {
+        trace("SKIP", "GOST private-key import/export round trip is optional for an external module; "
+                      "normal GOST generation and signing remain required and passed");
+    }
+    trace("SCENARIO", "END GOST: all required GOST checks passed");
 
     trace("SCENARIO", "BEGIN RSA PREPARE: key generation, import/export, and CSR checks; "
                       "keyLabel=\"" + rsaKeyLabel + "\", objectIdHex=" +

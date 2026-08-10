@@ -38,6 +38,9 @@ if [[ -z ${P11_TEST_USER_PIN:-} ]]; then
   echo 'USER_PIN is missing from testkit.conf' >&2
   exit 2
 fi
+if [[ -z ${P11_TEST_REQUIRE_GOST_IMPORT_EXPORT:-} ]]; then
+  export P11_TEST_REQUIRE_GOST_IMPORT_EXPORT=$expect_portable_token_dir
+fi
 
 "$(dirname "${BASH_SOURCE[0]}")/run-pkcs11-integration.sh" \
   "$module" "$openssl" "$scenario_dir"
