@@ -124,11 +124,14 @@ match, the test stops and requires an explicit `P11_TEST_SLOT_ID` instead of
 guessing. `P11_TEST_EXCLUDE_FUNCTIONS` accepts comma-separated exact `C_*`
 names and blocks matching calls before the module receives them.
 
-The `run-fresh-integration.*` wrappers are test-kit adapters. They copy the
-selected library and configuration into a disposable directory, preserve the
-settings selected by `testkit.conf`, call the same generic runner, and then
-perform the additional product-specific `tokens`-directory check only for the
-module bundled in the kit.
+The `run-fresh-integration.*` wrappers are test-kit adapters. For the bundled
+SoftHSM they copy the library and configuration into a disposable directory
+and perform the additional product-specific `tokens`-directory check. An
+explicitly supplied alternate library is instead loaded directly from its
+original path: it is not copied, an adjacent configuration and relative token
+storage stay in place, and a caller-provided `SOFTHSM2_CONF` is preserved. Both
+modes retain the settings selected by `testkit.conf` and call the same generic
+runner.
 
 ## Downloadable test kits
 
@@ -204,7 +207,8 @@ PIN values are never printed, but this file stores them as plain text; keep a
 customized copy containing real credentials private. Use `SLOT_ID` or
 `TOKEN_LABEL` when several initialized tokens are visible.
 
-The launcher creates a disposable copy and retains the temporary evidence
-directory printed at the end. Existing-token mode still generates test keys and
-certificate objects on the selected token; review the scenario before pointing
-it at hardware containing valuable objects.
+For the bundled SoftHSM, the launcher creates a disposable copy. For an
+alternate library, the launcher loads the original file directly and creates
+only the scenario evidence in a temporary directory. Existing-token mode still
+generates test keys and certificate objects on the selected token; review the
+scenario before pointing it at hardware containing valuable objects.

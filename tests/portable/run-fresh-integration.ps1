@@ -17,19 +17,28 @@ $WorkRoot = Join-Path $TempRoot ("softhsm-fresh-test-" + [guid]::NewGuid())
 $PackageDir = Join-Path $WorkRoot "package"
 $ScenarioDir = Join-Path $WorkRoot "scenario"
 
-New-Item -ItemType Directory -Force -Path $PackageDir, $ScenarioDir | Out-Null
+New-Item -ItemType Directory -Force -Path $ScenarioDir | Out-Null
 if (-not (Test-Path -LiteralPath $ModuleSource -PathType Leaf)) {
     throw "PKCS #11 library is not a file: $ModuleSource"
 }
-if (-not (Test-Path -LiteralPath $ConfigSource -PathType Leaf)) {
-    throw "softhsm.conf is not a file: $ConfigSource"
+if ($ExpectPortableTokenDir -eq "YES") {
+    if (-not (Test-Path -LiteralPath $ConfigSource -PathType Leaf)) {
+        throw "softhsm.conf is not a file: $ConfigSource"
+    }
+    New-Item -ItemType Directory -Force -Path $PackageDir | Out-Null
+    $Module = Join-Path $PackageDir (Split-Path -Leaf $ModuleSource)
+    Write-Host "[SCRIPT] copying bundled PKCS #11 library $ModuleSource into disposable package $PackageDir"
+    Copy-Item -LiteralPath $ModuleSource -Destination $Module
+    Copy-Item -LiteralPath $ConfigSource -Destination (Join-Path $PackageDir "softhsm.conf")
+    Remove-Item Env:SOFTHSM2_CONF -ErrorAction SilentlyContinue
 }
-$Module = Join-Path $PackageDir (Split-Path -Leaf $ModuleSource)
-Write-Host "[SCRIPT] copying PKCS #11 library $ModuleSource into disposable package $PackageDir"
-Copy-Item -LiteralPath $ModuleSource -Destination $Module
-Copy-Item -LiteralPath $ConfigSource -Destination (Join-Path $PackageDir "softhsm.conf")
-
-Remove-Item Env:SOFTHSM2_CONF -ErrorAction SilentlyContinue
+else {
+    $Module = $ModuleSource
+    Write-Host "[SCRIPT] using alternate PKCS #11 library directly in its original directory: $Module"
+    if ($env:SOFTHSM2_CONF) {
+        Write-Host "[SCRIPT] preserving caller-provided SOFTHSM2_CONF=$($env:SOFTHSM2_CONF)"
+    }
+}
 if (-not $env:P11_TEST_USER_PIN) { throw "USER_PIN is missing from testkit.conf" }
 if (-not $env:P11_TEST_REQUIRE_GOST_IMPORT_EXPORT) {
     $env:P11_TEST_REQUIRE_GOST_IMPORT_EXPORT = $ExpectPortableTokenDir

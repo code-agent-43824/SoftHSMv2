@@ -16,7 +16,11 @@ The kit contains:
 
 To run the bundled SoftHSM module, keep the test-kit directory intact and start
 the launcher with no arguments. To test another SoftHSM/PKCS #11 module, pass
-the path to that library as the only argument.
+the path to that library as the only argument. An explicitly supplied library
+is loaded directly from that path and is not copied. Its adjacent configuration,
+relative token storage, and any caller-provided SOFTHSM2_CONF therefore remain
+in their original environment. Only the bundled SoftHSM is copied to an
+isolated disposable directory.
 
 Edit testkit.conf to select token handling and PINs. INITIALIZE_TOKEN=AUTO
 initializes only the bundled disposable SoftHSM module; an explicitly supplied

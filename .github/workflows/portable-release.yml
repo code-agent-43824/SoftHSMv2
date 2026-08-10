@@ -6,7 +6,7 @@ on:
       release_tag:
         description: Release tag to create or update
         required: true
-        default: v2.7.0-portable.16
+        default: v2.7.0-portable.17
 
 permissions:
   contents: read
@@ -203,6 +203,12 @@ jobs:
           grep -F '[TEST-KIT] initialize token=NO' "$RUNNER_TEMP/safe-alternate.log"
           grep -F '[TEST-KIT] excluded functions=C_InitToken,C_InitPIN,C_SetPIN' \
             "$RUNNER_TEMP/safe-alternate.log"
+          grep -F "[SCRIPT] using alternate PKCS #11 library directly in its original directory: $GITHUB_WORKSPACE/downloaded/libsofthsm2.so" \
+            "$RUNNER_TEMP/safe-alternate.log"
+          if grep -F '[SCRIPT] copying bundled PKCS #11 library' "$RUNNER_TEMP/safe-alternate.log"; then
+            echo "alternate module was unexpectedly copied" >&2
+            exit 1
+          fi
           if grep -F -- '-> C_InitToken' "$RUNNER_TEMP/safe-alternate.log"; then
             echo "safe alternate mode invoked C_InitToken" >&2
             exit 1
@@ -399,5 +405,5 @@ jobs:
             gh release create "$RELEASE_TAG" release-assets/* \
               --target "$GITHUB_SHA" \
               --title "SoftHSM portable $RELEASE_TAG" \
-              --notes "Portable, installer-free PKCS #11 modules and independently downloadable self-contained test kits for Linux x64/ARM64, Windows x64/ARM64, and macOS universal. Extract a matching test-kit ZIP and run run-test.cmd or bash run-test.sh with no arguments: the bundled SoftHSM module and configuration are selected automatically. To test another library, pass its path as the only argument. The included testkit.conf controls AUTO/YES/NO initialization, user/SO PINs, slot/labels, and a comma-separated exclusion list of PKCS #11 C_* functions. AUTO initializes only the bundled disposable SoftHSM; alternate libraries use safe existing-token mode, which blocks C_InitToken, C_InitPIN, and C_SetPIN before invocation. GOST and RSA generation and signing remain required for every compatible module; private-key import/export round trips remain mandatory for bundled SoftHSM but are skipped for alternate vendor libraries that may forbid exportable generated keys or private-key import. GOST and RSA scenarios have explicit non-overlapping trace boundaries, distinct labels/IDs and key-type-qualified searches; the functional test does not query CKA_KEY_GEN_MECHANISM. CI tests the full default path, scenario separation, explicit-library path, safe AUTO behavior, and the pre-invocation exclusion guard. Test kits include the module, precompiled client, static OpenSSL, launchers, source, headers, licenses, and environment manifest. GitHub Actions artifacts contain direct payload without nested ZIPs; SHA256SUMS covers all five product and five test-kit archives."
+              --notes "Portable, installer-free PKCS #11 modules and independently downloadable self-contained test kits for Linux x64/ARM64, Windows x64/ARM64, and macOS universal. Extract a matching test-kit ZIP and run run-test.cmd or bash run-test.sh with no arguments: the bundled SoftHSM module and configuration are selected automatically and copied to an isolated disposable directory. To test another library, pass its path as the only argument; alternate libraries are loaded directly from their original path without copying, preserving adjacent configuration, relative token storage, and caller-provided SOFTHSM2_CONF. The included testkit.conf controls AUTO/YES/NO initialization, user/SO PINs, slot/labels, and a comma-separated exclusion list of PKCS #11 C_* functions. AUTO initializes only the bundled disposable SoftHSM; alternate libraries use safe existing-token mode, which blocks C_InitToken, C_InitPIN, and C_SetPIN before invocation. GOST and RSA generation and signing remain required for every compatible module; private-key import/export round trips remain mandatory for bundled SoftHSM but are skipped for alternate vendor libraries that may forbid exportable generated keys or private-key import. GOST and RSA scenarios have explicit non-overlapping trace boundaries, distinct labels/IDs and key-type-qualified searches; the functional test does not query CKA_KEY_GEN_MECHANISM. CI tests the full default path, scenario separation, direct explicit-library path, safe AUTO behavior, and the pre-invocation exclusion guard. Test kits include the module, precompiled client, static OpenSSL, launchers, source, headers, licenses, and environment manifest. GitHub Actions artifacts contain direct payload without nested ZIPs; SHA256SUMS covers all five product and five test-kit archives."
           fi

@@ -18,22 +18,31 @@ work_root=$(mktemp -d "${RUNNER_TEMP:-/tmp}/softhsm-fresh-test.XXXXXX")
 package_dir="$work_root/package"
 scenario_dir="$work_root/scenario"
 
-mkdir -p "$package_dir" "$scenario_dir"
+mkdir -p "$scenario_dir"
 if [[ ! -f "$module_source" ]]; then
   printf 'PKCS #11 library is not a file: %s\n' "$module_source" >&2
   exit 2
 fi
-if [[ ! -f "$config_source" ]]; then
-  printf 'softhsm.conf is not a file: %s\n' "$config_source" >&2
-  exit 2
+if [[ "$expect_portable_token_dir" == YES ]]; then
+  if [[ ! -f "$config_source" ]]; then
+    printf 'softhsm.conf is not a file: %s\n' "$config_source" >&2
+    exit 2
+  fi
+  mkdir -p "$package_dir"
+  module="$package_dir/$(basename "$module_source")"
+  printf '[SCRIPT] copying bundled PKCS #11 library %q into disposable package %q\n' \
+    "$module_source" "$package_dir"
+  cp "$module_source" "$module"
+  cp "$config_source" "$package_dir/softhsm.conf"
+  unset SOFTHSM2_CONF
+else
+  module="$module_source"
+  printf '[SCRIPT] using alternate PKCS #11 library directly in its original directory: %q\n' \
+    "$module"
+  if [[ -n ${SOFTHSM2_CONF:-} ]]; then
+    printf '[SCRIPT] preserving caller-provided SOFTHSM2_CONF=%q\n' "$SOFTHSM2_CONF"
+  fi
 fi
-module="$package_dir/$(basename "$module_source")"
-printf '[SCRIPT] copying PKCS #11 library %q into disposable package %q\n' \
-  "$module_source" "$package_dir"
-cp "$module_source" "$module"
-cp "$config_source" "$package_dir/softhsm.conf"
-
-unset SOFTHSM2_CONF
 if [[ -z ${P11_TEST_USER_PIN:-} ]]; then
   echo 'USER_PIN is missing from testkit.conf' >&2
   exit 2
