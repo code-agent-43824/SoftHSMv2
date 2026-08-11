@@ -45,10 +45,11 @@ $InitializeSetting = (Get-EffectiveSetting "P11_TEST_INITIALIZE_TOKEN" "INITIALI
 switch ($InitializeSetting) {
     "AUTO" {
         $TokenDirectory = Join-Path (Split-Path -Parent $UserConfig) "tokens"
-        $StoredTokens = if (Test-Path -LiteralPath $TokenDirectory -PathType Container) {
-            @(Get-ChildItem -LiteralPath $TokenDirectory -Directory -Force -ErrorAction Stop)
-        } else { @() }
-        $Initialize = if ($args.Count -eq 0 -and $StoredTokens.Count -eq 0) {
+        $StoredTokenCount = 0
+        if (Test-Path -LiteralPath $TokenDirectory -PathType Container) {
+            $StoredTokenCount = @(Get-ChildItem -LiteralPath $TokenDirectory -Directory -Force -ErrorAction Stop).Count
+        }
+        $Initialize = if ($args.Count -eq 0 -and $StoredTokenCount -eq 0) {
             "YES"
         }
         else { "NO" }
