@@ -86,7 +86,7 @@ else
   queue=("$installed_tool")
   index=0
   : > "$stage_dir/OPENSC-DEPENDENCIES.txt"
-  : > "$work_dir/seen.txt"
+  printf '%s\n' "$(basename "$installed_tool")" > "$work_dir/seen.txt"
   while [[ $index -lt ${#queue[@]} ]]; do
     source_binary=${queue[$index]}
     index=$((index + 1))

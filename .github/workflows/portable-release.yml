@@ -638,6 +638,10 @@ jobs:
               softhsm-testkit-*.zip)
                 zipinfo -1 "$archive" | grep -Fx 'bin/pkcs11-tool' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'LICENSE-OpenSC.txt' >/dev/null
+                if zipinfo -1 "$archive" | grep -Fx 'bin/opensc-lib/pkcs11-tool' >/dev/null; then
+                  echo "duplicate pkcs11-tool found in $archive" >&2
+                  exit 1
+                fi
                 ;;
             esac
           done
