@@ -154,11 +154,13 @@ executes that exact packaged environment. Only a successful kit is uploaded to
 Actions and made eligible for the release aggregation job.
 
 The kit includes the matching portable SoftHSM module and configuration, the
-precompiled C++ client, a pinned statically linked OpenSSL CLI, all runtime
-launchers, the test source and PKCS #11 headers, licenses, and `ENVIRONMENT.txt`
-with the runner and tool versions. No compiler, SDK, Java, Botan, or separately
-installed OpenSSL is needed to run it. Normal platform system libraries remain
-required.
+precompiled C++ client, a pinned statically linked OpenSSL CLI, a prebuilt
+OpenSC `pkcs11-tool` with its non-system dependencies, all runtime launchers,
+the test source and PKCS #11 headers, licenses, and `ENVIRONMENT.txt` with the
+runner and tool versions. No compiler, SDK, Java, Botan, separately installed
+OpenSSL, or separately installed OpenSC is needed to run it. Normal platform
+system libraries remain required. After the main E2E, the launcher requires
+both `pkcs11-tool -I` and `pkcs11-tool -T` to load the selected module.
 
 The downloadable GitHub Actions artifacts contain their files directly; there
 is no ZIP nested inside the artifact ZIP. Release assets remain ordinary ZIPs.
@@ -197,8 +199,8 @@ KEY_LABEL=portable-ci-rsa
 OBJECT_ID_HEX=504f525441424c45
 ```
 
-`AUTO` enables initialization only for the module bundled in the kit. Supplying
-an alternate library automatically selects existing-token mode. `YES` permits
+`AUTO` initializes the selected SoftHSM when its canonical store is empty,
+including an explicitly supplied SoftHSM module. `YES` permits
 destructive `C_InitToken` and `C_InitPIN`; `NO` skips them and automatically
 adds `C_InitToken,C_InitPIN,C_SetPIN` to the exclusion list. Additional exact
 PKCS #11 entry-point names can be placed in `EXCLUDED_FUNCTIONS`, separated by

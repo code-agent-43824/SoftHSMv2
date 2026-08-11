@@ -78,8 +78,10 @@ readable as required by the PKCS #11 object model.
 
 A separately downloadable `softhsm-testkit-<platform>.zip` on the same release
 page contains this module and configuration together with the exact precompiled
-C++/OpenSSL environment used by the fresh verification runner. Extract that kit
+C++/OpenSSL/OpenSC environment used by the fresh verification runner. Extract that kit
 and start `run-test.sh` or `run-test.cmd` with no arguments to reproduce the
-complete test. A path to another library may be supplied as the only argument.
+complete test. The final independent gate runs the packaged `pkcs11-tool -I`
+and `pkcs11-tool -T`; no separate OpenSC installation is needed. A path to
+another library may be supplied as the only argument.
 The included `testkit.conf` controls initialization, excluded C_* functions,
 PINs, slot, and labels.

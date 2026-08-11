@@ -116,9 +116,11 @@ fi
 # ZIP extraction does not restore executable bits consistently across tools.
 # Running this launcher as `bash run-test.sh ...` repairs the bundled tools.
 chmod +x "$kit_dir/bin/portable-token-e2e" "$kit_dir/bin/openssl" \
+  "$kit_dir/bin/pkcs11-tool" \
   "$kit_dir/scripts/"*.sh
 test -x "$kit_dir/bin/portable-token-e2e"
 test -x "$kit_dir/bin/openssl"
+test -x "$kit_dir/bin/pkcs11-tool"
 
 export P11_TEST_CLIENT="$kit_dir/bin/portable-token-e2e"
 export OPENSSL_CONF="$kit_dir/config/openssl.cnf"
@@ -130,7 +132,16 @@ printf '[TEST-KIT] initialize token=%s\n' "$initialize"
 printf '[TEST-KIT] excluded functions=%s\n' "${excluded:-<none>}"
 printf '[TEST-KIT] precompiled client=%s\n' "$P11_TEST_CLIENT"
 printf '[TEST-KIT] bundled OpenSSL=%s\n' "$kit_dir/bin/openssl"
+printf '[TEST-KIT] bundled OpenSC pkcs11-tool=%s\n' "$kit_dir/bin/pkcs11-tool"
 printf '[TEST-KIT] all test evidence remains under=%s\n' "$kit_dir/test-output"
 
 "$kit_dir/scripts/run-fresh-integration.sh" "$module" \
   "$kit_dir/bin/openssl" "$bundled_mode"
+
+printf '[OPENSC] checking C_Initialize and library information with pkcs11-tool -I\n'
+"$kit_dir/bin/pkcs11-tool" --module "$module" -I 2>&1 | \
+  tee "$kit_dir/test-output/pkcs11-tool-I.log"
+printf '[OPENSC] checking slots and token information with pkcs11-tool -T\n'
+"$kit_dir/bin/pkcs11-tool" --module "$module" -T 2>&1 | \
+  tee "$kit_dir/test-output/pkcs11-tool-T.log"
+printf '[OPENSC] PASS: packaged pkcs11-tool loaded the tested module\n'

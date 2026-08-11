@@ -99,25 +99,35 @@ cp "$product_dir/LICENSE-Botan.txt" "$stage_dir/LICENSE-Botan.txt"
 if [[ -f "$product_dir/README.txt" ]]; then
   cp "$product_dir/README.txt" "$stage_dir/PRODUCT-README.txt"
 fi
-printf 'PLATFORM=%s\nMODULE_NAME=%s\nOPENSSL_VERSION=%s\n' \
-  "$platform" "$module_name" "$OPENSSL_VERSION" > "$stage_dir/testkit.env"
+"$root_dir/scripts/portable/bundle-opensc-unix.sh" "$platform" "$stage_dir"
+opensc_version=$(sed -n '1p' "$stage_dir/OPENSC-VERSION.txt")
+printf 'PLATFORM=%s\nMODULE_NAME=%s\nOPENSSL_VERSION=%s\nOPENSC_VERSION=%s\n' \
+  "$platform" "$module_name" "$OPENSSL_VERSION" "$opensc_version" > "$stage_dir/testkit.env"
 {
   printf 'Platform: %s\n' "$platform"
   printf 'Built on fresh GitHub verification runner\n'
   printf 'Kernel: '; uname -a
   printf '\nC++ compiler:\n'; c++ --version 2>/dev/null || clang++ --version
   printf '\nBundled OpenSSL:\n'; "$stage_dir/bin/openssl" version -a
+  printf '\nBundled OpenSC pkcs11-tool version:\n%s\n' "$opensc_version"
   printf '\nClient binary:\n'; file "$stage_dir/bin/portable-token-e2e"
   printf '\nOpenSSL binary:\n'; file "$stage_dir/bin/openssl"
+  printf '\nOpenSC pkcs11-tool binary:\n'; file "$stage_dir/bin/pkcs11-tool"
 } > "$stage_dir/ENVIRONMENT.txt"
 
-chmod +x "$stage_dir/run-test.sh" "$stage_dir/bin/openssl" \
+chmod +x "$stage_dir/run-test.sh" "$stage_dir/bin/openssl" "$stage_dir/bin/pkcs11-tool" \
   "$stage_dir/bin/portable-token-e2e" "$stage_dir/scripts/"*.sh
 if [[ $(uname -s) == Darwin ]]; then
   if otool -L "$stage_dir/bin/openssl" | grep -Eq 'lib(ssl|crypto)'; then
     echo "test-kit OpenSSL unexpectedly depends on external OpenSSL libraries" >&2
     exit 1
   fi
+  if otool -L "$stage_dir/bin/pkcs11-tool" "$stage_dir/bin/opensc-lib/"* | \
+      grep -F '/Library/OpenSC/'; then
+    echo "test-kit pkcs11-tool unexpectedly depends on the installed OpenSC tree" >&2
+    exit 1
+  fi
+  lipo "$stage_dir/bin/pkcs11-tool" -verify_arch arm64 x86_64
 else
   if ldd "$stage_dir/bin/openssl" | grep -Eq 'lib(ssl|crypto)'; then
     echo "test-kit OpenSSL unexpectedly depends on external OpenSSL libraries" >&2
@@ -125,6 +135,10 @@ else
   fi
   if ldd "$stage_dir/bin/portable-token-e2e" | grep -Eq 'lib(stdc\+\+|gcc_s)'; then
     echo "test-kit client unexpectedly depends on C++ runtime libraries" >&2
+    exit 1
+  fi
+  if ldd "$stage_dir/bin/pkcs11-tool" | grep -F 'not found'; then
+    echo "test-kit pkcs11-tool has an unresolved dependency" >&2
     exit 1
   fi
 fi

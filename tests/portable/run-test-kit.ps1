@@ -86,6 +86,7 @@ Set-OptionalEnvironment "P11_TEST_OBJECT_ID_HEX" (Get-EffectiveSetting "P11_TEST
 
 $Client = (Resolve-Path (Join-Path $KitDir "bin/portable-token-e2e.exe")).Path
 $OpenSSL = (Resolve-Path (Join-Path $KitDir "bin/openssl.exe")).Path
+$Pkcs11Tool = (Resolve-Path (Join-Path $KitDir "bin/pkcs11-tool.exe")).Path
 $Module = if ($args.Count -eq 1) {
     (Resolve-Path -LiteralPath $args[0]).Path
 }
@@ -107,7 +108,19 @@ Write-Host "[TEST-KIT] initialize token=$Initialize"
 Write-Host "[TEST-KIT] excluded functions=$(if ($Excluded.Count) { $Excluded -join ',' } else { '<none>' })"
 Write-Host "[TEST-KIT] precompiled client=$Client"
 Write-Host "[TEST-KIT] bundled OpenSSL=$OpenSSL"
+Write-Host "[TEST-KIT] bundled OpenSC pkcs11-tool=$Pkcs11Tool"
 Write-Host "[TEST-KIT] all test evidence remains under=$(Join-Path $KitDir 'test-output')"
 
 & (Join-Path $KitDir "scripts/run-fresh-integration.ps1") $Module $OpenSSL $BundledMode
 if ($LASTEXITCODE -ne 0) { throw "downloadable test kit failed" }
+
+$OutputDir = Join-Path $KitDir "test-output"
+Write-Host "[OPENSC] checking C_Initialize and library information with pkcs11-tool -I"
+& $Pkcs11Tool --module $Module -I 2>&1 |
+    Tee-Object -FilePath (Join-Path $OutputDir "pkcs11-tool-I.log")
+if ($LASTEXITCODE -ne 0) { throw "pkcs11-tool -I failed with exit code $LASTEXITCODE" }
+Write-Host "[OPENSC] checking slots and token information with pkcs11-tool -T"
+& $Pkcs11Tool --module $Module -T 2>&1 |
+    Tee-Object -FilePath (Join-Path $OutputDir "pkcs11-tool-T.log")
+if ($LASTEXITCODE -ne 0) { throw "pkcs11-tool -T failed with exit code $LASTEXITCODE" }
+Write-Host "[OPENSC] PASS: packaged pkcs11-tool loaded the tested module"

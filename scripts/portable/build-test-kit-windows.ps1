@@ -91,13 +91,18 @@ $ProductReadme = Join-Path $ProductDir "README.txt"
 if (Test-Path -LiteralPath $ProductReadme -PathType Leaf) {
     Copy-Item -LiteralPath $ProductReadme -Destination (Join-Path $StageDir "PRODUCT-README.txt")
 }
+& (Join-Path $RootDir "scripts/portable/bundle-opensc-windows.ps1") `
+    -StageDir $StageDir -ExpectedMachinePattern $ExpectedMachinePattern
+$OpenSCVersion = (Get-Content -LiteralPath (Join-Path $StageDir "OPENSC-VERSION.txt") -First 1).Trim()
 @(
     "PLATFORM=$Platform",
     "MODULE_NAME=softhsm2.dll",
-    "OPENSSL_VERSION=$($env:OPENSSL_VERSION)"
+    "OPENSSL_VERSION=$($env:OPENSSL_VERSION)",
+    "OPENSC_VERSION=$OpenSCVersion"
 ) | Set-Content -Encoding ascii (Join-Path $StageDir "testkit.env")
 
 $OpenSSLExe = Join-Path $StageDir "bin/openssl.exe"
+$Pkcs11Tool = Join-Path $StageDir "bin/pkcs11-tool.exe"
 $Environment = @(
     "Platform: $Platform",
     "Built on fresh GitHub verification runner",
@@ -108,7 +113,10 @@ $Environment = @(
     ((& cmd.exe /d /c "cl 2>&1") -join "`n"),
     "",
     "Bundled OpenSSL:",
-    ((& $OpenSSLExe version -a 2>&1) -join "`n")
+    ((& $OpenSSLExe version -a 2>&1) -join "`n"),
+    "",
+    "Bundled OpenSC pkcs11-tool version:",
+    $OpenSCVersion
 )
 $Environment | Set-Content -Encoding utf8 (Join-Path $StageDir "ENVIRONMENT.txt")
 
@@ -123,6 +131,15 @@ foreach ($Binary in @($OpenSSLExe, $Client, (Join-Path $StageDir "softhsm2.dll")
     if ($Unexpected) {
         $Unexpected | Write-Error
         throw "$Binary has an unexpected non-system runtime dependency"
+    }
+}
+
+foreach ($Binary in @($Pkcs11Tool) + @(Get-ChildItem -LiteralPath (Join-Path $StageDir "bin") -Filter *.dll -File)) {
+    $Path = if ($Binary -is [IO.FileInfo]) { $Binary.FullName } else { [string]$Binary }
+    $MachineHeader = & dumpbin /headers $Path |
+        Select-String -Pattern $ExpectedMachinePattern
+    if (-not $MachineHeader) {
+        throw "$Path does not have the expected $($env:PORTABLE_ARCH) PE machine type"
     }
 }
 

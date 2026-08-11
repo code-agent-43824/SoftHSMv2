@@ -9,6 +9,7 @@ The kit contains:
 - the matching portable SoftHSM module;
 - a precompiled dependency-light C++ PKCS #11 client;
 - a pinned, statically linked OpenSSL CLI used as the independent reference;
+- a prebuilt OpenSC pkcs11-tool plus its non-system runtime dependencies;
 - shell or PowerShell launchers;
 - the C++ source and PKCS #11 headers for audit/rebuilding;
 - the exact environment/tool versions in ENVIRONMENT.txt;
@@ -45,7 +46,24 @@ Windows:
   run-test.cmd
   run-test.cmd C:\path\to\alternative\softhsm2.dll
 
-No compiler, SDK, Java, Botan, or separately installed OpenSSL is required at
-runtime. Normal operating-system libraries are still required.
+After the complete test, the launcher runs the packaged pkcs11-tool with -I
+and -T against the selected module. Their output is saved under test-output.
+The same tool can be used manually without installing OpenSC:
+
+Linux:
+  bin/pkcs11-tool --module ./libsofthsm2.so -I
+  bin/pkcs11-tool --module ./libsofthsm2.so -T
+
+macOS:
+  bin/pkcs11-tool --module ./libsofthsm2.dylib -I
+  bin/pkcs11-tool --module ./libsofthsm2.dylib -T
+
+Windows:
+  bin\pkcs11-tool.exe --module .\softhsm2.dll -I
+  bin\pkcs11-tool.exe --module .\softhsm2.dll -T
+
+No compiler, SDK, Java, Botan, separately installed OpenSSL, or separately
+installed OpenSC is required at runtime. Normal operating-system libraries are
+still required.
 The shell launcher restores executable permissions if the ZIP extractor did
 not preserve them.

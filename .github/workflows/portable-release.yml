@@ -6,7 +6,7 @@ on:
       release_tag:
         description: Release tag to create or update
         required: true
-        default: v2.7.0-portable.22
+        default: v2.7.0-portable.23
 
 permissions:
   contents: read
@@ -16,6 +16,11 @@ env:
   OPENSSL_SHA256: a8c0d28a529ca480f9f36cf5792e2cd21984552a3c8e4aa11a24aa31aeac98e8
   BOTAN_VERSION: 2.19.5
   BOTAN_SHA256: dfeea0e0a6f26d6724c4af01da9a7b88487adb2d81ba7c72fcaf52db522c9ad4
+  OPENSC_VERSION: 0.27.1
+  OPENSC_MACOS_SHA256: 61c2c7b9329a65e43a34151016530d54859561d8fbbe7a723911119abf0ccd7f
+  OPENSC_WINDOWS_X86_SHA256: e3cc46e14bc3c49054f974928440f748039d142855690766e997f2567c461bce
+  OPENSC_WINDOWS_X64_SHA256: 2df6fb9078c5a6fc97d221f111158cb3f887e1e3c2dbb6892f58455a7015b5b8
+  OPENSC_WINDOWS_ARM64_SHA256: cbf5a60d9e9195cb51d3b48dfed4441eff3b158d067196c88f1568c038f6d716
 
 jobs:
   build-linux-x64:
@@ -161,7 +166,7 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential ca-certificates curl file perl unzip zip
+            build-essential ca-certificates curl file opensc patchelf perl unzip zip
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
@@ -183,6 +188,10 @@ jobs:
           test ! -e "$RUNNER_TEMP/packaged-testkit/softhsm.conf"
           bash "$RUNNER_TEMP/packaged-testkit/run-test.sh" 2>&1 | \
             tee "$RUNNER_TEMP/default-test.log"
+          grep -F '[OPENSC] PASS: packaged pkcs11-tool loaded the tested module' \
+            "$RUNNER_TEMP/default-test.log"
+          test -s "$RUNNER_TEMP/packaged-testkit/test-output/pkcs11-tool-I.log"
+          test -s "$RUNNER_TEMP/packaged-testkit/test-output/pkcs11-tool-T.log"
           grep -F '[SCENARIO] BEGIN GOST:' "$RUNNER_TEMP/default-test.log"
           grep -F '[SCENARIO] END GOST:' "$RUNNER_TEMP/default-test.log"
           grep -F '[IMPORT] GOST exportable generation' "$RUNNER_TEMP/default-test.log"
@@ -319,7 +328,7 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential ca-certificates curl file perl unzip zip
+            build-essential ca-certificates curl file opensc patchelf perl unzip zip
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
@@ -621,6 +630,16 @@ jobs:
               echo "nested ZIP found in $archive" >&2
               exit 1
             fi
+            case "$(basename "$archive")" in
+              softhsm-testkit-windows-*.zip)
+                zipinfo -1 "$archive" | grep -Fx 'bin/pkcs11-tool.exe' >/dev/null
+                zipinfo -1 "$archive" | grep -Fx 'LICENSE-OpenSC.txt' >/dev/null
+                ;;
+              softhsm-testkit-*.zip)
+                zipinfo -1 "$archive" | grep -Fx 'bin/pkcs11-tool' >/dev/null
+                zipinfo -1 "$archive" | grep -Fx 'LICENSE-OpenSC.txt' >/dev/null
+                ;;
+            esac
           done
       - name: Publish GitHub Release
         env:
@@ -633,5 +652,5 @@ jobs:
             gh release create "$RELEASE_TAG" release-assets/* \
               --target "$GITHUB_SHA" \
               --title "SoftHSM portable $RELEASE_TAG" \
-              --notes "Portable, installer-free PKCS #11 modules and independently downloadable self-contained test kits for Linux x64/ARM64, Windows x86/x64/ARM64, and macOS universal. Every portable module copy uses exactly one per-user configuration and store: ~/softhsm/softhsm.conf and ~/softhsm/tokens (under %USERPROFILE% on Windows). The module creates them on first use and deliberately ignores SOFTHSM2_CONF, adjacent files, working-directory files, and system configuration paths. Test-kit launchers load modules in place and retain all scenario evidence under test-output inside the extracted kit; they do not copy files into temporary directories. AUTO initializes the selected SoftHSM token and user PIN only when the canonical store is empty, for both bundled and explicitly supplied modules; later runs reuse it and replace only the configured test IDs. The complete GOST/RSA/CSR/certificate/CMS test then reloads the module and proves the resulting persistent objects are usable without C_InitToken, C_InitPIN, or C_SetPIN. FAKE_RUTOKEN_ECP changes only the external Rutoken ECP 2.19 presentation and does not alter the object store or cryptographic semantics. All six platform builds are verified on separate fresh runners."
+              --notes "Portable, installer-free PKCS #11 modules and independently downloadable self-contained test kits for Linux x64/ARM64, Windows x86/x64/ARM64, and macOS universal. Every portable module copy uses exactly one per-user configuration and store: ~/softhsm/softhsm.conf and ~/softhsm/tokens (under %USERPROFILE% on Windows). The module creates them on first use and deliberately ignores SOFTHSM2_CONF, adjacent files, working-directory files, and system configuration paths. Test-kit launchers load modules in place and retain all scenario evidence under test-output inside the extracted kit; they do not copy files into temporary directories. AUTO initializes the selected SoftHSM token and user PIN only when the canonical store is empty, for both bundled and explicitly supplied modules; later runs reuse it and replace only the configured test IDs. The complete GOST/RSA/CSR/certificate/CMS test then reloads the module and proves the resulting persistent objects are usable without C_InitToken, C_InitPIN, or C_SetPIN. Every test kit also contains a ready-to-run OpenSC pkcs11-tool and its non-system dependencies; the launcher finishes by requiring pkcs11-tool -I and -T to load the selected module, without a separate OpenSC installation. FAKE_RUTOKEN_ECP changes only the external Rutoken ECP 2.19 presentation and does not alter the object store or cryptographic semantics. All six platform builds are verified on separate fresh runners."
           fi

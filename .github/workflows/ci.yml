@@ -6,236 +6,35 @@ on:
       - main
   pull_request:
 
+env:
+  OPENSSL_VERSION: 3.5.7
+  OPENSSL_SHA256: a8c0d28a529ca480f9f36cf5792e2cd21984552a3c8e4aa11a24aa31aeac98e8
+  BOTAN_VERSION: 2.19.5
+  BOTAN_SHA256: dfeea0e0a6f26d6724c4af01da9a7b88487adb2d81ba7c72fcaf52db522c9ad4
+
 jobs:
-  linux_botan:
-    name: Linux with Botan
+  portable-dependency-baseline:
+    name: Portable baseline (OpenSSL 3.5.7 + Botan 2.19.5)
     runs-on: ubuntu-24.04
+    container: ubuntu:20.04
     steps:
-      - uses: actions/checkout@v6
-      - name: Prepare
+      - name: Install build tools
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y libcppunit-dev libbotan-2-dev p11-kit
-      - name: Build
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential ca-certificates cmake curl file perl pkg-config python3 unzip xz-utils zip
+      - uses: actions/checkout@v7
+      - name: Build the dependency combination used by portable releases
         env:
-          CXXFLAGS: -Werror -DBOTAN_NO_DEPRECATED_WARNINGS
+          PORTABLE_ARCH: x64
+        run: scripts/portable/build-linux.sh
+      - name: Verify portable product archive
         run: |
-          ./autogen.sh
-          ./configure --with-crypto-backend=botan
-          make
-      - name: Test
-        run: |
-          make check || (find . -name test-suite.log -exec cat {} \; && false)
-
-  linux_ossl_1:
-    name: Linux with OpenSSL 1.1.1
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v6
-      - name: Prepare
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y libcppunit-dev p11-kit
-          # Replace installed OpenSSL with the supported version 1.1.1
-          curl -O http://security.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2.24_amd64.deb
-          curl -O http://security.ubuntu.com/ubuntu/pool/main/o/openssl/libssl-dev_1.1.1f-1ubuntu2.24_amd64.deb
-          curl -O http://security.ubuntu.com/ubuntu/pool/main/o/openssl/openssl_1.1.1f-1ubuntu2.24_amd64.deb
-          sudo dpkg -i --force-confnew openssl_1.1.1f-1ubuntu2.24_amd64.deb \
-                                       libssl1.1_1.1.1f-1ubuntu2.24_amd64.deb \
-                                       libssl-dev_1.1.1f-1ubuntu2.24_amd64.deb
-      - name: Build
-        env:
-          CXXFLAGS: -Werror
-        run: |
-          ./autogen.sh
-          ./configure --with-crypto-backend=openssl
-          make
-      - name: Test
-        run: |
-          make check || (find . -name test-suite.log -exec cat {} \; && false)
-
-  linux_ossl_30:
-    name: Linux with OpenSSL 3.0
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v6
-      - name: Prepare
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y libcppunit-dev libssl-dev p11-kit
-      - name: Build
-        # Once all OpenSSL deprecations fixed, uncomment this
-        # env:
-        #   CXXFLAGS: -Werror
-        run: |
-          ./autogen.sh
-          ./configure --with-crypto-backend=openssl
-          make
-      - name: Test
-        run: |
-          make check || (find . -name test-suite.log -exec cat {} \; && false)
-
-  linux_ossl_source:
-    name: Linux with OpenSSL ${{ matrix.version }}
-    runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - version: "3.5.7"
-            sha256: "a8c0d28a529ca480f9f36cf5792e2cd21984552a3c8e4aa11a24aa31aeac98e8"
-            dir: /usr/local/openssl-3.5
-          - version: "4.0.1"
-            sha256: "2db3f3a0d6ea4b59e1f094ace2c8cd536dffb87cdc39084c5afa1e6f7f37dd09"
-            dir: /usr/local/openssl-4.0
-    steps:
-      - uses: actions/checkout@v6
-      - name: Prepare
-        env:
-          OPENSSL_VERSION: ${{ matrix.version }}
-          OPENSSL_SHA256: ${{ matrix.sha256 }}
-          OPENSSL_INSTALL_DIR: ${{ matrix.dir }}
-          LDFLAGS: "-Wl,-rpath,${{ matrix.dir }}/lib64 -L${{ matrix.dir }}/lib64"
-          PKG_CONFIG_PATH: "${{ matrix.dir }}/lib64/pkgconfig"
-        run: |
-          set -x
-          sudo apt-get update -qq
-          sudo apt-get install -y libcppunit-dev p11-kit build-essential checkinstall zlib1g-dev sudo autoconf libtool git
-          # Install OpenSSL from source
-          curl -L -O https://github.com/openssl/openssl/releases/download/openssl-${{ env.OPENSSL_VERSION }}/openssl-${{ env.OPENSSL_VERSION }}.tar.gz
-          echo "${OPENSSL_SHA256}  openssl-${{ env.OPENSSL_VERSION }}.tar.gz" | sha256sum -c -
-          tar -xf openssl-${{ env.OPENSSL_VERSION }}.tar.gz
-          cd openssl-${{ env.OPENSSL_VERSION }}
-          ./config shared zlib no-ssl3 no-weak-ssl-ciphers --prefix=${{ env.OPENSSL_INSTALL_DIR }} --openssldir=${{ env.OPENSSL_INSTALL_DIR }}
-          make -j$(nproc) > build.log
-          sudo make install_sw > install.log
-          cd ${{ env.OPENSSL_INSTALL_DIR }}
-          sudo ln -sf lib64 lib
-      - name: Build
-        env:
-          # Once all OpenSSL deprecations fixed, uncomment this
-          #   CXXFLAGS: -Werror
-          OPENSSL_INSTALL_DIR: ${{ matrix.dir }}
-          LDFLAGS: "-Wl,-rpath,${{ matrix.dir }}/lib64 -L${{ matrix.dir }}/lib64"
-          PKG_CONFIG_PATH: "${{ matrix.dir }}/lib64/pkgconfig"
-        run: |
-          set -x
-          ./autogen.sh
-          ./configure --with-crypto-backend=openssl --with-openssl=${{ env.OPENSSL_INSTALL_DIR }}
-          make -j$(nproc)
-      - name: Test
-        run: |
-          make check || (find . -name test-suite.log -exec cat {} \; && false)
-
-  macos:
-    name: macOS (${{ matrix.backend }})
-    runs-on: macos-14
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - backend: openssl
-            extra-options: --with-openssl=$(brew --prefix openssl@1.1)
-          - backend: botan
-            extra-options: --with-botan=$(brew --prefix botan@2)
-    steps:
-      - uses: actions/checkout@v6
-      - name: Prepare
-        run: |
-          brew install automake libtool cppunit botan@2
-      - name: Build
-        env:
-          CXXFLAGS: -Werror -DBOTAN_NO_DEPRECATED_WARNINGS
-        run: |
-          ./autogen.sh
-          ./configure --with-crypto-backend=${{ matrix.backend }} ${{ matrix.extra-options }}
-          make
-      - name: Test
-        run: |
-          make check || (find . -name test-suite.log -exec cat {} \; && false)
-
-  windows:
-    name: Windows (${{ matrix.arch }}, ${{ matrix.backend }}, OpenSSL ${{ matrix.ossl-version }})
-    runs-on: windows-2022
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # OpenSSL 1.1.1n variants (+ Botan 2.19.3)
-          - arch: x64
-            backend: openssl
-            target-platform: x64
-            ossl-version: "1.1.1n"
-            botan-version: ""
-            build-options: ""
-          - arch: x64
-            backend: botan
-            target-platform: x64
-            ossl-version: "1.1.1n"
-            botan-version: "2.19.3"
-            build-options: "-DENABLE_ECC=OFF -DENABLE_EDDSA=OFF"
-          - arch: x86
-            backend: openssl
-            target-platform: Win32
-            ossl-version: "1.1.1n"
-            botan-version: ""
-            build-options: "-DENABLE_ECC=OFF -DENABLE_EDDSA=OFF"
-          # OpenSSL 3.4.1
-          - arch: x64
-            backend: openssl
-            target-platform: x64
-            ossl-version: "3.4.1"
-            botan-version: ""
-            build-options: ""
-          - arch: x86
-            backend: openssl
-            target-platform: Win32
-            ossl-version: "3.4.1"
-            botan-version: ""
-            build-options: "-DENABLE_ECC=OFF -DENABLE_EDDSA=OFF"
-          # OpenSSL 3.5.4 + ML-DSA (x64 only — 32-bit runner limitation)
-          - arch: x64
-            backend: openssl
-            target-platform: x64
-            ossl-version: "3.5.4"
-            botan-version: ""
-            build-options: "-DENABLE_MLDSA=ON -DENABLE_MLKEM=ON"
-            mldsa-test: "true"
-            mlkem-test: "true"
-    steps:
-      - uses: actions/checkout@v6
-      - uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: ${{ matrix.arch }}
-      - name: Create vcpkg.json
-        shell: pwsh
-        run: |
-          $deps = @("openssl", "cppunit")
-          $overrides = @(@{ name = "openssl"; "version-string" = "${{ matrix.ossl-version }}" })
-          if ("${{ matrix.backend }}" -eq "botan") {
-            $deps += "botan"
-            $overrides += @{ name = "botan"; "version-string" = "${{ matrix.botan-version }}" }
-          }
-          [ordered]@{
-            dependencies     = $deps
-            overrides        = $overrides
-            "builtin-baseline" = "38d1652f152d36481f2f4e8a85c0f1e14f3769f7"
-          } | ConvertTo-Json -Depth 5 | Out-File vcpkg.json -Encoding utf8
-      - uses: seanmiddleditch/vcpkg-action@master
-        id: vcpkg
-        with:
-          manifest-dir: ${{ github.workspace }}
-          triplet: ${{ matrix.arch }}-windows
-          token: ${{ github.token }}
-      - name: Build
-        run: |
-          mkdir build
-          cmake -B build ${{ steps.vcpkg.outputs.vcpkg-cmake-config }} -A ${{ matrix.target-platform }} -DWITH_CRYPTO_BACKEND=${{ matrix.backend }} ${{ matrix.build-options }} -DDISABLE_NON_PAGED_MEMORY=ON -DBUILD_TESTS=ON
-          cmake --build build
-      - name: Test
-        env:
-          CTEST_OUTPUT_ON_FAILURE: 1
-          MLDSA_TEST: ${{ matrix.mldsa-test || '' }}
-          MLKEM_TEST: ${{ matrix.mlkem-test || '' }}
-        run: |
-          cmake --build build --target RUN_TESTS
+          unzip -q dist/softhsm-portable-linux-x64.zip -d portable-product
+          test -f portable-product/libsofthsm2.so
+          file portable-product/libsofthsm2.so
+          ldd portable-product/libsofthsm2.so
+          if ldd portable-product/libsofthsm2.so | grep -Eq 'lib(ssl|crypto|botan)'; then
+            echo 'portable module unexpectedly depends on external crypto libraries' >&2
+            exit 1
+          fi
