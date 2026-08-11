@@ -23,12 +23,11 @@ extracted test-kit directory. Portable SoftHSM copies always use
 ~/softhsm/softhsm.conf and ~/softhsm/tokens (under %USERPROFILE% on Windows).
 
 Edit testkit.conf to select token handling and PINs. INITIALIZE_TOKEN=AUTO
-initializes the bundled SoftHSM when its canonical token store is empty, leaving
+initializes the selected SoftHSM when its canonical token store is empty,
+whether the bundled module or an explicitly supplied module is used. It leaves
 a fully initialized token with a working user PIN and persistent test objects.
 Later runs reuse the token and replace only objects with the configured test
-IDs. An explicitly
-supplied library always uses existing-token mode under AUTO. YES enables
-destructive C_InitToken and C_InitPIN. NO disables them and automatically blocks
+IDs. YES enables destructive C_InitToken and C_InitPIN. NO disables them and automatically blocks
 C_InitToken, C_InitPIN, and C_SetPIN before invocation. EXCLUDED_FUNCTIONS can
 block additional C_* entry points. USER_PIN and SO_PIN are stored as plain text
 in this local file, so do not publish a customized copy containing real secrets.

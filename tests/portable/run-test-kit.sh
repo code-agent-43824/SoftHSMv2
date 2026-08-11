@@ -50,7 +50,7 @@ initialize_setting=$(printf '%s' "$initialize_setting" | tr '[:lower:]' '[:upper
 case "$initialize_setting" in
   AUTO)
     token_dir=$(dirname "$user_config")/tokens
-    if [[ $# -eq 0 ]] && ! find "$token_dir" -mindepth 1 -maxdepth 1 -type d -print -quit 2>/dev/null | grep -q .; then
+    if ! find "$token_dir" -mindepth 1 -maxdepth 1 -type d -print -quit 2>/dev/null | grep -q .; then
       initialize=YES
     else
       initialize=NO

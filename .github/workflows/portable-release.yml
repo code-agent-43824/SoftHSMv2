@@ -6,7 +6,7 @@ on:
       release_tag:
         description: Release tag to create or update
         required: true
-        default: v2.7.0-portable.21
+        default: v2.7.0-portable.22
 
 permissions:
   contents: read
@@ -216,10 +216,23 @@ jobs:
             exit 1
           fi
           unzip -q dist/softhsm-testkit-linux-x64.zip -d artifact-testkit
-      - name: Verify safe alternate-library defaults and exclusion gate
+      - name: Verify alternate-library first run, reuse, and exclusion gate
         run: |
-          export HOME="$RUNNER_TEMP/softhsm-user-home"
           kit="$RUNNER_TEMP/packaged-testkit"
+          external_first_home="$RUNNER_TEMP/softhsm-external-first-home"
+          mkdir -p "$external_first_home"
+          HOME="$external_first_home" bash "$kit/run-test.sh" \
+            "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so" \
+            > "$RUNNER_TEMP/external-first.log" 2>&1
+          grep -F '[TEST-KIT] initialize token=YES' "$RUNNER_TEMP/external-first.log"
+          grep -F '[READY] fresh module load logged in without C_InitToken/C_InitPIN/C_SetPIN' \
+            "$RUNNER_TEMP/external-first.log"
+          grep -F '[SCRIPT] PASS: standard direct PKCS #11 and external OpenSSL integration test completed' \
+            "$RUNNER_TEMP/external-first.log"
+          test -f "$external_first_home/softhsm/softhsm.conf"
+          test -d "$external_first_home/softhsm/tokens"
+          test ! -e "$GITHUB_WORKSPACE/downloaded/tokens"
+          export HOME="$RUNNER_TEMP/softhsm-user-home"
           bash "$kit/run-test.sh" "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so" \
             > "$RUNNER_TEMP/safe-alternate.log" 2>&1
           grep -F '[TEST-KIT] initialize token=NO' "$RUNNER_TEMP/safe-alternate.log"
@@ -620,5 +633,5 @@ jobs:
             gh release create "$RELEASE_TAG" release-assets/* \
               --target "$GITHUB_SHA" \
               --title "SoftHSM portable $RELEASE_TAG" \
-              --notes "Portable, installer-free PKCS #11 modules and independently downloadable self-contained test kits for Linux x64/ARM64, Windows x86/x64/ARM64, and macOS universal. Every portable module copy uses exactly one per-user configuration and store: ~/softhsm/softhsm.conf and ~/softhsm/tokens (under %USERPROFILE% on Windows). The module creates them on first use and deliberately ignores SOFTHSM2_CONF, adjacent files, working-directory files, and system configuration paths. Test-kit launchers load modules in place and retain all scenario evidence under test-output inside the extracted kit; they do not copy files into temporary directories. AUTO initializes the bundled token and user PIN only when the canonical store is empty; later runs reuse it and replace only the configured test IDs. The complete GOST/RSA/CSR/certificate/CMS test then reloads the module and proves the resulting persistent objects are usable without C_InitToken, C_InitPIN, or C_SetPIN. FAKE_RUTOKEN_ECP changes only the external Rutoken ECP 2.19 presentation and does not alter the object store or cryptographic semantics. All six platform builds are verified on separate fresh runners."
+              --notes "Portable, installer-free PKCS #11 modules and independently downloadable self-contained test kits for Linux x64/ARM64, Windows x86/x64/ARM64, and macOS universal. Every portable module copy uses exactly one per-user configuration and store: ~/softhsm/softhsm.conf and ~/softhsm/tokens (under %USERPROFILE% on Windows). The module creates them on first use and deliberately ignores SOFTHSM2_CONF, adjacent files, working-directory files, and system configuration paths. Test-kit launchers load modules in place and retain all scenario evidence under test-output inside the extracted kit; they do not copy files into temporary directories. AUTO initializes the selected SoftHSM token and user PIN only when the canonical store is empty, for both bundled and explicitly supplied modules; later runs reuse it and replace only the configured test IDs. The complete GOST/RSA/CSR/certificate/CMS test then reloads the module and proves the resulting persistent objects are usable without C_InitToken, C_InitPIN, or C_SetPIN. FAKE_RUTOKEN_ECP changes only the external Rutoken ECP 2.19 presentation and does not alter the object store or cryptographic semantics. All six platform builds are verified on separate fresh runners."
           fi

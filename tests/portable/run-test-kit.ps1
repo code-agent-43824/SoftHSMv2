@@ -49,7 +49,7 @@ switch ($InitializeSetting) {
         if (Test-Path -LiteralPath $TokenDirectory -PathType Container) {
             $StoredTokenCount = @(Get-ChildItem -LiteralPath $TokenDirectory -Directory -Force -ErrorAction Stop).Count
         }
-        $Initialize = if ($args.Count -eq 0 -and $StoredTokenCount -eq 0) {
+        $Initialize = if ($StoredTokenCount -eq 0) {
             "YES"
         }
         else { "NO" }
