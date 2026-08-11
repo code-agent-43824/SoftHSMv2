@@ -28,6 +28,31 @@ application's working directory.
 SOFTHSM2_CONF remains an explicit highest-priority override when a custom
 location is needed.
 
+Rutoken ECP compatibility profile
+---------------------------------
+
+Set the following in the standard user configuration and restart the process
+which loads the PKCS #11 module:
+
+  FAKE_RUTOKEN_ECP = true
+
+The module then reports the Rutoken ECP 2.19 library identity, a 15-slot reader
+topology with the token in slot 0, Aktiv/Rutoken token metadata, hardware and
+firmware versions, a stable eight-hex-digit device-style serial number, and the
+6..249 PIN range. Session operations addressed to facade slot 0 are routed to
+the stored SoftHSM token without exposing its internal slot ID. Generated
+private keys must be sensitive and non-extractable, and GOST private-key import
+is rejected, matching the tested physical-device restrictions.
+
+The mechanism list is deliberately the working intersection between the
+Rutoken reference list and mechanisms actually implemented by this portable
+build, in reference order and with Rutoken-like flags and limits. Unsupported
+physical-device mechanisms are not falsely advertised. This mode is intended
+for application compatibility tests; it does not turn software cryptography
+into certified hardware and cannot emulate USB insertion, firmware defects,
+timing, or every vendor extension. Set the option to false for normal SoftHSM
+identity and behavior.
+
 The module statically includes OpenSSL and minimized Botan Streebog and GOST
 34.10 components. Linux and Windows builds also statically include their C/C++ runtime;
 macOS uses the operating system's libc++. There are no non-system runtime

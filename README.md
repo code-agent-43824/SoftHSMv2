@@ -76,6 +76,11 @@ configuration and token store. The locations are
 not beside the module. Relative token paths are resolved from the active
 configuration file, so the application's working directory does not matter.
 
+The portable build also has an opt-in `FAKE_RUTOKEN_ECP = true` compatibility
+profile. It exposes Rutoken ECP library/slot/token metadata and private-key
+policy while advertising only the Rutoken mechanisms that the build actually
+implements. See `packaging/portable/README.txt` for the exact scope.
+
 Portable builds statically include OpenSSL. Linux and Windows also statically
 include their C/C++ runtime; macOS uses the system libc++. The `SOFTHSM2_CONF`
 environment variable remains available as an explicit highest-priority override. See

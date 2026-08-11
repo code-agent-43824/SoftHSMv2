@@ -97,7 +97,8 @@ static const char DEFAULT_USER_CONFIGURATION[] =
 	"log.level = ERROR\n"
 	"slots.removable = false\n"
 	"slots.mechanisms = ALL\n"
-	"library.reset_on_fork = false\n";
+	"library.reset_on_fork = false\n"
+	"FAKE_RUTOKEN_ECP = false\n";
 
 namespace
 {

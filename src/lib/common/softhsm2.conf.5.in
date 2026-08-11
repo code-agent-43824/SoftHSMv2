@@ -76,6 +76,23 @@ slots.removable = true
 .fi
 .RE
 .LP
+.SH FAKE_RUTOKEN_ECP
+If set to true, expose a Rutoken ECP compatibility profile for testing
+applications which identify and select that device family. The profile changes
+the library, slot and token information; exposes slots 0 through 14 with the
+token in slot 0; applies Rutoken-like version, serial-number and PIN metadata;
+and presents the implemented intersection of mechanisms in Rutoken order with
+Rutoken-like mechanism flags and limits. It also rejects exportable generated
+private keys and GOST private-key imports. Mechanisms which are reported by a
+physical Rutoken but not implemented by this build are not advertised. Default
+is false.
+.LP
+.RS
+.nf
+FAKE_RUTOKEN_ECP = true
+.fi
+.RE
+.LP
 .SH SLOTS.MECHANISMS
 Allows to enable and disable any of the PKCS#11 mechanisms reported in the
 C_GetMechanismList().

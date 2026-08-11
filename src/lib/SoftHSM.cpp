@@ -88,6 +88,8 @@
 #include "HandleManager.h"
 #include "P11Objects.h"
 #include "odd.h"
+#include <algorithm>
+#include <cstdio>
 
 #if defined(WITH_OPENSSL)
 #include "OSSLCryptoFactory.h"
@@ -336,6 +338,21 @@ static CK_RV extractObjectInformation(CK_ATTRIBUTE_PTR pTemplate,
 	return CKR_OK;
 }
 
+static bool getBooleanTemplateValue(CK_ATTRIBUTE_PTR pTemplate, CK_ULONG ulCount,
+	CK_ATTRIBUTE_TYPE type, CK_BBOOL& value)
+{
+	for (CK_ULONG i = 0; i < ulCount; ++i)
+	{
+		if (pTemplate[i].type == type && pTemplate[i].pValue != NULL_PTR &&
+			pTemplate[i].ulValueLen == sizeof(CK_BBOOL))
+		{
+			memcpy(&value, pTemplate[i].pValue, sizeof(value));
+			return true;
+		}
+	}
+	return false;
+}
+
 static CK_RV checkKeyLength(CK_KEY_TYPE keyType, size_t byteLen)
 {
 	switch (keyType) {
@@ -447,6 +464,7 @@ SoftHSM::SoftHSM()
 {
 	isInitialised = false;
 	isRemovable = false;
+	fakeRutokenECP = false;
 	sessionObjectStore = NULL;
 	objectStore = NULL;
 	slotManager = NULL;
@@ -601,6 +619,8 @@ CK_RV SoftHSM::C_Initialize(CK_VOID_PTR pInitArgs)
 		return CKR_GENERAL_ERROR;
 	}
 
+	fakeRutokenECP = Configuration::i()->getBool("FAKE_RUTOKEN_ECP", false);
+
 	// Configure the log level
 	if (!setLogLevel(Configuration::i()->getString("log.level", DEFAULT_LOG_LEVEL)))
 	{
@@ -640,6 +660,7 @@ CK_RV SoftHSM::C_Initialize(CK_VOID_PTR pInitArgs)
 
 	// Load the enabled list of algorithms
 	prepareSupportedMechanisms(mechanisms_table);
+	if (fakeRutokenECP) prepareFakeRutokenMechanisms();
 
 	isRemovable = Configuration::i()->getBool("slots.removable", false);
 
@@ -709,6 +730,17 @@ CK_RV SoftHSM::C_GetInfo(CK_INFO_PTR pInfo)
 #endif
 	pInfo->libraryVersion.major = VERSION_MAJOR;
 	pInfo->libraryVersion.minor = VERSION_MINOR;
+	if (fakeRutokenECP)
+	{
+		pInfo->cryptokiVersion.major = 2;
+		pInfo->cryptokiVersion.minor = 40;
+		memset(pInfo->manufacturerID, ' ', sizeof(pInfo->manufacturerID));
+		memcpy(pInfo->manufacturerID, "Aktiv Co.", 9);
+		memset(pInfo->libraryDescription, ' ', sizeof(pInfo->libraryDescription));
+		memcpy(pInfo->libraryDescription, "Rutoken ECP PKCS #11 library", 28);
+		pInfo->libraryVersion.major = 2;
+		pInfo->libraryVersion.minor = 19;
+	}
 
 	return CKR_OK;
 }
@@ -717,6 +749,16 @@ CK_RV SoftHSM::C_GetInfo(CK_INFO_PTR pInfo)
 CK_RV SoftHSM::C_GetSlotList(CK_BBOOL tokenPresent, CK_SLOT_ID_PTR pSlotList, CK_ULONG_PTR pulCount)
 {
 	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;
+	if (fakeRutokenECP)
+	{
+		if (pulCount == NULL_PTR) return CKR_ARGUMENTS_BAD;
+		const CK_ULONG count = tokenPresent == CK_TRUE ? 1 : 15;
+		if (pSlotList == NULL_PTR) { *pulCount = count; return CKR_OK; }
+		if (*pulCount < count) { *pulCount = count; return CKR_BUFFER_TOO_SMALL; }
+		for (CK_ULONG i = 0; i < count; ++i) pSlotList[i] = i;
+		*pulCount = count;
+		return CKR_OK;
+	}
 
 	return slotManager->getSlotList(objectStore, tokenPresent, pSlotList, pulCount);
 }
@@ -726,6 +768,25 @@ CK_RV SoftHSM::C_GetSlotInfo(CK_SLOT_ID slotID, CK_SLOT_INFO_PTR pInfo)
 {
 	CK_RV rv;
 	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;
+	if (fakeRutokenECP)
+	{
+		if (slotID >= 15) return CKR_SLOT_ID_INVALID;
+		if (pInfo == NULL_PTR) return CKR_ARGUMENTS_BAD;
+		memset(pInfo->slotDescription, ' ', sizeof(pInfo->slotDescription));
+		memset(pInfo->manufacturerID, ' ', sizeof(pInfo->manufacturerID));
+		if (slotID == 0)
+		{
+			memcpy(pInfo->slotDescription, "Aktiv Rutoken ECP 0", 19);
+			memcpy(pInfo->manufacturerID, "Aktiv Co.", 9);
+		}
+		pInfo->flags = CKF_HW_SLOT | CKF_REMOVABLE_DEVICE;
+		if (slotID == 0) pInfo->flags |= CKF_TOKEN_PRESENT;
+		pInfo->hardwareVersion.major = 67;
+		pInfo->hardwareVersion.minor = 4;
+		pInfo->firmwareVersion.major = 34;
+		pInfo->firmwareVersion.minor = 2;
+		return CKR_OK;
+	}
 
 	Slot* slot = slotManager->getSlot(slotID);
 	if (slot == NULL)
@@ -749,8 +810,12 @@ CK_RV SoftHSM::C_GetSlotInfo(CK_SLOT_ID slotID, CK_SLOT_INFO_PTR pInfo)
 CK_RV SoftHSM::C_GetTokenInfo(CK_SLOT_ID slotID, CK_TOKEN_INFO_PTR pInfo)
 {
 	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;
+	if (fakeRutokenECP && slotID != 0)
+	{
+		return slotID < 15 ? CKR_TOKEN_NOT_PRESENT : CKR_SLOT_ID_INVALID;
+	}
 
-	Slot* slot = slotManager->getSlot(slotID);
+	Slot* slot = fakeRutokenECP ? fakeRutokenSlot(slotID) : slotManager->getSlot(slotID);
 	if (slot == NULL)
 	{
 		return CKR_SLOT_ID_INVALID;
@@ -762,7 +827,40 @@ CK_RV SoftHSM::C_GetTokenInfo(CK_SLOT_ID slotID, CK_TOKEN_INFO_PTR pInfo)
 		return CKR_TOKEN_NOT_PRESENT;
 	}
 
-	return token->getTokenInfo(pInfo);
+	CK_RV rv = token->getTokenInfo(pInfo);
+	if (rv != CKR_OK || !fakeRutokenECP) return rv;
+
+	unsigned int serial = 2166136261U;
+	for (size_t i = 0; i < sizeof(pInfo->serialNumber); ++i)
+	{
+		serial ^= static_cast<unsigned char>(pInfo->serialNumber[i]);
+		serial *= 16777619U;
+	}
+	serial = (serial & 0x6fffffffU) | 0x10000000U;
+	char serialText[9];
+	snprintf(serialText, sizeof(serialText), "%08x", serial);
+
+	const CK_FLAGS stateFlags = pInfo->flags &
+		(CKF_TOKEN_INITIALIZED | CKF_USER_PIN_INITIALIZED |
+		 CKF_USER_PIN_COUNT_LOW | CKF_USER_PIN_FINAL_TRY | CKF_USER_PIN_LOCKED |
+		 CKF_SO_PIN_COUNT_LOW | CKF_SO_PIN_FINAL_TRY | CKF_SO_PIN_LOCKED);
+	memset(pInfo->label, ' ', sizeof(pInfo->label));
+	memcpy(pInfo->label, "Rutoken ECP <no label>", 22);
+	memset(pInfo->manufacturerID, ' ', sizeof(pInfo->manufacturerID));
+	memcpy(pInfo->manufacturerID, "Aktiv Co.", 9);
+	memset(pInfo->model, ' ', sizeof(pInfo->model));
+	memcpy(pInfo->model, "Rutoken ECP", 11);
+	memset(pInfo->serialNumber, ' ', sizeof(pInfo->serialNumber));
+	memcpy(pInfo->serialNumber, serialText, 8);
+	pInfo->flags = CKF_RNG | CKF_LOGIN_REQUIRED | CKF_SO_PIN_TO_BE_CHANGED |
+		CKF_USER_PIN_TO_BE_CHANGED | stateFlags;
+	pInfo->ulMinPinLen = 6;
+	pInfo->ulMaxPinLen = 249;
+	pInfo->hardwareVersion.major = 67;
+	pInfo->hardwareVersion.minor = 4;
+	pInfo->firmwareVersion.major = 34;
+	pInfo->firmwareVersion.minor = 2;
+	return CKR_OK;
 }
 
 void SoftHSM::prepareSupportedMechanisms(std::map<std::string, CK_MECHANISM_TYPE> &t)
@@ -939,13 +1037,70 @@ void SoftHSM::prepareSupportedMechanisms(std::map<std::string, CK_MECHANISM_TYPE
 	nrSupportedMechanisms = supportedMechanisms.size();
 }
 
+// Keep the Rutoken facade honest: expose the mechanisms from the reference
+// device in its order, but only when the current build really implements them.
+void SoftHSM::prepareFakeRutokenMechanisms()
+{
+	const CK_MECHANISM_TYPE reference[] = {
+		CKM_RSA_PKCS_KEY_PAIR_GEN, CKM_RSA_PKCS, CKM_RSA_X_509,
+		CKM_RSA_PKCS_OAEP, CKM_RSA_PKCS_PSS, CKM_MD5_RSA_PKCS,
+		CKM_SHA1_RSA_PKCS, CKM_SHA224_RSA_PKCS, CKM_SHA256_RSA_PKCS,
+		CKM_SHA384_RSA_PKCS, CKM_SHA512_RSA_PKCS,
+		CKM_SHA1_RSA_PKCS_PSS, CKM_SHA224_RSA_PKCS_PSS,
+		CKM_SHA256_RSA_PKCS_PSS, CKM_SHA384_RSA_PKCS_PSS,
+		CKM_SHA512_RSA_PKCS_PSS, CKM_MD5, CKM_SHA_1, CKM_SHA224,
+		CKM_SHA256, CKM_SHA384, CKM_SHA512,
+		CKM_GOSTR3410_KEY_PAIR_GEN, CKM_GOSTR3410,
+		CKM_GOSTR3411, CKM_GOSTR3411_2012_256,
+		CKM_GOSTR3410_WITH_GOSTR3411,
+		CKM_GOSTR3410_WITH_GOSTR3411_2012_256,
+		CKM_GOSTR3411_HMAC,
+		CKM_EC_KEY_PAIR_GEN, CKM_ECDSA, CKM_ECDSA_SHA1,
+		CKM_ECDSA_SHA224, CKM_ECDSA_SHA256, CKM_ECDSA_SHA384,
+		CKM_ECDSA_SHA512, CKM_EDDSA, CKM_EC_EDWARDS_KEY_PAIR_GEN,
+		CKM_ECDH1_DERIVE, CKM_CONCATENATE_BASE_AND_KEY,
+		CKM_GENERIC_SECRET_KEY_GEN
+	};
+	const std::list<CK_MECHANISM_TYPE> implemented = supportedMechanisms;
+	supportedMechanisms.clear();
+	for (size_t i = 0; i < sizeof(reference) / sizeof(reference[0]); ++i)
+	{
+		if (std::find(implemented.begin(), implemented.end(), reference[i]) != implemented.end() &&
+			std::find(supportedMechanisms.begin(), supportedMechanisms.end(), reference[i]) == supportedMechanisms.end())
+		{
+			supportedMechanisms.push_back(reference[i]);
+		}
+	}
+	nrSupportedMechanisms = supportedMechanisms.size();
+}
+
+CK_SLOT_ID SoftHSM::fakeRutokenBackingSlotID()
+{
+	SlotMap slots = slotManager->getSlots();
+	for (SlotMap::iterator it = slots.begin(); it != slots.end(); ++it)
+	{
+		Token* token = it->second->getToken();
+		if (token != NULL && token->isInitialized()) return it->first;
+	}
+	return slots.empty() ? CK_UNAVAILABLE_INFORMATION : slots.begin()->first;
+}
+
+Slot* SoftHSM::fakeRutokenSlot(CK_SLOT_ID externalSlotID)
+{
+	if (externalSlotID != 0) return NULL;
+	const CK_SLOT_ID backing = fakeRutokenBackingSlotID();
+	if (backing == CK_UNAVAILABLE_INFORMATION) return NULL;
+	return slotManager->getSlot(backing);
+}
+
 // Return the list of supported mechanisms for a given slot
 CK_RV SoftHSM::C_GetMechanismList(CK_SLOT_ID slotID, CK_MECHANISM_TYPE_PTR pMechanismList, CK_ULONG_PTR pulCount)
 {
 	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;
 	if (pulCount == NULL_PTR) return CKR_ARGUMENTS_BAD;
 
-	Slot* slot = slotManager->getSlot(slotID);
+	if (fakeRutokenECP && slotID >= 15) return CKR_SLOT_ID_INVALID;
+	Slot* slot = fakeRutokenECP ? fakeRutokenSlot(0) : slotManager->getSlot(slotID);
 	if (slot == NULL)
 	{
 		return CKR_SLOT_ID_INVALID;
@@ -1001,7 +1156,8 @@ CK_RV SoftHSM::C_GetMechanismInfo(CK_SLOT_ID slotID, CK_MECHANISM_TYPE type, CK_
 	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;
 	if (pInfo == NULL_PTR) return CKR_ARGUMENTS_BAD;
 
-	Slot* slot = slotManager->getSlot(slotID);
+	if (fakeRutokenECP && slotID >= 15) return CKR_SLOT_ID_INVALID;
+	Slot* slot = fakeRutokenECP ? fakeRutokenSlot(0) : slotManager->getSlot(slotID);
 	if (slot == NULL)
 	{
 		return CKR_SLOT_ID_INVALID;
@@ -1468,6 +1624,101 @@ CK_RV SoftHSM::C_GetMechanismInfo(CK_SLOT_ID slotID, CK_MECHANISM_TYPE type, CK_
 			break;
 	}
 
+	if (fakeRutokenECP)
+	{
+		const CK_FLAGS implemented = pInfo->flags;
+		switch (type)
+		{
+			case CKM_MD5:
+			case CKM_SHA_1:
+			case CKM_SHA224:
+			case CKM_SHA256:
+			case CKM_SHA384:
+			case CKM_SHA512:
+				pInfo->flags = implemented;
+				break;
+			case CKM_RSA_PKCS_KEY_PAIR_GEN:
+				pInfo->flags = CKF_HW | CKF_GENERATE_KEY_PAIR;
+				pInfo->ulMinKeySize = 512;
+				pInfo->ulMaxKeySize = 4096;
+				break;
+			case CKM_RSA_PKCS:
+			case CKM_RSA_X_509:
+				pInfo->flags = CKF_HW | CKF_ENCRYPT | CKF_DECRYPT | CKF_SIGN | CKF_VERIFY;
+				pInfo->ulMinKeySize = 512;
+				pInfo->ulMaxKeySize = 4096;
+				break;
+			case CKM_RSA_PKCS_OAEP:
+				pInfo->flags = CKF_HW | CKF_ENCRYPT | CKF_DECRYPT;
+				pInfo->ulMinKeySize = 512;
+				pInfo->ulMaxKeySize = 4096;
+				break;
+			case CKM_RSA_PKCS_PSS:
+			case CKM_MD5_RSA_PKCS:
+			case CKM_SHA1_RSA_PKCS:
+			case CKM_SHA224_RSA_PKCS:
+			case CKM_SHA256_RSA_PKCS:
+			case CKM_SHA1_RSA_PKCS_PSS:
+			case CKM_SHA224_RSA_PKCS_PSS:
+			case CKM_SHA256_RSA_PKCS_PSS:
+				pInfo->flags = CKF_HW | CKF_SIGN | CKF_VERIFY;
+				pInfo->ulMinKeySize = 512;
+				pInfo->ulMaxKeySize = 4096;
+				break;
+			case CKM_SHA384_RSA_PKCS:
+			case CKM_SHA512_RSA_PKCS:
+			case CKM_SHA384_RSA_PKCS_PSS:
+			case CKM_SHA512_RSA_PKCS_PSS:
+				pInfo->flags = CKF_HW | CKF_SIGN | CKF_VERIFY;
+				pInfo->ulMinKeySize = 768;
+				pInfo->ulMaxKeySize = 4096;
+				break;
+			case CKM_GENERIC_SECRET_KEY_GEN:
+				pInfo->ulMinKeySize = 80;
+				pInfo->ulMaxKeySize = 2048;
+				pInfo->flags = implemented;
+				break;
+			case CKM_EC_KEY_PAIR_GEN:
+				pInfo->ulMinKeySize = 256;
+				pInfo->ulMaxKeySize = 521;
+				pInfo->flags = CKF_HW | CKF_GENERATE_KEY_PAIR | CKF_EC_F_P |
+					CKF_EC_NAMEDCURVE | CKF_EC_UNCOMPRESS;
+				break;
+			case CKM_ECDSA:
+			case CKM_ECDSA_SHA1:
+			case CKM_ECDSA_SHA224:
+			case CKM_ECDSA_SHA256:
+			case CKM_ECDSA_SHA384:
+			case CKM_ECDSA_SHA512:
+				pInfo->ulMinKeySize = 256;
+				pInfo->ulMaxKeySize = 521;
+				pInfo->flags = CKF_HW | CKF_SIGN | CKF_VERIFY | CKF_EC_F_P |
+					CKF_EC_NAMEDCURVE | CKF_EC_UNCOMPRESS;
+				break;
+			case CKM_EC_EDWARDS_KEY_PAIR_GEN:
+				pInfo->ulMinKeySize = 256;
+				pInfo->ulMaxKeySize = 256;
+				pInfo->flags = CKF_HW | CKF_GENERATE_KEY_PAIR | CKF_EC_F_P | CKF_EC_NAMEDCURVE;
+				break;
+			case CKM_EDDSA:
+				pInfo->ulMinKeySize = 256;
+				pInfo->ulMaxKeySize = 256;
+				pInfo->flags = CKF_HW | CKF_SIGN | CKF_VERIFY | CKF_EC_F_P | CKF_EC_NAMEDCURVE;
+				break;
+			case CKM_ECDH1_DERIVE:
+				pInfo->ulMinKeySize = 255;
+				pInfo->ulMaxKeySize = 521;
+				pInfo->flags = CKF_HW | CKF_DERIVE | CKF_EC_F_P | CKF_EC_NAMEDCURVE | CKF_EC_UNCOMPRESS;
+				break;
+			case CKM_CONCATENATE_BASE_AND_KEY:
+				pInfo->flags = CKF_HW | CKF_DERIVE;
+				break;
+			default:
+				pInfo->flags = implemented | CKF_HW;
+				break;
+		}
+	}
+
 	return CKR_OK;
 }
 
@@ -1475,22 +1726,27 @@ CK_RV SoftHSM::C_GetMechanismInfo(CK_SLOT_ID slotID, CK_MECHANISM_TYPE type, CK_
 CK_RV SoftHSM::C_InitToken(CK_SLOT_ID slotID, CK_UTF8CHAR_PTR pPin, CK_ULONG ulPinLen, CK_UTF8CHAR_PTR pLabel)
 {
 	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;
+	if (fakeRutokenECP && slotID != 0)
+		return slotID < 15 ? CKR_TOKEN_NOT_PRESENT : CKR_SLOT_ID_INVALID;
+	const CK_SLOT_ID backingSlotID = fakeRutokenECP ? fakeRutokenBackingSlotID() : slotID;
 
-	Slot* slot = slotManager->getSlot(slotID);
+	Slot* slot = fakeRutokenECP ? fakeRutokenSlot(slotID) : slotManager->getSlot(slotID);
 	if (slot == NULL)
 	{
 		return CKR_SLOT_ID_INVALID;
 	}
 
 	// Check if any session is open with this token.
-	if (sessionManager->haveSession(slotID))
+	if (sessionManager->haveSession(backingSlotID))
 	{
 		return CKR_SESSION_EXISTS;
 	}
 
 	// Check the PIN
 	if (pPin == NULL_PTR) return CKR_ARGUMENTS_BAD;
-	if (ulPinLen < MIN_PIN_LEN || ulPinLen > MAX_PIN_LEN) return CKR_PIN_INCORRECT;
+	const CK_ULONG minPinLen = fakeRutokenECP ? 6 : MIN_PIN_LEN;
+	const CK_ULONG maxPinLen = fakeRutokenECP ? 249 : MAX_PIN_LEN;
+	if (ulPinLen < minPinLen || ulPinLen > maxPinLen) return CKR_PIN_INCORRECT;
 
 	ByteString soPIN(pPin, ulPinLen);
 
@@ -1515,7 +1771,9 @@ CK_RV SoftHSM::C_InitPIN(CK_SESSION_HANDLE hSession, CK_UTF8CHAR_PTR pPin, CK_UL
 
 	// Check the PIN
 	if (pPin == NULL_PTR) return CKR_ARGUMENTS_BAD;
-	if (ulPinLen < MIN_PIN_LEN || ulPinLen > MAX_PIN_LEN) return CKR_PIN_LEN_RANGE;
+	const CK_ULONG minPinLen = fakeRutokenECP ? 6 : MIN_PIN_LEN;
+	const CK_ULONG maxPinLen = fakeRutokenECP ? 249 : MAX_PIN_LEN;
+	if (ulPinLen < minPinLen || ulPinLen > maxPinLen) return CKR_PIN_LEN_RANGE;
 
 	ByteString userPIN(pPin, ulPinLen);
 
@@ -1536,7 +1794,9 @@ CK_RV SoftHSM::C_SetPIN(CK_SESSION_HANDLE hSession, CK_UTF8CHAR_PTR pOldPin, CK_
 	// Check the new PINs
 	if (pOldPin == NULL_PTR) return CKR_ARGUMENTS_BAD;
 	if (pNewPin == NULL_PTR) return CKR_ARGUMENTS_BAD;
-	if (ulNewLen < MIN_PIN_LEN || ulNewLen > MAX_PIN_LEN) return CKR_PIN_LEN_RANGE;
+	const CK_ULONG minPinLen = fakeRutokenECP ? 6 : MIN_PIN_LEN;
+	const CK_ULONG maxPinLen = fakeRutokenECP ? 249 : MAX_PIN_LEN;
+	if (ulNewLen < minPinLen || ulNewLen > maxPinLen) return CKR_PIN_LEN_RANGE;
 
 	ByteString oldPIN(pOldPin, ulOldLen);
 	ByteString newPIN(pNewPin, ulNewLen);
@@ -1565,8 +1825,11 @@ CK_RV SoftHSM::C_SetPIN(CK_SESSION_HANDLE hSession, CK_UTF8CHAR_PTR pOldPin, CK_
 CK_RV SoftHSM::C_OpenSession(CK_SLOT_ID slotID, CK_FLAGS flags, CK_VOID_PTR pApplication, CK_NOTIFY notify, CK_SESSION_HANDLE_PTR phSession)
 {
 	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;
+	if (fakeRutokenECP && slotID != 0)
+		return slotID < 15 ? CKR_TOKEN_NOT_PRESENT : CKR_SLOT_ID_INVALID;
+	const CK_SLOT_ID backingSlotID = fakeRutokenECP ? fakeRutokenBackingSlotID() : slotID;
 
-	Slot* slot = slotManager->getSlot(slotID);
+	Slot* slot = fakeRutokenECP ? fakeRutokenSlot(slotID) : slotManager->getSlot(slotID);
 
 	CK_RV rv = sessionManager->openSession(slot, flags, pApplication, notify, phSession);
 	if (rv != CKR_OK)
@@ -1575,7 +1838,7 @@ CK_RV SoftHSM::C_OpenSession(CK_SLOT_ID slotID, CK_FLAGS flags, CK_VOID_PTR pApp
 	// Get a pointer to the session object and store it in the handle manager.
 	Session* session = sessionManager->getSession(*phSession);
 	if (session == NULL) return CKR_SESSION_HANDLE_INVALID;
-	*phSession = handleManager->addSession(slotID,session);
+	*phSession = handleManager->addSession(backingSlotID,session);
 
 	return CKR_OK;
 }
@@ -1604,9 +1867,12 @@ CK_RV SoftHSM::C_CloseSession(CK_SESSION_HANDLE hSession)
 CK_RV SoftHSM::C_CloseAllSessions(CK_SLOT_ID slotID)
 {
 	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;
+	if (fakeRutokenECP && slotID != 0)
+		return slotID < 15 ? CKR_TOKEN_NOT_PRESENT : CKR_SLOT_ID_INVALID;
+	const CK_SLOT_ID backingSlotID = fakeRutokenECP ? fakeRutokenBackingSlotID() : slotID;
 
 	// Get the slot
-	Slot* slot = slotManager->getSlot(slotID);
+	Slot* slot = fakeRutokenECP ? fakeRutokenSlot(slotID) : slotManager->getSlot(slotID);
 	if (slot == NULL) return CKR_SLOT_ID_INVALID;
 
 	// Get the token
@@ -1615,11 +1881,11 @@ CK_RV SoftHSM::C_CloseAllSessions(CK_SLOT_ID slotID)
 
 	// Tell the handle manager all sessions were closed for the given slotID.
 	// The handle manager should then remove all session and object handles for this slot.
-	handleManager->allSessionsClosed(slotID);
+	handleManager->allSessionsClosed(backingSlotID);
 
 	// Tell the session object store that all sessions were closed for the given slotID.
 	// The session object store should then remove all session objects for this slot.
-	sessionObjectStore->allSessionsClosed(slotID);
+	sessionObjectStore->allSessionsClosed(backingSlotID);
 
 	// Finally tell the session manager tho close all sessions for the given slot.
 	// This will also trigger a logout on the associated token to occur.
@@ -1635,7 +1901,9 @@ CK_RV SoftHSM::C_GetSessionInfo(CK_SESSION_HANDLE hSession, CK_SESSION_INFO_PTR 
 	Session* session = (Session*)handleManager->getSession(hSession);
 	if (session == NULL) return CKR_SESSION_HANDLE_INVALID;
 
-	return session->getInfo(pInfo);
+	CK_RV rv = session->getInfo(pInfo);
+	if (rv == CKR_OK && fakeRutokenECP && pInfo != NULL_PTR) pInfo->slotID = 0;
+	return rv;
 }
 
 // Determine the state of a running operation in a session
@@ -2014,6 +2282,18 @@ CK_RV SoftHSM::C_GetAttributeValue(CK_SESSION_HANDLE hSession, CK_OBJECT_HANDLE 
 
 	CK_BBOOL isOnToken = object->getBooleanValue(CKA_TOKEN, false);
 	CK_BBOOL isPrivate = object->getBooleanValue(CKA_PRIVATE, true);
+	if (fakeRutokenECP && object->getUnsignedLongValue(CKA_CLASS, CKO_DATA) == CKO_PRIVATE_KEY &&
+		object->getUnsignedLongValue(CKA_KEY_TYPE, CKK_RSA) == CKK_GOSTR3410)
+	{
+		for (CK_ULONG i = 0; i < ulCount; ++i)
+		{
+			if (pTemplate[i].type == CKA_VALUE)
+			{
+				pTemplate[i].ulValueLen = CK_UNAVAILABLE_INFORMATION;
+				return CKR_ATTRIBUTE_TYPE_INVALID;
+			}
+		}
+	}
 
 	// Check read user credentials
 	CK_RV rv = haveRead(session->getState(), isOnToken, isPrivate);
@@ -6498,6 +6778,14 @@ CK_RV SoftHSM::C_GenerateKeyPair
 	// Get the session
 	Session* session = (Session*)handleManager->getSession(hSession);
 	if (session == NULL) return CKR_SESSION_HANDLE_INVALID;
+	if (fakeRutokenECP)
+	{
+		CK_BBOOL sensitive = CK_TRUE;
+		CK_BBOOL extractable = CK_FALSE;
+		getBooleanTemplateValue(pPrivateKeyTemplate, ulPrivateKeyAttributeCount, CKA_SENSITIVE, sensitive);
+		getBooleanTemplateValue(pPrivateKeyTemplate, ulPrivateKeyAttributeCount, CKA_EXTRACTABLE, extractable);
+		if (sensitive != CK_TRUE || extractable == CK_TRUE) return CKR_TEMPLATE_INCONSISTENT;
+	}
 
 	// Check the mechanism, only accept RSA, DSA, EC and DH key pair generation.
 	CK_KEY_TYPE keyType;
@@ -14223,6 +14511,9 @@ CK_RV SoftHSM::CreateObject(CK_SESSION_HANDLE hSession, CK_ATTRIBUTE_PTR pTempla
 		ERROR_MSG("Mandatory attribute not present in template");
 		return rv;
 	}
+	if (fakeRutokenECP && op == OBJECT_OP_CREATE &&
+		objClass == CKO_PRIVATE_KEY && keyType == CKK_GOSTR3410)
+		return CKR_TEMPLATE_INCONSISTENT;
 
 	// Check user credentials
 	rv = haveWrite(session->getState(), isOnToken, isPrivate);

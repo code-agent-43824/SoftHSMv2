@@ -2027,6 +2027,131 @@ static void finish(const fs::path& modulePath, const fs::path& work,
     std::cout << "Certificate imported, token key reopened, detached CMS written\n";
 }
 
+static void verifyRutokenProfile(const fs::path& modulePath)
+{
+    Module module(modulePath);
+    CK_INFO library{};
+    callOk("C_GetInfo", "pInfo=&library", [&] { return module->C_GetInfo(&library); });
+    if (library.cryptokiVersion.major != 2 || library.cryptokiVersion.minor != 40 ||
+        paddedText(library.manufacturerID, sizeof(library.manufacturerID)) != "Aktiv Co." ||
+        paddedText(library.libraryDescription, sizeof(library.libraryDescription)) !=
+            "Rutoken ECP PKCS #11 library" ||
+        library.libraryVersion.major != 2 || library.libraryVersion.minor != 19)
+        fail("C_GetInfo does not match the Rutoken ECP 2.19 reference profile");
+
+    const std::vector<CK_SLOT_ID> allSlots = slots(module, CK_FALSE);
+    const std::vector<CK_SLOT_ID> presentSlots = slots(module, CK_TRUE);
+    if (allSlots.size() != 15 || presentSlots != std::vector<CK_SLOT_ID>{0})
+        fail("Rutoken profile must expose slots 0..14 with a token only in slot 0");
+    for (size_t i = 0; i < allSlots.size(); ++i)
+        if (allSlots[i] != static_cast<CK_SLOT_ID>(i)) fail("Rutoken slot IDs are not contiguous 0..14");
+
+    CK_SLOT_INFO slot{};
+    callOk("C_GetSlotInfo", "slotID=0, pInfo=&slot", [&] { return module->C_GetSlotInfo(0, &slot); });
+    if (paddedText(slot.slotDescription, sizeof(slot.slotDescription)) != "Aktiv Rutoken ECP 0" ||
+        paddedText(slot.manufacturerID, sizeof(slot.manufacturerID)) != "Aktiv Co." ||
+        (slot.flags & (CKF_HW_SLOT | CKF_REMOVABLE_DEVICE | CKF_TOKEN_PRESENT)) !=
+            (CKF_HW_SLOT | CKF_REMOVABLE_DEVICE | CKF_TOKEN_PRESENT) ||
+        slot.hardwareVersion.major != 67 || slot.hardwareVersion.minor != 4 ||
+        slot.firmwareVersion.major != 34 || slot.firmwareVersion.minor != 2)
+        fail("slot 0 information does not match the Rutoken ECP reference profile");
+
+    const CK_TOKEN_INFO token = tokenInfo(module, 0);
+    const std::string serial = paddedText(reinterpret_cast<const unsigned char*>(token.serialNumber),
+                                          sizeof(token.serialNumber));
+    if (paddedText(token.label, sizeof(token.label)) != "Rutoken ECP <no label>" ||
+        paddedText(token.manufacturerID, sizeof(token.manufacturerID)) != "Aktiv Co." ||
+        paddedText(reinterpret_cast<const unsigned char*>(token.model), sizeof(token.model)) != "Rutoken ECP" ||
+        serial.size() != 8 || !std::all_of(serial.begin(), serial.end(), [](char c) {
+            return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+        }) || token.ulMinPinLen != 6 || token.ulMaxPinLen != 249 ||
+        token.hardwareVersion.major != 67 || token.hardwareVersion.minor != 4 ||
+        token.firmwareVersion.major != 34 || token.firmwareVersion.minor != 2)
+        fail("token information does not match the Rutoken ECP reference profile");
+
+    CK_TOKEN_INFO absent{};
+    check(invoke("C_GetTokenInfo", "slotID=1, pInfo=&absent",
+                 [&] { return module->C_GetTokenInfo(1, &absent); }),
+          CKR_TOKEN_NOT_PRESENT, "C_GetTokenInfo(empty Rutoken slot)");
+
+    CK_ULONG mechanismCount = 0;
+    callOk("C_GetMechanismList", "slotID=0, pMechanismList=NULL_PTR, pulCount=&count",
+           [&] { return module->C_GetMechanismList(0, nullptr, &mechanismCount); });
+    std::vector<CK_MECHANISM_TYPE> mechanisms(mechanismCount);
+    callOk("C_GetMechanismList", "slotID=0, pMechanismList=buffer, pulCount=&count",
+           [&] { return module->C_GetMechanismList(0, mechanisms.data(), &mechanismCount); });
+    if (mechanisms.empty() || std::adjacent_find(mechanisms.begin(), mechanisms.end()) != mechanisms.end())
+        fail("Rutoken mechanism intersection is empty or contains adjacent duplicates");
+    const CK_MECHANISM_TYPE requiredProfileMechanisms[] = {
+        CKM_RSA_PKCS_KEY_PAIR_GEN, CKM_SHA256_RSA_PKCS, CKM_SHA256,
+        CKM_GOSTR3410_KEY_PAIR_GEN, CKM_GOSTR3410,
+        CKM_GOSTR3411_2012_256, CKM_GOSTR3410_WITH_GOSTR3411_2012_256
+    };
+    for (CK_MECHANISM_TYPE required : requiredProfileMechanisms)
+        if (std::find(mechanisms.begin(), mechanisms.end(), required) == mechanisms.end())
+            fail("portable Rutoken profile omitted a required implemented RSA/GOST mechanism");
+    for (CK_MECHANISM_TYPE mechanism : mechanisms)
+    {
+        CK_MECHANISM_INFO info{};
+        callOk("C_GetMechanismInfo", "slotID=0, type=" + hexNumber(mechanism) + ", pInfo=&info",
+               [&] { return module->C_GetMechanismInfo(0, mechanism, &info); });
+        if (mechanism == CKM_RSA_PKCS_KEY_PAIR_GEN &&
+            (info.ulMinKeySize != 512 || info.ulMaxKeySize != 4096 ||
+             info.flags != (CKF_HW | CKF_GENERATE_KEY_PAIR)))
+            fail("Rutoken RSA key-generation mechanism metadata differs from the reference");
+        if (mechanism == CKM_SHA256 && info.flags != CKF_DIGEST)
+            fail("Rutoken SHA-256 mechanism metadata differs from the reference");
+        if (mechanism == CKM_GOSTR3411_2012_256 && info.flags != (CKF_HW | CKF_DIGEST))
+            fail("Rutoken Streebog-256 mechanism metadata differs from the reference");
+        if ((mechanism == CKM_GOSTR3410 ||
+             mechanism == CKM_GOSTR3410_WITH_GOSTR3411_2012_256) &&
+            info.flags != (CKF_HW | CKF_SIGN))
+            fail("Rutoken GOST signing mechanism metadata differs from the implemented reference intersection");
+    }
+
+    if ((token.flags & CKF_TOKEN_INITIALIZED) != 0)
+    {
+        CK_SESSION_HANDLE session = CK_INVALID_HANDLE;
+        callOk("C_OpenSession", "slotID=0, flags=CKF_SERIAL_SESSION|CKF_RW_SESSION",
+               [&] { return module->C_OpenSession(0, CKF_SERIAL_SESSION | CKF_RW_SESSION,
+                                                  nullptr, nullptr, &session); });
+        CK_SESSION_INFO sessionInfo{};
+        callOk("C_GetSessionInfo", "hSession=session, pInfo=&sessionInfo",
+               [&] { return module->C_GetSessionInfo(session, &sessionInfo); });
+        if (sessionInfo.slotID != 0) fail("Rutoken facade leaked its backing SoftHSM slot ID");
+
+        CK_OBJECT_CLASS privateClass = CKO_PRIVATE_KEY;
+        CK_KEY_TYPE gostType = CKK_GOSTR3410;
+        CK_OBJECT_HANDLE imported = CK_INVALID_HANDLE;
+        CK_ATTRIBUTE importedGost[] = {
+            {CKA_CLASS, &privateClass, sizeof(privateClass)},
+            {CKA_KEY_TYPE, &gostType, sizeof(gostType)}
+        };
+        check(invoke("C_CreateObject", "hSession=session, pTemplate=GOST-private-import",
+                     [&] { return module->C_CreateObject(session, importedGost,
+                                                         sizeof(importedGost) / sizeof(importedGost[0]), &imported); }),
+              CKR_TEMPLATE_INCONSISTENT, "Rutoken GOST private-key import rejection");
+
+        CK_MECHANISM rsaGeneration{CKM_RSA_PKCS_KEY_PAIR_GEN, nullptr, 0};
+        CK_BBOOL sensitive = CK_FALSE;
+        CK_BBOOL extractable = CK_TRUE;
+        CK_OBJECT_HANDLE publicKey = CK_INVALID_HANDLE;
+        CK_OBJECT_HANDLE privateKey = CK_INVALID_HANDLE;
+        CK_ATTRIBUTE privateTemplate[] = {
+            {CKA_SENSITIVE, &sensitive, sizeof(sensitive)},
+            {CKA_EXTRACTABLE, &extractable, sizeof(extractable)}
+        };
+        check(invoke("C_GenerateKeyPair", "hSession=session, exportable RSA private template",
+                     [&] { return module->C_GenerateKeyPair(session, &rsaGeneration, nullptr, 0,
+                                                            privateTemplate,
+                                                            sizeof(privateTemplate) / sizeof(privateTemplate[0]),
+                                                            &publicKey, &privateKey); }),
+              CKR_TEMPLATE_INCONSISTENT, "Rutoken exportable private-key generation rejection");
+        closeSession(module, session);
+    }
+    std::cout << "Rutoken ECP compatibility profile verified\n";
+}
+
 int main(int argc, char** argv)
 {
     try
@@ -2036,6 +2161,11 @@ int main(int argc, char** argv)
             Module module(fs::absolute(argv[2]));
             (void)slots(module, CK_FALSE);
             std::cout << "PKCS #11 module initialized and enumerated successfully\n";
+            return 0;
+        }
+        if (argc == 3 && std::string(argv[1]) == "rutoken-profile")
+        {
+            verifyRutokenProfile(fs::absolute(argv[2]));
             return 0;
         }
         if (argc == 4 && std::string(argv[1]) == "prepare")
@@ -2051,6 +2181,7 @@ int main(int argc, char** argv)
         }
         std::cerr << "usage:\n"
                   << "  portable-token-e2e probe <module>\n"
+                  << "  portable-token-e2e rutoken-profile <module>\n"
                   << "  portable-token-e2e prepare <module> <work>\n"
                   << "  portable-token-e2e finish <module> <work> <leaf.der> <ca.der> <payload> <cms.der>\n"
                   << "environment:\n"

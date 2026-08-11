@@ -6,7 +6,7 @@ on:
       release_tag:
         description: Release tag to create or update
         required: true
-        default: v2.7.0-portable.19
+        default: v2.7.0-portable.20
 
 permissions:
   contents: read
@@ -244,6 +244,17 @@ jobs:
           grep -F '[SCRIPT] PASS: standard direct PKCS #11 and external OpenSSL integration test completed' \
             "$RUNNER_TEMP/shared-alternate.log"
           test ! -e "$GITHUB_WORKSPACE/downloaded/tokens"
+          perl -0pi -e 's/FAKE_RUTOKEN_ECP = false/FAKE_RUTOKEN_ECP = true/' \
+            "$HOME/.config/softhsm2/softhsm2.conf"
+          "$kit/bin/portable-token-e2e" rutoken-profile \
+            "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so"
+          P11_TEST_TOKEN_LABEL='Rutoken ECP <no label>' \
+          P11_TEST_OBJECT_ID_HEX=504f525441424c47 \
+          P11_TEST_KEY_LABEL=portable-ci-rsa-rutoken \
+            bash "$kit/run-test.sh" "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so" \
+              > "$RUNNER_TEMP/rutoken-e2e.log" 2>&1
+          grep -F '[SCRIPT] PASS: standard direct PKCS #11 and external OpenSSL integration test completed' \
+            "$RUNNER_TEMP/rutoken-e2e.log"
           generated_home="$RUNNER_TEMP/softhsm-generated-home"
           no_template="$RUNNER_TEMP/softhsm-no-template"
           mkdir -p "$generated_home" "$no_template"
@@ -308,6 +319,15 @@ jobs:
             bash "$RUNNER_TEMP/packaged-testkit/run-test.sh" \
               "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so"
           test ! -e "$GITHUB_WORKSPACE/downloaded/tokens"
+          perl -0pi -e 's/FAKE_RUTOKEN_ECP = false/FAKE_RUTOKEN_ECP = true/' \
+            "$HOME/.config/softhsm2/softhsm2.conf"
+          "$RUNNER_TEMP/packaged-testkit/bin/portable-token-e2e" rutoken-profile \
+            "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so"
+          P11_TEST_TOKEN_LABEL='Rutoken ECP <no label>' \
+          P11_TEST_OBJECT_ID_HEX=504f525441424c47 \
+          P11_TEST_KEY_LABEL=portable-ci-rsa-rutoken \
+            bash "$RUNNER_TEMP/packaged-testkit/run-test.sh" \
+              "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so"
           generated_home="$RUNNER_TEMP/softhsm-generated-home"
           no_template="$RUNNER_TEMP/softhsm-no-template"
           mkdir -p "$generated_home" "$no_template"
@@ -353,6 +373,17 @@ jobs:
           set "P11_TEST_OBJECT_ID_HEX="
           set "P11_TEST_KEY_LABEL="
           if exist "%CD%\downloaded\tokens" exit /b 1
+          powershell -NoProfile -Command "(Get-Content -Raw '%USERPROFILE%\softhsm2.conf').Replace('FAKE_RUTOKEN_ECP = false','FAKE_RUTOKEN_ECP = true') | Set-Content -NoNewline -Encoding ascii '%USERPROFILE%\softhsm2.conf'"
+          "%RUNNER_TEMP%\packaged-testkit\bin\portable-token-e2e.exe" rutoken-profile "%CD%\downloaded\softhsm2.dll"
+          if errorlevel 1 exit /b %ERRORLEVEL%
+          set "P11_TEST_TOKEN_LABEL=Rutoken ECP <no label>"
+          set "P11_TEST_OBJECT_ID_HEX=504f525441424c47"
+          set "P11_TEST_KEY_LABEL=portable-ci-rsa-rutoken"
+          call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd" "%CD%\downloaded\softhsm2.dll"
+          if errorlevel 1 exit /b %ERRORLEVEL%
+          set "P11_TEST_TOKEN_LABEL="
+          set "P11_TEST_OBJECT_ID_HEX="
+          set "P11_TEST_KEY_LABEL="
           set "USERPROFILE=%RUNNER_TEMP%\softhsm-generated-home"
           mkdir "%RUNNER_TEMP%\softhsm-no-template"
           copy /y "%CD%\downloaded\softhsm2.dll" "%RUNNER_TEMP%\softhsm-no-template\softhsm2.dll"
@@ -397,6 +428,17 @@ jobs:
           set "P11_TEST_OBJECT_ID_HEX="
           set "P11_TEST_KEY_LABEL="
           if exist "%CD%\downloaded\tokens" exit /b 1
+          powershell -NoProfile -Command "(Get-Content -Raw '%USERPROFILE%\softhsm2.conf').Replace('FAKE_RUTOKEN_ECP = false','FAKE_RUTOKEN_ECP = true') | Set-Content -NoNewline -Encoding ascii '%USERPROFILE%\softhsm2.conf'"
+          "%RUNNER_TEMP%\packaged-testkit\bin\portable-token-e2e.exe" rutoken-profile "%CD%\downloaded\softhsm2.dll"
+          if errorlevel 1 exit /b %ERRORLEVEL%
+          set "P11_TEST_TOKEN_LABEL=Rutoken ECP <no label>"
+          set "P11_TEST_OBJECT_ID_HEX=504f525441424c47"
+          set "P11_TEST_KEY_LABEL=portable-ci-rsa-rutoken"
+          call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd" "%CD%\downloaded\softhsm2.dll"
+          if errorlevel 1 exit /b %ERRORLEVEL%
+          set "P11_TEST_TOKEN_LABEL="
+          set "P11_TEST_OBJECT_ID_HEX="
+          set "P11_TEST_KEY_LABEL="
           set "USERPROFILE=%RUNNER_TEMP%\softhsm-generated-home"
           mkdir "%RUNNER_TEMP%\softhsm-no-template"
           copy /y "%CD%\downloaded\softhsm2.dll" "%RUNNER_TEMP%\softhsm-no-template\softhsm2.dll"
@@ -441,6 +483,17 @@ jobs:
           set "P11_TEST_OBJECT_ID_HEX="
           set "P11_TEST_KEY_LABEL="
           if exist "%CD%\downloaded\tokens" exit /b 1
+          powershell -NoProfile -Command "(Get-Content -Raw '%USERPROFILE%\softhsm2.conf').Replace('FAKE_RUTOKEN_ECP = false','FAKE_RUTOKEN_ECP = true') | Set-Content -NoNewline -Encoding ascii '%USERPROFILE%\softhsm2.conf'"
+          "%RUNNER_TEMP%\packaged-testkit\bin\portable-token-e2e.exe" rutoken-profile "%CD%\downloaded\softhsm2.dll"
+          if errorlevel 1 exit /b %ERRORLEVEL%
+          set "P11_TEST_TOKEN_LABEL=Rutoken ECP <no label>"
+          set "P11_TEST_OBJECT_ID_HEX=504f525441424c47"
+          set "P11_TEST_KEY_LABEL=portable-ci-rsa-rutoken"
+          call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd" "%CD%\downloaded\softhsm2.dll"
+          if errorlevel 1 exit /b %ERRORLEVEL%
+          set "P11_TEST_TOKEN_LABEL="
+          set "P11_TEST_OBJECT_ID_HEX="
+          set "P11_TEST_KEY_LABEL="
           set "USERPROFILE=%RUNNER_TEMP%\softhsm-generated-home"
           mkdir "%RUNNER_TEMP%\softhsm-no-template"
           copy /y "%CD%\downloaded\softhsm2.dll" "%RUNNER_TEMP%\softhsm-no-template\softhsm2.dll"
@@ -483,6 +536,15 @@ jobs:
             bash "$RUNNER_TEMP/packaged-testkit/run-test.sh" \
               "$GITHUB_WORKSPACE/downloaded/libsofthsm2.dylib"
           test ! -e "$GITHUB_WORKSPACE/downloaded/tokens"
+          perl -0pi -e 's/FAKE_RUTOKEN_ECP = false/FAKE_RUTOKEN_ECP = true/' \
+            "$HOME/.config/softhsm2/softhsm2.conf"
+          "$RUNNER_TEMP/packaged-testkit/bin/portable-token-e2e" rutoken-profile \
+            "$GITHUB_WORKSPACE/downloaded/libsofthsm2.dylib"
+          P11_TEST_TOKEN_LABEL='Rutoken ECP <no label>' \
+          P11_TEST_OBJECT_ID_HEX=504f525441424c47 \
+          P11_TEST_KEY_LABEL=portable-ci-rsa-rutoken \
+            bash "$RUNNER_TEMP/packaged-testkit/run-test.sh" \
+              "$GITHUB_WORKSPACE/downloaded/libsofthsm2.dylib"
           generated_home="$RUNNER_TEMP/softhsm-generated-home"
           no_template="$RUNNER_TEMP/softhsm-no-template"
           mkdir -p "$generated_home" "$no_template"
@@ -549,5 +611,5 @@ jobs:
             gh release create "$RELEASE_TAG" release-assets/* \
               --target "$GITHUB_SHA" \
               --title "SoftHSM portable $RELEASE_TAG" \
-              --notes "Portable, installer-free PKCS #11 modules and independently downloadable self-contained test kits for Linux x64/ARM64, Windows x86/x64/ARM64, and macOS universal. SoftHSM now materializes one canonical per-user configuration on first use: an adjacent softhsm.conf is copied as the initial template, or a safe default is generated when no template exists. Later loads from any directory and both 32/64-bit processes reuse that same user configuration and token store; tokens are not copied from or created beside the module. SOFTHSM2_CONF remains an explicit highest-priority override. Extract a matching test-kit ZIP and run run-test.cmd or bash run-test.sh with no arguments; pass another library path as the only argument to load it directly without copying. The included testkit.conf controls AUTO/YES/NO initialization, user/SO PINs, slot/labels, and excluded C_* functions. AUTO initializes bundled SoftHSM only when its canonical user config is absent; existing configs and alternate libraries use safe existing-token mode. GOST and RSA generation/signing remain required for compatible modules; private-key import/export round trips remain mandatory for bundled SoftHSM but are skipped for alternate vendor libraries that may forbid them. CI verifies first-use copy, default generation without a template, shared bundled/alternate storage, no adjacent token directory, safe AUTO behavior, exclusion guards, full RSA/GOST/CSR/CMS E2E, and all six platforms. Test kits include the module, precompiled client, static OpenSSL, launchers, source, headers, licenses, and environment manifest. GitHub Actions artifacts contain direct payload without nested ZIPs; SHA256SUMS covers all six product and six test-kit archives."
+              --notes "Portable, installer-free PKCS #11 modules and independently downloadable self-contained test kits for Linux x64/ARM64, Windows x86/x64/ARM64, and macOS universal. Set FAKE_RUTOKEN_ECP = true in the canonical user configuration to enable the Rutoken ECP 2.19 compatibility profile: Aktiv library/slot/token identity, slots 0..14 with the token in slot 0, device-style serial and version metadata, PIN range 6..249, Rutoken-ordered implemented mechanism intersection with hardware-style flags and limits, rejection of exportable generated private keys, rejection of GOST private-key imports, and Rutoken-style denial of private GOST scalar reads. Unsupported physical-device mechanisms are not falsely advertised. Normal SoftHSM behavior remains the default. SoftHSM materializes one canonical per-user configuration on first use: an adjacent softhsm.conf is copied as the initial template, or a safe default is generated when no template exists. Later loads from any directory and both 32/64-bit processes reuse that same user configuration and token store; tokens are not copied from or created beside the module. SOFTHSM2_CONF remains an explicit highest-priority override. Extract a matching test-kit ZIP and run run-test.cmd or bash run-test.sh with no arguments; pass another library path as the only argument to load it directly without copying. CI verifies the normal strict SoftHSM E2E, alternate-library mode, and the Rutoken profile's metadata, slot mapping, policy gates, GOST/RSA generation and signing, CSR, certificate import, and detached CMS on all six platforms. Test kits include the module, precompiled client, static OpenSSL, launchers, source, headers, licenses, and environment manifest. GitHub Actions artifacts contain direct payload without nested ZIPs; SHA256SUMS covers all six product and six test-kit archives."
           fi

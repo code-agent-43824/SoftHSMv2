@@ -211,6 +211,7 @@ private:
 	// Is the SoftHSM PKCS #11 library initialised?
 	bool isInitialised;
 	bool isRemovable;
+	bool fakeRutokenECP;
 
 	SessionObjectStore* sessionObjectStore;
 	ObjectStore* objectStore;
@@ -222,6 +223,10 @@ private:
 	std::map<std::string, CK_MECHANISM_TYPE> mechanisms_table;
 	std::list<CK_MECHANISM_TYPE> supportedMechanisms;
 	CK_ULONG nrSupportedMechanisms;
+
+	CK_SLOT_ID fakeRutokenBackingSlotID();
+	Slot* fakeRutokenSlot(CK_SLOT_ID externalSlotID);
+	void prepareFakeRutokenMechanisms();
 
 	int forkID;
 
