@@ -115,12 +115,27 @@ Write-Host "[TEST-KIT] all test evidence remains under=$(Join-Path $KitDir 'test
 if ($LASTEXITCODE -ne 0) { throw "downloadable test kit failed" }
 
 $OutputDir = Join-Path $KitDir "test-output"
+function Invoke-OpenSCPkcs11Tool([string]$Option, [string]$LogName) {
+    $PreviousErrorActionPreference = $ErrorActionPreference
+    try {
+        # Windows OpenSC writes the informational "Using slot ..." line to
+        # stderr even on success. Windows PowerShell 5 turns native stderr in
+        # a pipeline into NativeCommandError when the script preference is
+        # Stop, so capture it first and judge only the native exit code.
+        $ErrorActionPreference = "Continue"
+        $Output = @(& $Pkcs11Tool --module $Module $Option 2>&1)
+        $ExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $PreviousErrorActionPreference
+    }
+    $Output | ForEach-Object { Write-Host $_ }
+    $Output | Out-File -LiteralPath (Join-Path $OutputDir $LogName) -Encoding utf8
+    if ($ExitCode -ne 0) { throw "pkcs11-tool $Option failed with exit code $ExitCode" }
+}
+
 Write-Host "[OPENSC] checking C_Initialize and library information with pkcs11-tool -I"
-& $Pkcs11Tool --module $Module -I 2>&1 |
-    Tee-Object -FilePath (Join-Path $OutputDir "pkcs11-tool-I.log")
-if ($LASTEXITCODE -ne 0) { throw "pkcs11-tool -I failed with exit code $LASTEXITCODE" }
+Invoke-OpenSCPkcs11Tool "-I" "pkcs11-tool-I.log"
 Write-Host "[OPENSC] checking slots and token information with pkcs11-tool -T"
-& $Pkcs11Tool --module $Module -T 2>&1 |
-    Tee-Object -FilePath (Join-Path $OutputDir "pkcs11-tool-T.log")
-if ($LASTEXITCODE -ne 0) { throw "pkcs11-tool -T failed with exit code $LASTEXITCODE" }
+Invoke-OpenSCPkcs11Tool "-T" "pkcs11-tool-T.log"
 Write-Host "[OPENSC] PASS: packaged pkcs11-tool loaded the tested module"
