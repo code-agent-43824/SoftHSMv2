@@ -69,8 +69,14 @@ else
     "https://github.com/OpenSC/OpenSC/releases/download/$OPENSC_VERSION/OpenSC-$OPENSC_VERSION.dmg"
   printf '%s  %s\n' "$OPENSC_MACOS_SHA256" "$dmg" | shasum -a 256 --check
   hdiutil attach -nobrowse -readonly -mountpoint "$mount_point" "$dmg"
-  pkg=$(find "$mount_point" -maxdepth 3 -name 'OpenSC.pkg' -print -quit)
-  [[ -n "$pkg" ]] || { hdiutil detach "$mount_point"; echo 'OpenSC DMG contains no OpenSC.pkg' >&2; exit 1; }
+  pkg=$(find "$mount_point" -maxdepth 3 -type f -iname '*.pkg' -print | \
+    grep -Eiv '(startup|token)' | sort | head -n 1 || true)
+  if [[ -z "$pkg" ]]; then
+    find "$mount_point" -maxdepth 3 -print >&2
+    hdiutil detach "$mount_point"
+    echo 'OpenSC DMG contains no suitable installer package' >&2
+    exit 1
+  fi
   sudo installer -pkg "$pkg" -target /
   hdiutil detach "$mount_point"
 
