@@ -86,7 +86,13 @@ SimpleConfigLoader::SimpleConfigLoader()
 
 #define PORTABLE_CONFIG_FILE "softhsm.conf"
 #define LEGACY_PORTABLE_CONFIG_FILE "softhsm2.conf"
-#define USER_CONFIG_FILE "softhsm2.conf"
+#ifdef SOFTHSM2_PORTABLE_USER_CONFIG
+# define USER_CONFIG_FILE "softhsm.conf"
+# define CONFIG_DIRECTORY "softhsm"
+#else
+# define USER_CONFIG_FILE "softhsm2.conf"
+# define CONFIG_DIRECTORY ".config/softhsm2"
+#endif
 
 static const char DEFAULT_USER_CONFIGURATION[] =
 	"# SoftHSM v2 configuration file\n"
@@ -102,7 +108,9 @@ static const char DEFAULT_USER_CONFIGURATION[] =
 
 namespace
 {
+#ifndef SOFTHSM2_PORTABLE_USER_CONFIG
 	static int moduleAnchor;
+#endif
 
 	static bool isPathSeparator(char c)
 	{
@@ -329,6 +337,7 @@ namespace
 		return installFileAtomically(userPath, contents);
 	}
 
+#ifndef SOFTHSM2_PORTABLE_USER_CONFIG
 	static std::string moduleFilePath()
 	{
 #ifdef _WIN32
@@ -390,12 +399,18 @@ namespace
 		}
 		return NULL;
 	}
+#endif
 }
 
 // Load the configuration
 bool SimpleConfigLoader::loadConfiguration()
 {
 	char* configPath = getConfigPath();
+	if (configPath == NULL)
+	{
+		ERROR_MSG("Could not determine or create the per-user SoftHSM configuration path");
+		return false;
+	}
 	const std::string configDirectory = parentDirectory(configPath);
 
 	FILE* fp = fopen(configPath,"r");
@@ -528,8 +543,6 @@ bool SimpleConfigLoader::string2bool(std::string stringValue, bool* boolValue)
 	return false;
 }
 
-#define CONFIG_DIRECTORY ".config/softhsm2"
-
 /* Returns a user-specific path for configuration.
  */
 static char *get_user_path(void)
@@ -541,12 +554,20 @@ static char *get_user_path(void)
 	const char *home_path = getenv("HOMEPATH");
 
 	if (user_profile && user_profile[0] != 0) {
+# ifdef SOFTHSM2_PORTABLE_USER_CONFIG
+		snprintf(path, sizeof(path), "%s\\" CONFIG_DIRECTORY "\\%s", user_profile, USER_CONFIG_FILE);
+# else
 		snprintf(path, sizeof(path), "%s\\%s", user_profile, USER_CONFIG_FILE);
+# endif
 		return strdup(path);
 	}
 
 	if (home_drive && home_path) {
+# ifdef SOFTHSM2_PORTABLE_USER_CONFIG
+		snprintf(path, sizeof(path), "%s%s\\" CONFIG_DIRECTORY "\\%s", home_drive, home_path, USER_CONFIG_FILE);
+# else
 		snprintf(path, sizeof(path), "%s%s\\%s", home_drive, home_path, USER_CONFIG_FILE);
+# endif
 		return strdup(path);
 	}
 	return NULL;
@@ -578,6 +599,7 @@ static char *get_user_path(void)
 	return NULL;
 }
 
+#ifndef SOFTHSM2_PORTABLE_USER_CONFIG
 static char *get_env_var_path(void)
 {
 #ifdef _WIN32
@@ -614,9 +636,23 @@ static char *get_env_var_path(void)
 
 #endif
 }
+#endif
 
 char* SimpleConfigLoader::getConfigPath()
 {
+#ifdef SOFTHSM2_PORTABLE_USER_CONFIG
+	char* userPath = get_user_path();
+	if (userPath == NULL)
+	{
+		return NULL;
+	}
+	if (!isReadableFile(userPath) && !materializeUserConfig(std::string(userPath), NULL))
+	{
+		free(userPath);
+		return NULL;
+	}
+	return userPath;
+#else
 	char* configPath = get_env_var_path();
 
 	if (configPath != NULL)
@@ -643,6 +679,7 @@ char* SimpleConfigLoader::getConfigPath()
 		return portablePath;
 	}
 	return strdup(DEFAULT_SOFTHSM2_CONF);
+#endif
 }
 
 char* SimpleConfigLoader::trimString(char* text)

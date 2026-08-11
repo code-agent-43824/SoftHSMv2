@@ -85,14 +85,14 @@ export P11_TEST_TOKEN_LABEL='existing-label' # optional exact selector
 export P11_TEST_REQUIRE_GOST_IMPORT_EXPORT=NO
 export P11_TEST_REQUIRE_RSA_IMPORT_EXPORT=NO
 tests/portable/run-pkcs11-integration.sh \
-  /absolute/path/to/vendor-pkcs11.so "$(command -v openssl)"
+  /absolute/path/to/vendor-pkcs11.so "$(command -v openssl)" ./test-output
 ```
 
 On Windows, set the same environment variables and run:
 
 ```powershell
 tests/portable/run-pkcs11-integration.ps1 `
-  C:\absolute\path\to\vendor-pkcs11.dll C:\absolute\path\to\openssl.exe
+  C:\absolute\path\to\vendor-pkcs11.dll C:\absolute\path\to\openssl.exe .\test-output
 ```
 
 `P11_TEST_KEY_LABEL` and `P11_TEST_OBJECT_ID_HEX` configure the persistent RSA
@@ -128,15 +128,13 @@ match, the test stops and requires an explicit `P11_TEST_SLOT_ID` instead of
 guessing. `P11_TEST_EXCLUDE_FUNCTIONS` accepts comma-separated exact `C_*`
 names and blocks matching calls before the module receives them.
 
-The `run-fresh-integration.*` wrappers are test-kit adapters. For the bundled
-SoftHSM they copy the library and adjacent configuration template into a
-disposable package, then verify that first use materializes the canonical user
-configuration and token store rather than creating `tokens` beside the module.
-An explicitly supplied alternate library is loaded directly from its original
-path and is not copied. SoftHSM modules in both modes reuse the same canonical
-user configuration; a caller-provided `SOFTHSM2_CONF` remains a
-highest-priority override. Both modes retain the settings selected by
-`testkit.conf` and call the same generic runner.
+The `run-fresh-integration.*` wrappers are test-kit adapters. The bundled
+module is loaded in place and every scenario file is retained under
+`test-output` in the extracted test kit; nothing is copied to temporary
+directories. Portable SoftHSM modules always use the single canonical
+`~/softhsm/softhsm.conf` and `~/softhsm/tokens` paths. An explicitly supplied
+alternate library is also loaded directly from its original path. Both modes
+retain the settings selected by `testkit.conf` and call the same generic runner.
 
 ## Downloadable test kits
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -lt 2 || $# -gt 3 ]]; then
-  echo "usage: run-pkcs11-integration.sh <pkcs11-module> <openssl> [scenario-directory]" >&2
+if [[ $# -ne 3 ]]; then
+  echo "usage: run-pkcs11-integration.sh <pkcs11-module> <openssl> <scenario-directory>" >&2
   echo "PINs and token selection are supplied through the P11_TEST_* environment variables documented in README.md." >&2
   exit 2
 fi
@@ -21,13 +21,8 @@ run() {
 module=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 openssl=$(cd "$(dirname "$2")" && pwd)/$(basename "$2")
 root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-if [[ $# -eq 3 ]]; then
-  scenario_dir=$(mkdir -p "$3" && cd "$3" && pwd)
-else
-  scenario_dir=$(mktemp -d "${RUNNER_TEMP:-/tmp}/pkcs11-integration.XXXXXX")
-fi
-build_dir=$(mktemp -d "${RUNNER_TEMP:-/tmp}/pkcs11-client-build.XXXXXX")
-tester="$build_dir/portable-token-e2e"
+scenario_dir=$(mkdir -p "$3" && cd "$3" && pwd)
+tester=
 
 log "module=$module"
 log "OpenSSL CLI=$openssl"
@@ -52,6 +47,9 @@ if [[ -n ${P11_TEST_CLIENT:-} ]]; then
   test -x "$tester"
   log "using bundled precompiled PKCS #11 client=$tester"
 else
+	build_dir="$scenario_dir/client-build"
+	mkdir -p "$build_dir"
+	tester="$build_dir/portable-token-e2e"
   cxx=${CXX:-c++}
   if [[ $(uname -s) == Linux ]]; then
     run "$cxx" -std=c++17 -O2 -Wall -Wextra -Werror \
@@ -65,7 +63,7 @@ else
 fi
 
 log "PKCS #11 prepare phase: select token, optionally initialize it, run isolated GOST checks, then generate RSA-2048 and create CSR"
-(cd /tmp && run "$tester" prepare "$module" "$scenario_dir")
+(cd "$scenario_dir" && run "$tester" prepare "$module" "$scenario_dir")
 
 log "independently verify the token-signed PKCS#10 request"
 run "$openssl" req -in "$scenario_dir/request.pem" -verify -noout
@@ -87,7 +85,7 @@ log "write the detached-CMS test payload"
 printf 'portable PKCS11 detached CMS payload\n' > "$scenario_dir/payload.bin"
 
 log "PKCS #11 finish phase: reopen key, import X.509 certificate, digest and sign CMS attributes"
-(cd /tmp && run "$tester" finish "$module" "$scenario_dir" \
+(cd "$scenario_dir" && run "$tester" finish "$module" "$scenario_dir" \
   "$scenario_dir/issued.der" "$scenario_dir/ca.der" \
   "$scenario_dir/payload.bin" "$scenario_dir/signature.p7s")
 
@@ -96,6 +94,9 @@ run "$openssl" cms -verify -binary -inform DER \
   -in "$scenario_dir/signature.p7s" -content "$scenario_dir/payload.bin" \
   -CAfile "$scenario_dir/ca.pem" -purpose any -out "$scenario_dir/verified.bin"
 run cmp "$scenario_dir/payload.bin" "$scenario_dir/verified.bin"
+
+log "reload the module and verify the token is ready for other utilities without initialization or PIN setup"
+(cd "$scenario_dir" && run "$tester" ready "$module")
 
 log "PASS: standard direct PKCS #11 and external OpenSSL integration test completed"
 log "evidence retained in $scenario_dir"

@@ -6,7 +6,7 @@ by a fresh GitHub Actions verification runner. It is separate from the product
 archive so either file can be downloaded independently.
 
 The kit contains:
-- the matching portable SoftHSM module and configuration;
+- the matching portable SoftHSM module;
 - a precompiled dependency-light C++ PKCS #11 client;
 - a pinned, statically linked OpenSSL CLI used as the independent reference;
 - shell or PowerShell launchers;
@@ -17,14 +17,16 @@ The kit contains:
 To run the bundled SoftHSM module, keep the test-kit directory intact and start
 the launcher with no arguments. To test another SoftHSM/PKCS #11 module, pass
 the path to that library as the only argument. An explicitly supplied library
-is loaded directly from that path and is not copied. The bundled module is
-copied to an isolated disposable package, but both modes use SoftHSM's same
-standard per-user configuration and token store. An adjacent softhsm.conf is
-only a first-use template; it is never the persistent store location.
+is loaded directly from that path and is not copied. The bundled module is also
+loaded in place. Test evidence is written only to test-output inside the
+extracted test-kit directory. Portable SoftHSM copies always use
+~/softhsm/softhsm.conf and ~/softhsm/tokens (under %USERPROFILE% on Windows).
 
 Edit testkit.conf to select token handling and PINs. INITIALIZE_TOKEN=AUTO
-initializes the bundled SoftHSM only when its canonical user configuration does
-not yet exist; otherwise it uses safe existing-token mode. An explicitly
+initializes the bundled SoftHSM when its canonical token store is empty, leaving
+a fully initialized token with a working user PIN and persistent test objects.
+Later runs reuse the token and replace only objects with the configured test
+IDs. An explicitly
 supplied library always uses existing-token mode under AUTO. YES enables
 destructive C_InitToken and C_InitPIN. NO disables them and automatically blocks
 C_InitToken, C_InitPIN, and C_SetPIN before invocation. EXCLUDED_FUNCTIONS can

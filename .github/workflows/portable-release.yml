@@ -6,7 +6,7 @@ on:
       release_tag:
         description: Release tag to create or update
         required: true
-        default: v2.7.0-portable.20
+        default: v2.7.0-portable.21
 
 permissions:
   contents: read
@@ -179,6 +179,8 @@ jobs:
           scripts/portable/build-test-kit-unix.sh linux-x64
           mkdir "$RUNNER_TEMP/packaged-testkit"
           unzip -q dist/softhsm-testkit-linux-x64.zip -d "$RUNNER_TEMP/packaged-testkit"
+          test ! -e "$GITHUB_WORKSPACE/downloaded/softhsm.conf"
+          test ! -e "$RUNNER_TEMP/packaged-testkit/softhsm.conf"
           bash "$RUNNER_TEMP/packaged-testkit/run-test.sh" 2>&1 | \
             tee "$RUNNER_TEMP/default-test.log"
           grep -F '[SCENARIO] BEGIN GOST:' "$RUNNER_TEMP/default-test.log"
@@ -218,15 +220,15 @@ jobs:
         run: |
           export HOME="$RUNNER_TEMP/softhsm-user-home"
           kit="$RUNNER_TEMP/packaged-testkit"
-          if bash "$kit/run-test.sh" "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so" \
-              > "$RUNNER_TEMP/safe-alternate.log" 2>&1; then
-            echo "safe alternate module with duplicate object IDs unexpectedly passed" >&2
-            exit 1
-          fi
+          bash "$kit/run-test.sh" "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so" \
+            > "$RUNNER_TEMP/safe-alternate.log" 2>&1
           grep -F '[TEST-KIT] initialize token=NO' "$RUNNER_TEMP/safe-alternate.log"
           grep -F '[TEST-KIT] excluded functions=C_InitToken,C_InitPIN,C_SetPIN' \
             "$RUNNER_TEMP/safe-alternate.log"
           grep -F "[SCRIPT] using alternate PKCS #11 library directly in its original directory: $GITHUB_WORKSPACE/downloaded/libsofthsm2.so" \
+            "$RUNNER_TEMP/safe-alternate.log"
+          grep -F '[CLEANUP] removed ' "$RUNNER_TEMP/safe-alternate.log"
+          grep -F '[SCRIPT] PASS: standard direct PKCS #11 and external OpenSSL integration test completed' \
             "$RUNNER_TEMP/safe-alternate.log"
           if grep -F '[SCRIPT] copying bundled PKCS #11 library' "$RUNNER_TEMP/safe-alternate.log"; then
             echo "alternate module was unexpectedly copied" >&2
@@ -244,10 +246,16 @@ jobs:
           grep -F '[SCRIPT] PASS: standard direct PKCS #11 and external OpenSSL integration test completed' \
             "$RUNNER_TEMP/shared-alternate.log"
           test ! -e "$GITHUB_WORKSPACE/downloaded/tokens"
+          find "$HOME/softhsm/tokens" -type f -print0 | sort -z | xargs -0 sha256sum \
+            > "$RUNNER_TEMP/tokens-before-profile.sha256"
           perl -0pi -e 's/FAKE_RUTOKEN_ECP = false/FAKE_RUTOKEN_ECP = true/' \
-            "$HOME/.config/softhsm2/softhsm2.conf"
+            "$HOME/softhsm/softhsm.conf"
           "$kit/bin/portable-token-e2e" rutoken-profile \
             "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so"
+          find "$HOME/softhsm/tokens" -type f -print0 | sort -z | xargs -0 sha256sum \
+            > "$RUNNER_TEMP/tokens-after-profile.sha256"
+          cmp "$RUNNER_TEMP/tokens-before-profile.sha256" \
+            "$RUNNER_TEMP/tokens-after-profile.sha256"
           P11_TEST_TOKEN_LABEL='Rutoken ECP <no label>' \
           P11_TEST_OBJECT_ID_HEX=504f525441424c47 \
           P11_TEST_KEY_LABEL=portable-ci-rsa-rutoken \
@@ -259,11 +267,12 @@ jobs:
           no_template="$RUNNER_TEMP/softhsm-no-template"
           mkdir -p "$generated_home" "$no_template"
           cp "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so" "$no_template/libsofthsm2.so"
-          HOME="$generated_home" "$kit/bin/portable-token-e2e" probe \
-            "$no_template/libsofthsm2.so"
+          printf 'this adjacent config must never be parsed\n' > "$no_template/softhsm.conf"
+          HOME="$generated_home" SOFTHSM2_CONF="$no_template/missing-override.conf" \
+            "$kit/bin/portable-token-e2e" probe "$no_template/libsofthsm2.so"
           grep -F 'directories.tokendir = tokens' \
-            "$generated_home/.config/softhsm2/softhsm2.conf"
-          test -d "$generated_home/.config/softhsm2/tokens"
+            "$generated_home/softhsm/softhsm.conf"
+          test -d "$generated_home/softhsm/tokens"
           test ! -e "$no_template/tokens"
           export HOME="$RUNNER_TEMP/softhsm-exclusion-home"
           mkdir -p "$HOME"
@@ -320,7 +329,7 @@ jobs:
               "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so"
           test ! -e "$GITHUB_WORKSPACE/downloaded/tokens"
           perl -0pi -e 's/FAKE_RUTOKEN_ECP = false/FAKE_RUTOKEN_ECP = true/' \
-            "$HOME/.config/softhsm2/softhsm2.conf"
+            "$HOME/softhsm/softhsm.conf"
           "$RUNNER_TEMP/packaged-testkit/bin/portable-token-e2e" rutoken-profile \
             "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so"
           P11_TEST_TOKEN_LABEL='Rutoken ECP <no label>' \
@@ -334,8 +343,8 @@ jobs:
           cp "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so" "$no_template/libsofthsm2.so"
           HOME="$generated_home" "$RUNNER_TEMP/packaged-testkit/bin/portable-token-e2e" probe \
             "$no_template/libsofthsm2.so"
-          test -f "$generated_home/.config/softhsm2/softhsm2.conf"
-          test -d "$generated_home/.config/softhsm2/tokens"
+          test -f "$generated_home/softhsm/softhsm.conf"
+          test -d "$generated_home/softhsm/tokens"
           test ! -e "$no_template/tokens"
           unzip -q dist/softhsm-testkit-linux-arm64.zip -d artifact-testkit
       - uses: actions/upload-artifact@v7
@@ -373,7 +382,7 @@ jobs:
           set "P11_TEST_OBJECT_ID_HEX="
           set "P11_TEST_KEY_LABEL="
           if exist "%CD%\downloaded\tokens" exit /b 1
-          powershell -NoProfile -Command "(Get-Content -Raw '%USERPROFILE%\softhsm2.conf').Replace('FAKE_RUTOKEN_ECP = false','FAKE_RUTOKEN_ECP = true') | Set-Content -NoNewline -Encoding ascii '%USERPROFILE%\softhsm2.conf'"
+          powershell -NoProfile -Command "(Get-Content -Raw '%USERPROFILE%\softhsm\softhsm.conf').Replace('FAKE_RUTOKEN_ECP = false','FAKE_RUTOKEN_ECP = true') | Set-Content -NoNewline -Encoding ascii '%USERPROFILE%\softhsm\softhsm.conf'"
           "%RUNNER_TEMP%\packaged-testkit\bin\portable-token-e2e.exe" rutoken-profile "%CD%\downloaded\softhsm2.dll"
           if errorlevel 1 exit /b %ERRORLEVEL%
           set "P11_TEST_TOKEN_LABEL=Rutoken ECP <no label>"
@@ -389,8 +398,8 @@ jobs:
           copy /y "%CD%\downloaded\softhsm2.dll" "%RUNNER_TEMP%\softhsm-no-template\softhsm2.dll"
           "%RUNNER_TEMP%\packaged-testkit\bin\portable-token-e2e.exe" probe "%RUNNER_TEMP%\softhsm-no-template\softhsm2.dll"
           if errorlevel 1 exit /b %ERRORLEVEL%
-          if not exist "%USERPROFILE%\softhsm2.conf" exit /b 1
-          if not exist "%USERPROFILE%\tokens" exit /b 1
+          if not exist "%USERPROFILE%\softhsm\softhsm.conf" exit /b 1
+          if not exist "%USERPROFILE%\softhsm\tokens" exit /b 1
           if exist "%RUNNER_TEMP%\softhsm-no-template\tokens" exit /b 1
           powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-x64.zip' -DestinationPath 'artifact-testkit'"
       - uses: actions/upload-artifact@v7
@@ -428,7 +437,7 @@ jobs:
           set "P11_TEST_OBJECT_ID_HEX="
           set "P11_TEST_KEY_LABEL="
           if exist "%CD%\downloaded\tokens" exit /b 1
-          powershell -NoProfile -Command "(Get-Content -Raw '%USERPROFILE%\softhsm2.conf').Replace('FAKE_RUTOKEN_ECP = false','FAKE_RUTOKEN_ECP = true') | Set-Content -NoNewline -Encoding ascii '%USERPROFILE%\softhsm2.conf'"
+          powershell -NoProfile -Command "(Get-Content -Raw '%USERPROFILE%\softhsm\softhsm.conf').Replace('FAKE_RUTOKEN_ECP = false','FAKE_RUTOKEN_ECP = true') | Set-Content -NoNewline -Encoding ascii '%USERPROFILE%\softhsm\softhsm.conf'"
           "%RUNNER_TEMP%\packaged-testkit\bin\portable-token-e2e.exe" rutoken-profile "%CD%\downloaded\softhsm2.dll"
           if errorlevel 1 exit /b %ERRORLEVEL%
           set "P11_TEST_TOKEN_LABEL=Rutoken ECP <no label>"
@@ -444,8 +453,8 @@ jobs:
           copy /y "%CD%\downloaded\softhsm2.dll" "%RUNNER_TEMP%\softhsm-no-template\softhsm2.dll"
           "%RUNNER_TEMP%\packaged-testkit\bin\portable-token-e2e.exe" probe "%RUNNER_TEMP%\softhsm-no-template\softhsm2.dll"
           if errorlevel 1 exit /b %ERRORLEVEL%
-          if not exist "%USERPROFILE%\softhsm2.conf" exit /b 1
-          if not exist "%USERPROFILE%\tokens" exit /b 1
+          if not exist "%USERPROFILE%\softhsm\softhsm.conf" exit /b 1
+          if not exist "%USERPROFILE%\softhsm\tokens" exit /b 1
           if exist "%RUNNER_TEMP%\softhsm-no-template\tokens" exit /b 1
           powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-x86.zip' -DestinationPath 'artifact-testkit'"
       - uses: actions/upload-artifact@v7
@@ -483,7 +492,7 @@ jobs:
           set "P11_TEST_OBJECT_ID_HEX="
           set "P11_TEST_KEY_LABEL="
           if exist "%CD%\downloaded\tokens" exit /b 1
-          powershell -NoProfile -Command "(Get-Content -Raw '%USERPROFILE%\softhsm2.conf').Replace('FAKE_RUTOKEN_ECP = false','FAKE_RUTOKEN_ECP = true') | Set-Content -NoNewline -Encoding ascii '%USERPROFILE%\softhsm2.conf'"
+          powershell -NoProfile -Command "(Get-Content -Raw '%USERPROFILE%\softhsm\softhsm.conf').Replace('FAKE_RUTOKEN_ECP = false','FAKE_RUTOKEN_ECP = true') | Set-Content -NoNewline -Encoding ascii '%USERPROFILE%\softhsm\softhsm.conf'"
           "%RUNNER_TEMP%\packaged-testkit\bin\portable-token-e2e.exe" rutoken-profile "%CD%\downloaded\softhsm2.dll"
           if errorlevel 1 exit /b %ERRORLEVEL%
           set "P11_TEST_TOKEN_LABEL=Rutoken ECP <no label>"
@@ -499,8 +508,8 @@ jobs:
           copy /y "%CD%\downloaded\softhsm2.dll" "%RUNNER_TEMP%\softhsm-no-template\softhsm2.dll"
           "%RUNNER_TEMP%\packaged-testkit\bin\portable-token-e2e.exe" probe "%RUNNER_TEMP%\softhsm-no-template\softhsm2.dll"
           if errorlevel 1 exit /b %ERRORLEVEL%
-          if not exist "%USERPROFILE%\softhsm2.conf" exit /b 1
-          if not exist "%USERPROFILE%\tokens" exit /b 1
+          if not exist "%USERPROFILE%\softhsm\softhsm.conf" exit /b 1
+          if not exist "%USERPROFILE%\softhsm\tokens" exit /b 1
           if exist "%RUNNER_TEMP%\softhsm-no-template\tokens" exit /b 1
           powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-arm64.zip' -DestinationPath 'artifact-testkit'"
       - uses: actions/upload-artifact@v7
@@ -537,7 +546,7 @@ jobs:
               "$GITHUB_WORKSPACE/downloaded/libsofthsm2.dylib"
           test ! -e "$GITHUB_WORKSPACE/downloaded/tokens"
           perl -0pi -e 's/FAKE_RUTOKEN_ECP = false/FAKE_RUTOKEN_ECP = true/' \
-            "$HOME/.config/softhsm2/softhsm2.conf"
+            "$HOME/softhsm/softhsm.conf"
           "$RUNNER_TEMP/packaged-testkit/bin/portable-token-e2e" rutoken-profile \
             "$GITHUB_WORKSPACE/downloaded/libsofthsm2.dylib"
           P11_TEST_TOKEN_LABEL='Rutoken ECP <no label>' \
@@ -551,8 +560,8 @@ jobs:
           cp "$GITHUB_WORKSPACE/downloaded/libsofthsm2.dylib" "$no_template/libsofthsm2.dylib"
           HOME="$generated_home" "$RUNNER_TEMP/packaged-testkit/bin/portable-token-e2e" probe \
             "$no_template/libsofthsm2.dylib"
-          test -f "$generated_home/.config/softhsm2/softhsm2.conf"
-          test -d "$generated_home/.config/softhsm2/tokens"
+          test -f "$generated_home/softhsm/softhsm.conf"
+          test -d "$generated_home/softhsm/tokens"
           test ! -e "$no_template/tokens"
           unzip -q dist/softhsm-testkit-macos-universal.zip -d artifact-testkit
       - uses: actions/upload-artifact@v7
@@ -611,5 +620,5 @@ jobs:
             gh release create "$RELEASE_TAG" release-assets/* \
               --target "$GITHUB_SHA" \
               --title "SoftHSM portable $RELEASE_TAG" \
-              --notes "Portable, installer-free PKCS #11 modules and independently downloadable self-contained test kits for Linux x64/ARM64, Windows x86/x64/ARM64, and macOS universal. Set FAKE_RUTOKEN_ECP = true in the canonical user configuration to enable the Rutoken ECP 2.19 compatibility profile: Aktiv library/slot/token identity, slots 0..14 with the token in slot 0, device-style serial and version metadata, PIN range 6..249, Rutoken-ordered implemented mechanism intersection with hardware-style flags and limits, rejection of exportable generated private keys, rejection of GOST private-key imports, and Rutoken-style denial of private GOST scalar reads. Unsupported physical-device mechanisms are not falsely advertised. Normal SoftHSM behavior remains the default. SoftHSM materializes one canonical per-user configuration on first use: an adjacent softhsm.conf is copied as the initial template, or a safe default is generated when no template exists. Later loads from any directory and both 32/64-bit processes reuse that same user configuration and token store; tokens are not copied from or created beside the module. SOFTHSM2_CONF remains an explicit highest-priority override. Extract a matching test-kit ZIP and run run-test.cmd or bash run-test.sh with no arguments; pass another library path as the only argument to load it directly without copying. CI verifies the normal strict SoftHSM E2E, alternate-library mode, and the Rutoken profile's metadata, slot mapping, policy gates, GOST/RSA generation and signing, CSR, certificate import, and detached CMS on all six platforms. Test kits include the module, precompiled client, static OpenSSL, launchers, source, headers, licenses, and environment manifest. GitHub Actions artifacts contain direct payload without nested ZIPs; SHA256SUMS covers all six product and six test-kit archives."
+              --notes "Portable, installer-free PKCS #11 modules and independently downloadable self-contained test kits for Linux x64/ARM64, Windows x86/x64/ARM64, and macOS universal. Every portable module copy uses exactly one per-user configuration and store: ~/softhsm/softhsm.conf and ~/softhsm/tokens (under %USERPROFILE% on Windows). The module creates them on first use and deliberately ignores SOFTHSM2_CONF, adjacent files, working-directory files, and system configuration paths. Test-kit launchers load modules in place and retain all scenario evidence under test-output inside the extracted kit; they do not copy files into temporary directories. AUTO initializes the bundled token and user PIN only when the canonical store is empty; later runs reuse it and replace only the configured test IDs. The complete GOST/RSA/CSR/certificate/CMS test then reloads the module and proves the resulting persistent objects are usable without C_InitToken, C_InitPIN, or C_SetPIN. FAKE_RUTOKEN_ECP changes only the external Rutoken ECP 2.19 presentation and does not alter the object store or cryptographic semantics. All six platform builds are verified on separate fresh runners."
           fi

@@ -23,6 +23,10 @@ include_directories(${INCLUDE_DIRS})
 
 add_library(${PROJECT_NAME} OBJECT ${SOURCES})
 target_compile_options(${PROJECT_NAME} PRIVATE ${COMPILE_OPTIONS})
+if(ENABLE_PORTABLE)
+    target_compile_definitions(${PROJECT_NAME}
+                               PRIVATE SOFTHSM2_PORTABLE_USER_CONFIG=1)
+endif()
 
 set(softhsmtokendir ${DEFAULT_TOKENDIR})
 set(default_softhsm2_conf ${CMAKE_INSTALL_FULL_SYSCONFDIR}/softhsm2.conf)

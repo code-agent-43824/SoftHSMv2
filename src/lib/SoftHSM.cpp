@@ -338,21 +338,6 @@ static CK_RV extractObjectInformation(CK_ATTRIBUTE_PTR pTemplate,
 	return CKR_OK;
 }
 
-static bool getBooleanTemplateValue(CK_ATTRIBUTE_PTR pTemplate, CK_ULONG ulCount,
-	CK_ATTRIBUTE_TYPE type, CK_BBOOL& value)
-{
-	for (CK_ULONG i = 0; i < ulCount; ++i)
-	{
-		if (pTemplate[i].type == type && pTemplate[i].pValue != NULL_PTR &&
-			pTemplate[i].ulValueLen == sizeof(CK_BBOOL))
-		{
-			memcpy(&value, pTemplate[i].pValue, sizeof(value));
-			return true;
-		}
-	}
-	return false;
-}
-
 static CK_RV checkKeyLength(CK_KEY_TYPE keyType, size_t byteLen)
 {
 	switch (keyType) {
@@ -1744,8 +1729,8 @@ CK_RV SoftHSM::C_InitToken(CK_SLOT_ID slotID, CK_UTF8CHAR_PTR pPin, CK_ULONG ulP
 
 	// Check the PIN
 	if (pPin == NULL_PTR) return CKR_ARGUMENTS_BAD;
-	const CK_ULONG minPinLen = fakeRutokenECP ? 6 : MIN_PIN_LEN;
-	const CK_ULONG maxPinLen = fakeRutokenECP ? 249 : MAX_PIN_LEN;
+	const CK_ULONG minPinLen = MIN_PIN_LEN;
+	const CK_ULONG maxPinLen = MAX_PIN_LEN;
 	if (ulPinLen < minPinLen || ulPinLen > maxPinLen) return CKR_PIN_INCORRECT;
 
 	ByteString soPIN(pPin, ulPinLen);
@@ -1771,8 +1756,8 @@ CK_RV SoftHSM::C_InitPIN(CK_SESSION_HANDLE hSession, CK_UTF8CHAR_PTR pPin, CK_UL
 
 	// Check the PIN
 	if (pPin == NULL_PTR) return CKR_ARGUMENTS_BAD;
-	const CK_ULONG minPinLen = fakeRutokenECP ? 6 : MIN_PIN_LEN;
-	const CK_ULONG maxPinLen = fakeRutokenECP ? 249 : MAX_PIN_LEN;
+	const CK_ULONG minPinLen = MIN_PIN_LEN;
+	const CK_ULONG maxPinLen = MAX_PIN_LEN;
 	if (ulPinLen < minPinLen || ulPinLen > maxPinLen) return CKR_PIN_LEN_RANGE;
 
 	ByteString userPIN(pPin, ulPinLen);
@@ -1794,8 +1779,8 @@ CK_RV SoftHSM::C_SetPIN(CK_SESSION_HANDLE hSession, CK_UTF8CHAR_PTR pOldPin, CK_
 	// Check the new PINs
 	if (pOldPin == NULL_PTR) return CKR_ARGUMENTS_BAD;
 	if (pNewPin == NULL_PTR) return CKR_ARGUMENTS_BAD;
-	const CK_ULONG minPinLen = fakeRutokenECP ? 6 : MIN_PIN_LEN;
-	const CK_ULONG maxPinLen = fakeRutokenECP ? 249 : MAX_PIN_LEN;
+	const CK_ULONG minPinLen = MIN_PIN_LEN;
+	const CK_ULONG maxPinLen = MAX_PIN_LEN;
 	if (ulNewLen < minPinLen || ulNewLen > maxPinLen) return CKR_PIN_LEN_RANGE;
 
 	ByteString oldPIN(pOldPin, ulOldLen);
@@ -2282,19 +2267,6 @@ CK_RV SoftHSM::C_GetAttributeValue(CK_SESSION_HANDLE hSession, CK_OBJECT_HANDLE 
 
 	CK_BBOOL isOnToken = object->getBooleanValue(CKA_TOKEN, false);
 	CK_BBOOL isPrivate = object->getBooleanValue(CKA_PRIVATE, true);
-	if (fakeRutokenECP && object->getUnsignedLongValue(CKA_CLASS, CKO_DATA) == CKO_PRIVATE_KEY &&
-		object->getUnsignedLongValue(CKA_KEY_TYPE, CKK_RSA) == CKK_GOSTR3410)
-	{
-		for (CK_ULONG i = 0; i < ulCount; ++i)
-		{
-			if (pTemplate[i].type == CKA_VALUE)
-			{
-				pTemplate[i].ulValueLen = CK_UNAVAILABLE_INFORMATION;
-				return CKR_ATTRIBUTE_TYPE_INVALID;
-			}
-		}
-	}
-
 	// Check read user credentials
 	CK_RV rv = haveRead(session->getState(), isOnToken, isPrivate);
 	if (rv != CKR_OK)
@@ -6778,15 +6750,6 @@ CK_RV SoftHSM::C_GenerateKeyPair
 	// Get the session
 	Session* session = (Session*)handleManager->getSession(hSession);
 	if (session == NULL) return CKR_SESSION_HANDLE_INVALID;
-	if (fakeRutokenECP)
-	{
-		CK_BBOOL sensitive = CK_TRUE;
-		CK_BBOOL extractable = CK_FALSE;
-		getBooleanTemplateValue(pPrivateKeyTemplate, ulPrivateKeyAttributeCount, CKA_SENSITIVE, sensitive);
-		getBooleanTemplateValue(pPrivateKeyTemplate, ulPrivateKeyAttributeCount, CKA_EXTRACTABLE, extractable);
-		if (sensitive != CK_TRUE || extractable == CK_TRUE) return CKR_TEMPLATE_INCONSISTENT;
-	}
-
 	// Check the mechanism, only accept RSA, DSA, EC and DH key pair generation.
 	CK_KEY_TYPE keyType;
 	switch (pMechanism->mechanism)
@@ -14511,10 +14474,6 @@ CK_RV SoftHSM::CreateObject(CK_SESSION_HANDLE hSession, CK_ATTRIBUTE_PTR pTempla
 		ERROR_MSG("Mandatory attribute not present in template");
 		return rv;
 	}
-	if (fakeRutokenECP && op == OBJECT_OP_CREATE &&
-		objClass == CKO_PRIVATE_KEY && keyType == CKK_GOSTR3410)
-		return CKR_TEMPLATE_INCONSISTENT;
-
 	// Check user credentials
 	rv = haveWrite(session->getState(), isOnToken, isPrivate);
 	if (rv != CKR_OK)

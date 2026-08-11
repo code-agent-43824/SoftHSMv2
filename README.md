@@ -65,25 +65,24 @@ The unit tests requires CppUnit.
 This fork provides installer-free ZIP archives for Linux x64, Linux ARM64,
 Windows x86, Windows x64, Windows ARM64, and universal macOS. Extract one archive and point
 the application directly at the PKCS #11 module. On first use, the module
-creates its standard per-user configuration if needed. If `softhsm.conf` is
-present beside the module it is copied there as the initial template;
-otherwise a safe default is generated. Later loads always reuse the per-user
-file, so modules in different directories and 32/64-bit processes use the same
-configuration and token store. The locations are
-`%USERPROFILE%\softhsm2.conf` on Windows and
-`~/.config/softhsm2/softhsm2.conf` on Unix/macOS. The default relative
+creates its single standard per-user configuration if needed. Later loads
+always reuse that file, so modules in different directories and 32/64-bit
+processes use the same configuration and token store. The locations are
+`%USERPROFILE%\softhsm\softhsm.conf` on Windows and
+`~/softhsm/softhsm.conf` on Unix/macOS. The default relative
 `directories.tokendir = tokens` stores tokens beside that user configuration,
 not beside the module. Relative token paths are resolved from the active
 configuration file, so the application's working directory does not matter.
 
 The portable build also has an opt-in `FAKE_RUTOKEN_ECP = true` compatibility
-profile. It exposes Rutoken ECP library/slot/token metadata and private-key
-policy while advertising only the Rutoken mechanisms that the build actually
-implements. See `packaging/portable/README.txt` for the exact scope.
+profile. It changes Rutoken ECP library/slot/token presentation while
+advertising only the Rutoken mechanisms that the build actually implements;
+the object store and cryptographic behavior stay unchanged. See
+`packaging/portable/README.txt` for the exact scope.
 
 Portable builds statically include OpenSSL. Linux and Windows also statically
-include their C/C++ runtime; macOS uses the system libc++. The `SOFTHSM2_CONF`
-environment variable remains available as an explicit highest-priority override. See
+include their C/C++ runtime; macOS uses the system libc++. Portable modules
+ignore `SOFTHSM2_CONF`, adjacent files, and system configuration paths. See
 `packaging/portable/README.txt` for the archive layout.
 
 Each platform archive is produced and uploaded by a build job. A separate,

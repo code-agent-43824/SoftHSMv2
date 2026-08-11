@@ -79,7 +79,7 @@ Copy-Item (Join-Path $RootDir "packaging/portable/TEST-KIT-README.txt") (Join-Pa
 Copy-Item (Join-Path $RootDir "packaging/portable/testkit.conf") (Join-Path $StageDir "testkit.conf")
 Copy-Item (Join-Path $RootDir "LICENSE") (Join-Path $StageDir "LICENSE-TestClient.txt")
 Copy-Item (Join-Path $OpenSSLSource "LICENSE.txt") (Join-Path $StageDir "LICENSE-OpenSSL.txt")
-$RequiredProductFiles = @("softhsm2.dll", "softhsm.conf", "LICENSE-SoftHSM.txt", "LICENSE-Botan.txt")
+$RequiredProductFiles = @("softhsm2.dll", "LICENSE-SoftHSM.txt", "LICENSE-Botan.txt")
 foreach ($Name in $RequiredProductFiles) {
     $Source = Join-Path $ProductDir $Name
     if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) {

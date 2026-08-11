@@ -13,7 +13,7 @@ Get-Content (Join-Path $KitDir "testkit.env") | ForEach-Object {
 $ConfigPath = Join-Path $KitDir "testkit.conf"
 $UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { "$($env:HOMEDRIVE)$($env:HOMEPATH)" }
 if (-not $UserHome) { throw "USERPROFILE or HOMEDRIVE/HOMEPATH is required" }
-$UserConfig = Join-Path $UserHome "softhsm2.conf"
+$UserConfig = Join-Path (Join-Path $UserHome "softhsm") "softhsm.conf"
 $TestConfig = @{}
 $AllowedConfig = @(
     "INITIALIZE_TOKEN", "EXCLUDED_FUNCTIONS", "USER_PIN", "SO_PIN",
@@ -44,7 +44,11 @@ function Set-OptionalEnvironment([string]$Name, [string]$Value) {
 $InitializeSetting = (Get-EffectiveSetting "P11_TEST_INITIALIZE_TOKEN" "INITIALIZE_TOKEN" "AUTO").ToUpperInvariant()
 switch ($InitializeSetting) {
     "AUTO" {
-        $Initialize = if ($args.Count -eq 0 -and -not (Test-Path -LiteralPath $UserConfig) -and -not $env:SOFTHSM2_CONF) {
+        $TokenDirectory = Join-Path (Split-Path -Parent $UserConfig) "tokens"
+        $StoredTokens = if (Test-Path -LiteralPath $TokenDirectory -PathType Container) {
+            @(Get-ChildItem -LiteralPath $TokenDirectory -Directory -Force -ErrorAction Stop)
+        } else { @() }
+        $Initialize = if ($args.Count -eq 0 -and $StoredTokens.Count -eq 0) {
             "YES"
         }
         else { "NO" }
@@ -91,25 +95,18 @@ $BundledMode = if ($args.Count -eq 0) { "YES" } else { "NO" }
 if (-not (Test-Path -LiteralPath $Module -PathType Leaf)) {
     throw "PKCS #11 library is not a file: $Module"
 }
-$AdjacentConfig = Join-Path (Split-Path -Parent $Module) "softhsm.conf"
-$Config = if (Test-Path -LiteralPath $AdjacentConfig -PathType Leaf) {
-    (Resolve-Path -LiteralPath $AdjacentConfig).Path
-}
-else {
-    (Resolve-Path -LiteralPath (Join-Path $KitDir "softhsm.conf")).Path
-}
 $env:P11_TEST_CLIENT = $Client
 $env:OPENSSL_CONF = (Resolve-Path (Join-Path $KitDir "config/openssl.cnf")).Path
 
 Write-Host "[TEST-KIT] platform=$($Settings.PLATFORM)"
 Write-Host "[TEST-KIT] settings=$ConfigPath"
 Write-Host "[TEST-KIT] PKCS #11 library=$Module"
-Write-Host "[TEST-KIT] adjacent SoftHSM config template=$Config"
 Write-Host "[TEST-KIT] canonical user config=$UserConfig"
 Write-Host "[TEST-KIT] initialize token=$Initialize"
 Write-Host "[TEST-KIT] excluded functions=$(if ($Excluded.Count) { $Excluded -join ',' } else { '<none>' })"
 Write-Host "[TEST-KIT] precompiled client=$Client"
 Write-Host "[TEST-KIT] bundled OpenSSL=$OpenSSL"
+Write-Host "[TEST-KIT] all test evidence remains under=$(Join-Path $KitDir 'test-output')"
 
-& (Join-Path $KitDir "scripts/run-fresh-integration.ps1") $Module $OpenSSL $Config $BundledMode
+& (Join-Path $KitDir "scripts/run-fresh-integration.ps1") $Module $OpenSSL $BundledMode
 if ($LASTEXITCODE -ne 0) { throw "downloadable test kit failed" }

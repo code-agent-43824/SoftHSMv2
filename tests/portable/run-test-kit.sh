@@ -11,7 +11,7 @@ module_name=$(sed -n 's/^MODULE_NAME=//p' "$kit_dir/testkit.env")
 test -n "$module_name"
 config_file="$kit_dir/testkit.conf"
 test -f "$config_file"
-user_config="${HOME:?HOME is required}/.config/softhsm2/softhsm2.conf"
+user_config="${HOME:?HOME is required}/softhsm/softhsm.conf"
 
 cfg_initialize=AUTO
 cfg_excluded=
@@ -49,7 +49,8 @@ initialize_setting=${P11_TEST_INITIALIZE_TOKEN:-$cfg_initialize}
 initialize_setting=$(printf '%s' "$initialize_setting" | tr '[:lower:]' '[:upper:]')
 case "$initialize_setting" in
   AUTO)
-    if [[ $# -eq 0 && ! -e "$user_config" && -z ${SOFTHSM2_CONF:-} ]]; then
+    token_dir=$(dirname "$user_config")/tokens
+    if [[ $# -eq 0 ]] && ! find "$token_dir" -mindepth 1 -maxdepth 1 -type d -print -quit 2>/dev/null | grep -q .; then
       initialize=YES
     else
       initialize=NO
@@ -112,11 +113,6 @@ if [[ ! -f "$module" ]]; then
   printf 'PKCS #11 library is not a file: %s\n' "$module" >&2
   exit 2
 fi
-if [[ -f "$(dirname "$module")/softhsm.conf" ]]; then
-  config="$(dirname "$module")/softhsm.conf"
-else
-  config="$kit_dir/softhsm.conf"
-fi
 # ZIP extraction does not restore executable bits consistently across tools.
 # Running this launcher as `bash run-test.sh ...` repairs the bundled tools.
 chmod +x "$kit_dir/bin/portable-token-e2e" "$kit_dir/bin/openssl" \
@@ -129,12 +125,12 @@ export OPENSSL_CONF="$kit_dir/config/openssl.cnf"
 printf '[TEST-KIT] platform=%s\n' "$(sed -n 's/^PLATFORM=//p' "$kit_dir/testkit.env")"
 printf '[TEST-KIT] settings=%s\n' "$config_file"
 printf '[TEST-KIT] PKCS #11 library=%s\n' "$module"
-printf '[TEST-KIT] adjacent SoftHSM config template=%s\n' "$config"
 printf '[TEST-KIT] canonical user config=%s\n' "$user_config"
 printf '[TEST-KIT] initialize token=%s\n' "$initialize"
 printf '[TEST-KIT] excluded functions=%s\n' "${excluded:-<none>}"
 printf '[TEST-KIT] precompiled client=%s\n' "$P11_TEST_CLIENT"
 printf '[TEST-KIT] bundled OpenSSL=%s\n' "$kit_dir/bin/openssl"
+printf '[TEST-KIT] all test evidence remains under=%s\n' "$kit_dir/test-output"
 
 "$kit_dir/scripts/run-fresh-integration.sh" "$module" \
-  "$kit_dir/bin/openssl" "$config" "$bundled_mode"
+  "$kit_dir/bin/openssl" "$bundled_mode"

@@ -104,7 +104,6 @@ $ModulePath = Get-ChildItem -Path $BuildDir -Filter softhsm2.dll -Recurse | Sele
 if (-not $ModulePath) { throw "softhsm2.dll was not produced" }
 New-Item -ItemType Directory -Force -Path $StageDir | Out-Null
 Copy-Item $ModulePath.FullName (Join-Path $StageDir "softhsm2.dll")
-Copy-Item (Join-Path $RootDir "packaging/portable/softhsm.conf") (Join-Path $StageDir "softhsm.conf")
 Copy-Item (Join-Path $RootDir "packaging/portable/README.txt") (Join-Path $StageDir "README.txt")
 Copy-Item (Join-Path $RootDir "LICENSE") (Join-Path $StageDir "LICENSE-SoftHSM.txt")
 Copy-Item (Join-Path $OpenSSLSource "LICENSE.txt") (Join-Path $StageDir "LICENSE-OpenSSL.txt")

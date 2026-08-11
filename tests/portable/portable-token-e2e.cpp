@@ -531,6 +531,44 @@ static CK_SLOT_ID selectSlot(Module& module, bool requireInitialized)
     return candidates.front();
 }
 
+static CK_SLOT_ID selectSlotForInitialization(Module& module, const std::string& targetLabel)
+{
+    const std::optional<CK_SLOT_ID> requestedSlot = configuredSlot();
+    std::vector<CK_SLOT_ID> existingTarget;
+    std::vector<CK_SLOT_ID> uninitialized;
+    const std::vector<CK_SLOT_ID> present = slots(module, CK_TRUE);
+    for (CK_SLOT_ID slot : present)
+    {
+        if (requestedSlot && slot != *requestedSlot) continue;
+        const CK_TOKEN_INFO info = tokenInfo(module, slot);
+        if ((info.flags & CKF_TOKEN_INITIALIZED) != 0)
+        {
+            if (paddedText(info.label, sizeof(info.label)) == targetLabel)
+                existingTarget.push_back(slot);
+        }
+        else
+        {
+            uninitialized.push_back(slot);
+        }
+    }
+    if (existingTarget.size() == 1)
+    {
+        trace("TOKEN", "selected the existing test token for deterministic reinitialization");
+        return existingTarget.front();
+    }
+    if (existingTarget.empty() && uninitialized.size() == 1)
+    {
+        trace("TOKEN", "selected the sole uninitialized slot for first-time initialization");
+        return uninitialized.front();
+    }
+    if (!requestedSlot && existingTarget.empty() && uninitialized.empty() && present.size() == 1)
+    {
+        trace("TOKEN", "selected the sole presented token for explicit destructive reinitialization; its compatibility-profile label may mask the stored label");
+        return present.front();
+    }
+    fail("initialization target is ambiguous; set P11_TEST_SLOT_ID or remove duplicate test-label tokens");
+}
+
 static CK_SESSION_HANDLE openSession(Module& module, CK_SLOT_ID slot)
 {
     CK_SESSION_HANDLE session = CK_INVALID_HANDLE;
@@ -1787,6 +1825,33 @@ static void closeSession(Module& module, CK_SESSION_HANDLE session)
            [&] { return module->C_CloseSession(session); });
 }
 
+static void removePriorTestObjects(Module& module, CK_SESSION_HANDLE session, const Bytes& id)
+{
+    CK_ATTRIBUTE query{CKA_ID, const_cast<unsigned char*>(id.data()), static_cast<CK_ULONG>(id.size())};
+    callOk("C_FindObjectsInit", "remove prior test objects by CKA_ID=" + hexBytes(id.data(), id.size()),
+           [&] { return module->C_FindObjectsInit(session, &query, 1); });
+    std::vector<CK_OBJECT_HANDLE> objects;
+    for (;;)
+    {
+        CK_OBJECT_HANDLE object = CK_INVALID_HANDLE;
+        CK_ULONG count = 0;
+        callOk("C_FindObjects", "enumerate prior test objects", [&] {
+            return module->C_FindObjects(session, &object, 1, &count);
+        });
+        if (count == 0) break;
+        objects.push_back(object);
+    }
+    callOk("C_FindObjectsFinal", "finish prior test-object enumeration",
+           [&] { return module->C_FindObjectsFinal(session); });
+    for (CK_OBJECT_HANDLE object : objects)
+    {
+        callOk("C_DestroyObject", "remove prior test object handle=" + std::to_string(object),
+               [&] { return module->C_DestroyObject(session, object); });
+    }
+    trace("CLEANUP", "removed " + std::to_string(objects.size()) +
+                     " prior test objects with CKA_ID=" + hexBytes(id.data(), id.size()));
+}
+
 static void prepare(const fs::path& modulePath, const fs::path& work)
 {
     const bool initializeToken = environmentYes("P11_TEST_INITIALIZE_TOKEN");
@@ -1809,7 +1874,8 @@ static void prepare(const fs::path& modulePath, const fs::path& work)
     fs::current_path(work);
     trace("FILESYSTEM", "scenario directory=" + work.string() + ", process current directory changed intentionally");
     Module module(modulePath);
-    CK_SLOT_ID slot = selectSlot(module, !initializeToken);
+    CK_SLOT_ID slot = initializeToken ? selectSlotForInitialization(module, tokenLabel) :
+                                       selectSlot(module, true);
 
     if (initializeToken)
     {
@@ -1840,6 +1906,8 @@ static void prepare(const fs::path& modulePath, const fs::path& work)
         logout(module, session, "CKU_SO");
     }
     login(module, session, CKU_USER, userPin);
+    removePriorTestObjects(module, session, rsaObjectId);
+    removePriorTestObjects(module, session, gostId);
 
     trace("SCENARIO", "BEGIN GOST: digest, key generation, signing, and optional import/export capability; "
                       "keyLabel=\"" + std::string(kGostKeyLabel) + "\", objectIdHex=" +
@@ -2027,6 +2095,47 @@ static void finish(const fs::path& modulePath, const fs::path& work,
     std::cout << "Certificate imported, token key reopened, detached CMS written\n";
 }
 
+static void verifyReadyToken(const fs::path& modulePath)
+{
+    const std::string userPin = environment("P11_TEST_USER_PIN", true);
+    const Bytes rsaId = configuredObjectId();
+    const Bytes gostId = gostObjectId(rsaId);
+    Module module(modulePath);
+    const CK_SLOT_ID slot = selectSlot(module, true);
+    const CK_TOKEN_INFO info = tokenInfo(module, slot);
+    if ((info.flags & CKF_TOKEN_INITIALIZED) == 0)
+        fail("token is not initialized after the integration test");
+    if ((info.flags & CKF_USER_PIN_INITIALIZED) == 0)
+        fail("user PIN is not initialized after the integration test");
+
+    CK_SESSION_HANDLE session = openSession(module, slot);
+    login(module, session, CKU_USER, userPin);
+    CK_OBJECT_CLASS privateClass = CKO_PRIVATE_KEY;
+    CK_OBJECT_CLASS certificateClass = CKO_CERTIFICATE;
+    CK_KEY_TYPE rsa = CKK_RSA;
+    CK_KEY_TYPE gost = CKK_GOSTR3410;
+    std::vector<CK_ATTRIBUTE> rsaQuery = {
+        {CKA_CLASS, &privateClass, sizeof(privateClass)},
+        {CKA_KEY_TYPE, &rsa, sizeof(rsa)},
+        {CKA_ID, const_cast<unsigned char*>(rsaId.data()), static_cast<CK_ULONG>(rsaId.size())}
+    };
+    std::vector<CK_ATTRIBUTE> gostQuery = {
+        {CKA_CLASS, &privateClass, sizeof(privateClass)},
+        {CKA_KEY_TYPE, &gost, sizeof(gost)},
+        {CKA_ID, const_cast<unsigned char*>(gostId.data()), static_cast<CK_ULONG>(gostId.size())}
+    };
+    std::vector<CK_ATTRIBUTE> certificateQuery = {
+        {CKA_CLASS, &certificateClass, sizeof(certificateClass)},
+        {CKA_ID, const_cast<unsigned char*>(rsaId.data()), static_cast<CK_ULONG>(rsaId.size())}
+    };
+    (void)findOne(module, session, rsaQuery);
+    (void)findOne(module, session, gostQuery);
+    (void)findOne(module, session, certificateQuery);
+    logout(module, session, "CKU_USER");
+    closeSession(module, session);
+    trace("READY", "fresh module load logged in without C_InitToken/C_InitPIN/C_SetPIN and found persistent GOST/RSA/certificate objects");
+}
+
 static void verifyRutokenProfile(const fs::path& modulePath)
 {
     Module module(modulePath);
@@ -2120,33 +2229,6 @@ static void verifyRutokenProfile(const fs::path& modulePath)
                [&] { return module->C_GetSessionInfo(session, &sessionInfo); });
         if (sessionInfo.slotID != 0) fail("Rutoken facade leaked its backing SoftHSM slot ID");
 
-        CK_OBJECT_CLASS privateClass = CKO_PRIVATE_KEY;
-        CK_KEY_TYPE gostType = CKK_GOSTR3410;
-        CK_OBJECT_HANDLE imported = CK_INVALID_HANDLE;
-        CK_ATTRIBUTE importedGost[] = {
-            {CKA_CLASS, &privateClass, sizeof(privateClass)},
-            {CKA_KEY_TYPE, &gostType, sizeof(gostType)}
-        };
-        check(invoke("C_CreateObject", "hSession=session, pTemplate=GOST-private-import",
-                     [&] { return module->C_CreateObject(session, importedGost,
-                                                         sizeof(importedGost) / sizeof(importedGost[0]), &imported); }),
-              CKR_TEMPLATE_INCONSISTENT, "Rutoken GOST private-key import rejection");
-
-        CK_MECHANISM rsaGeneration{CKM_RSA_PKCS_KEY_PAIR_GEN, nullptr, 0};
-        CK_BBOOL sensitive = CK_FALSE;
-        CK_BBOOL extractable = CK_TRUE;
-        CK_OBJECT_HANDLE publicKey = CK_INVALID_HANDLE;
-        CK_OBJECT_HANDLE privateKey = CK_INVALID_HANDLE;
-        CK_ATTRIBUTE privateTemplate[] = {
-            {CKA_SENSITIVE, &sensitive, sizeof(sensitive)},
-            {CKA_EXTRACTABLE, &extractable, sizeof(extractable)}
-        };
-        check(invoke("C_GenerateKeyPair", "hSession=session, exportable RSA private template",
-                     [&] { return module->C_GenerateKeyPair(session, &rsaGeneration, nullptr, 0,
-                                                            privateTemplate,
-                                                            sizeof(privateTemplate) / sizeof(privateTemplate[0]),
-                                                            &publicKey, &privateKey); }),
-              CKR_TEMPLATE_INCONSISTENT, "Rutoken exportable private-key generation rejection");
         closeSession(module, session);
     }
     std::cout << "Rutoken ECP compatibility profile verified\n";
@@ -2179,11 +2261,17 @@ int main(int argc, char** argv)
                    fs::absolute(argv[5]), fs::absolute(argv[6]), fs::absolute(argv[7]));
             return 0;
         }
+        if (argc == 3 && std::string(argv[1]) == "ready")
+        {
+            verifyReadyToken(fs::absolute(argv[2]));
+            return 0;
+        }
         std::cerr << "usage:\n"
                   << "  portable-token-e2e probe <module>\n"
                   << "  portable-token-e2e rutoken-profile <module>\n"
                   << "  portable-token-e2e prepare <module> <work>\n"
                   << "  portable-token-e2e finish <module> <work> <leaf.der> <ca.der> <payload> <cms.der>\n"
+                  << "  portable-token-e2e ready <module>\n"
                   << "environment:\n"
                   << "  P11_TEST_USER_PIN=<required secret>\n"
                   << "  P11_TEST_INITIALIZE_TOKEN=YES|NO (default NO)\n"

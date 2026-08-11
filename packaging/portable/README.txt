@@ -11,22 +11,23 @@ path:
 
 The module uses one standard configuration per operating-system user:
 
-  Windows:  %USERPROFILE%\softhsm2.conf
-  Linux:    ~/.config/softhsm2/softhsm2.conf
-  macOS:    ~/.config/softhsm2/softhsm2.conf
+  Windows:  %USERPROFILE%\softhsm\softhsm.conf
+  Linux:    ~/softhsm/softhsm.conf
+  macOS:    ~/softhsm/softhsm.conf
 
-On first use, if the user configuration does not exist, the included adjacent
-softhsm.conf is copied there as its initial template. If neither file exists,
-the module creates a safe default user configuration. Later loads always reuse
-that user file, so modules extracted into different directories and 32/64-bit
-processes see the same token store. The default relative
+On first use the module creates a safe default user configuration if that exact
+file does not exist. Every later load uses only that user file, so modules
+extracted into different directories and 32/64-bit processes see the same token
+store. The default relative
 directories.tokendir = tokens creates the token directory beside the user
 configuration; no token directory is copied from or created beside the module.
 Relative paths are resolved from the active configuration file, not from the
 application's working directory.
 
-SOFTHSM2_CONF remains an explicit highest-priority override when a custom
-location is needed.
+The portable module deliberately ignores SOFTHSM2_CONF, adjacent configuration
+files, the process working directory, and system configuration paths. Editing
+the one file above changes the mode for every portable module copy used by that
+operating-system account.
 
 Rutoken ECP compatibility profile
 ---------------------------------
@@ -39,10 +40,10 @@ which loads the PKCS #11 module:
 The module then reports the Rutoken ECP 2.19 library identity, a 15-slot reader
 topology with the token in slot 0, Aktiv/Rutoken token metadata, hardware and
 firmware versions, a stable eight-hex-digit device-style serial number, and the
-6..249 PIN range. Session operations addressed to facade slot 0 are routed to
-the stored SoftHSM token without exposing its internal slot ID. Generated
-private keys must be sensitive and non-extractable, and GOST private-key import
-is rejected, matching the tested physical-device restrictions.
+advertised 6..249 PIN range. Session operations addressed to facade slot 0 are
+routed to the stored SoftHSM token without exposing its internal slot ID. The
+profile changes presentation only: it does not reset or rewrite objects and
+does not alter key, import/export, cryptographic, or actual PIN semantics.
 
 The mechanism list is deliberately the working intersection between the
 Rutoken reference list and mechanisms actually implemented by this portable

@@ -87,14 +87,13 @@ cp "$root_dir/packaging/portable/TEST-KIT-README.txt" "$stage_dir/README.txt"
 cp "$root_dir/packaging/portable/testkit.conf" "$stage_dir/testkit.conf"
 cp "$root_dir/LICENSE" "$stage_dir/LICENSE-TestClient.txt"
 cp "$source_dir/LICENSE.txt" "$stage_dir/LICENSE-OpenSSL.txt"
-for required in "$module_name" softhsm.conf LICENSE-SoftHSM.txt LICENSE-Botan.txt; do
+for required in "$module_name" LICENSE-SoftHSM.txt LICENSE-Botan.txt; do
   if [[ ! -f "$product_dir/$required" ]]; then
     echo "required product file is missing: $product_dir/$required" >&2
     exit 1
   fi
 done
 cp "$product_dir/$module_name" "$stage_dir/$module_name"
-cp "$product_dir/softhsm.conf" "$stage_dir/softhsm.conf"
 cp "$product_dir/LICENSE-SoftHSM.txt" "$stage_dir/LICENSE-SoftHSM.txt"
 cp "$product_dir/LICENSE-Botan.txt" "$stage_dir/LICENSE-Botan.txt"
 if [[ -f "$product_dir/README.txt" ]]; then

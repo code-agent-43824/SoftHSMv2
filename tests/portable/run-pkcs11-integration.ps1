@@ -1,8 +1,8 @@
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-if ($args.Count -lt 2 -or $args.Count -gt 3) {
-    throw "usage: run-pkcs11-integration.ps1 <pkcs11-module> <openssl> [scenario-directory]"
+if ($args.Count -ne 3) {
+    throw "usage: run-pkcs11-integration.ps1 <pkcs11-module> <openssl> <scenario-directory>"
 }
 
 function Write-Step([string]$Message) {
@@ -22,16 +22,13 @@ function Invoke-Native([string]$Executable, [string[]]$Arguments, [string]$Descr
 $Module = (Resolve-Path $args[0]).Path
 $OpenSSL = (Resolve-Path $args[1]).Path
 $RootDir = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
-if ($args.Count -eq 3) {
-    $ScenarioDir = [IO.Path]::GetFullPath($args[2])
-    New-Item -ItemType Directory -Force -Path $ScenarioDir | Out-Null
-} else {
-    $ScenarioDir = Join-Path ([IO.Path]::GetTempPath()) ("pkcs11-integration-" + [guid]::NewGuid())
-    New-Item -ItemType Directory -Path $ScenarioDir | Out-Null
+$ScenarioDir = [IO.Path]::GetFullPath($args[2])
+New-Item -ItemType Directory -Force -Path $ScenarioDir | Out-Null
+$BuildDir = Join-Path $ScenarioDir "client-build"
+$Tester = if ($env:P11_TEST_CLIENT) { (Resolve-Path $env:P11_TEST_CLIENT).Path } else {
+    New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
+    Join-Path $BuildDir "portable-token-e2e.exe"
 }
-$BuildDir = Join-Path ([IO.Path]::GetTempPath()) ("pkcs11-client-build-" + [guid]::NewGuid())
-New-Item -ItemType Directory -Path $BuildDir | Out-Null
-$Tester = if ($env:P11_TEST_CLIENT) { (Resolve-Path $env:P11_TEST_CLIENT).Path } else { Join-Path $BuildDir "portable-token-e2e.exe" }
 
 $Initialize = if ($env:P11_TEST_INITIALIZE_TOKEN) { $env:P11_TEST_INITIALIZE_TOKEN } else { "NO" }
 $Slot = if ($env:P11_TEST_SLOT_ID) { $env:P11_TEST_SLOT_ID } else { "<automatic; exactly one matching token is required>" }
@@ -69,7 +66,7 @@ if ($env:P11_TEST_CLIENT) {
     Invoke-Native "cl" $CompileArgs "compile the dependency-light direct PKCS #11 client"
 }
 
-Push-Location ([IO.Path]::GetTempPath())
+Push-Location $ScenarioDir
 try {
     Invoke-Native $Tester @("prepare", $Module, $ScenarioDir) `
         "PKCS #11 prepare phase: select token, optionally initialize it, run isolated GOST checks, then generate RSA-2048 and create CSR"
@@ -98,7 +95,7 @@ $Payload = Join-Path $ScenarioDir "payload.bin"
 Write-Step "write detached-CMS test payload to $Payload"
 [IO.File]::WriteAllText($Payload, "portable PKCS11 detached CMS payload`n", [Text.UTF8Encoding]::new($false))
 $Cms = Join-Path $ScenarioDir "signature.p7s"
-Push-Location ([IO.Path]::GetTempPath())
+Push-Location $ScenarioDir
 try {
     Invoke-Native $Tester @(
         "finish", $Module, $ScenarioDir,
@@ -117,6 +114,12 @@ $VerifiedHash = (Get-FileHash -Algorithm SHA256 $Verified).Hash
 Write-Host "[RESULT] payload SHA256=$PayloadHash"
 Write-Host "[RESULT] verified SHA256=$VerifiedHash"
 if ($PayloadHash -ne $VerifiedHash) { throw "verified CMS content differs from the payload" }
+
+Push-Location $ScenarioDir
+try {
+    Invoke-Native $Tester @("ready", $Module) `
+        "reload the module and verify the token is ready for other utilities without initialization or PIN setup"
+} finally { Pop-Location }
 
 Write-Step "PASS: standard direct PKCS #11 and external OpenSSL integration test completed"
 Write-Step "evidence retained in $ScenarioDir"
