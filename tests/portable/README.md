@@ -110,6 +110,10 @@ defaults both to `YES`; set them to `NO` explicitly for a vendor module. These
 switches affect only the coupled private-key export/import round trips, not
 ordinary RSA/GOST generation, CSR/CMS, or signing checks.
 
+The client also provides `probe <module>`, a PIN-free initialization and slot
+enumeration check used by CI to verify first-use configuration creation when no
+adjacent template exists.
+
 The trace contains explicit `BEGIN GOST`/`END GOST`, `BEGIN RSA PREPARE`/
 `END RSA PREPARE`, and `BEGIN RSA FINISH`/`END RSA FINISH` boundaries. The
 functional test does not request `CKA_KEY_GEN_MECHANISM`; it verifies generated
@@ -125,13 +129,14 @@ guessing. `P11_TEST_EXCLUDE_FUNCTIONS` accepts comma-separated exact `C_*`
 names and blocks matching calls before the module receives them.
 
 The `run-fresh-integration.*` wrappers are test-kit adapters. For the bundled
-SoftHSM they copy the library and configuration into a disposable directory
-and perform the additional product-specific `tokens`-directory check. An
-explicitly supplied alternate library is instead loaded directly from its
-original path: it is not copied, an adjacent configuration and relative token
-storage stay in place, and a caller-provided `SOFTHSM2_CONF` is preserved. Both
-modes retain the settings selected by `testkit.conf` and call the same generic
-runner.
+SoftHSM they copy the library and adjacent configuration template into a
+disposable package, then verify that first use materializes the canonical user
+configuration and token store rather than creating `tokens` beside the module.
+An explicitly supplied alternate library is loaded directly from its original
+path and is not copied. SoftHSM modules in both modes reuse the same canonical
+user configuration; a caller-provided `SOFTHSM2_CONF` remains a
+highest-priority override. Both modes retain the settings selected by
+`testkit.conf` and call the same generic runner.
 
 ## Downloadable test kits
 

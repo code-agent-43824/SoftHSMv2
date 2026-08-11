@@ -9,13 +9,23 @@ path:
   Windows: softhsm2.dll
   macOS:   libsofthsm2.dylib
 
-The module automatically reads softhsm.conf from its own directory. The
-included configuration stores tokens in a tokens directory beside the module;
-that directory is created on first use. Relative paths in softhsm.conf are
-resolved from the configuration file, not from the application's working
-directory.
+The module uses one standard configuration per operating-system user:
 
-SOFTHSM2_CONF can still override the adjacent configuration file when a custom
+  Windows:  %USERPROFILE%\softhsm2.conf
+  Linux:    ~/.config/softhsm2/softhsm2.conf
+  macOS:    ~/.config/softhsm2/softhsm2.conf
+
+On first use, if the user configuration does not exist, the included adjacent
+softhsm.conf is copied there as its initial template. If neither file exists,
+the module creates a safe default user configuration. Later loads always reuse
+that user file, so modules extracted into different directories and 32/64-bit
+processes see the same token store. The default relative
+directories.tokendir = tokens creates the token directory beside the user
+configuration; no token directory is copied from or created beside the module.
+Relative paths are resolved from the active configuration file, not from the
+application's working directory.
+
+SOFTHSM2_CONF remains an explicit highest-priority override when a custom
 location is needed.
 
 The module statically includes OpenSSL and minimized Botan Streebog and GOST

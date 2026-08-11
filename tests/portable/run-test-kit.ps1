@@ -11,6 +11,9 @@ Get-Content (Join-Path $KitDir "testkit.env") | ForEach-Object {
     if ($_ -match '^([^=]+)=(.*)$') { $Settings[$Matches[1]] = $Matches[2] }
 }
 $ConfigPath = Join-Path $KitDir "testkit.conf"
+$UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { "$($env:HOMEDRIVE)$($env:HOMEPATH)" }
+if (-not $UserHome) { throw "USERPROFILE or HOMEDRIVE/HOMEPATH is required" }
+$UserConfig = Join-Path $UserHome "softhsm2.conf"
 $TestConfig = @{}
 $AllowedConfig = @(
     "INITIALIZE_TOKEN", "EXCLUDED_FUNCTIONS", "USER_PIN", "SO_PIN",
@@ -40,7 +43,12 @@ function Set-OptionalEnvironment([string]$Name, [string]$Value) {
 
 $InitializeSetting = (Get-EffectiveSetting "P11_TEST_INITIALIZE_TOKEN" "INITIALIZE_TOKEN" "AUTO").ToUpperInvariant()
 switch ($InitializeSetting) {
-    "AUTO" { $Initialize = if ($args.Count -eq 0) { "YES" } else { "NO" } }
+    "AUTO" {
+        $Initialize = if ($args.Count -eq 0 -and -not (Test-Path -LiteralPath $UserConfig) -and -not $env:SOFTHSM2_CONF) {
+            "YES"
+        }
+        else { "NO" }
+    }
     "YES" { $Initialize = "YES" }
     "NO" { $Initialize = "NO" }
     default { throw "INITIALIZE_TOKEN must be AUTO, YES, or NO" }
@@ -79,7 +87,7 @@ $Module = if ($args.Count -eq 1) {
 else {
     (Resolve-Path -LiteralPath (Join-Path $KitDir $Settings.MODULE_NAME)).Path
 }
-$ExpectPortableTokenDir = if ($args.Count -eq 0) { "YES" } else { "NO" }
+$BundledMode = if ($args.Count -eq 0) { "YES" } else { "NO" }
 if (-not (Test-Path -LiteralPath $Module -PathType Leaf)) {
     throw "PKCS #11 library is not a file: $Module"
 }
@@ -96,11 +104,12 @@ $env:OPENSSL_CONF = (Resolve-Path (Join-Path $KitDir "config/openssl.cnf")).Path
 Write-Host "[TEST-KIT] platform=$($Settings.PLATFORM)"
 Write-Host "[TEST-KIT] settings=$ConfigPath"
 Write-Host "[TEST-KIT] PKCS #11 library=$Module"
-Write-Host "[TEST-KIT] SoftHSM config=$Config"
+Write-Host "[TEST-KIT] adjacent SoftHSM config template=$Config"
+Write-Host "[TEST-KIT] canonical user config=$UserConfig"
 Write-Host "[TEST-KIT] initialize token=$Initialize"
 Write-Host "[TEST-KIT] excluded functions=$(if ($Excluded.Count) { $Excluded -join ',' } else { '<none>' })"
 Write-Host "[TEST-KIT] precompiled client=$Client"
 Write-Host "[TEST-KIT] bundled OpenSSL=$OpenSSL"
 
-& (Join-Path $KitDir "scripts/run-fresh-integration.ps1") $Module $OpenSSL $Config $ExpectPortableTokenDir
+& (Join-Path $KitDir "scripts/run-fresh-integration.ps1") $Module $OpenSSL $Config $BundledMode
 if ($LASTEXITCODE -ne 0) { throw "downloadable test kit failed" }

@@ -6,7 +6,7 @@ on:
       release_tag:
         description: Release tag to create or update
         required: true
-        default: v2.7.0-portable.17
+        default: v2.7.0-portable.18
 
 permissions:
   contents: read
@@ -153,6 +153,8 @@ jobs:
           PORTABLE_PRODUCT_DIR: downloaded
         run: |
           set -o pipefail
+          export HOME="$RUNNER_TEMP/softhsm-user-home"
+          mkdir -p "$HOME"
           mkdir -p dist artifact-testkit
           scripts/portable/build-test-kit-unix.sh linux-x64
           mkdir "$RUNNER_TEMP/packaged-testkit"
@@ -194,10 +196,11 @@ jobs:
           unzip -q dist/softhsm-testkit-linux-x64.zip -d artifact-testkit
       - name: Verify safe alternate-library defaults and exclusion gate
         run: |
+          export HOME="$RUNNER_TEMP/softhsm-user-home"
           kit="$RUNNER_TEMP/packaged-testkit"
           if bash "$kit/run-test.sh" "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so" \
               > "$RUNNER_TEMP/safe-alternate.log" 2>&1; then
-            echo "uninitialized alternate module unexpectedly passed" >&2
+            echo "safe alternate module with duplicate object IDs unexpectedly passed" >&2
             exit 1
           fi
           grep -F '[TEST-KIT] initialize token=NO' "$RUNNER_TEMP/safe-alternate.log"
@@ -213,6 +216,26 @@ jobs:
             echo "safe alternate mode invoked C_InitToken" >&2
             exit 1
           fi
+          P11_TEST_OBJECT_ID_HEX=504f525441424c46 \
+          P11_TEST_KEY_LABEL=portable-ci-rsa-alternate \
+            bash "$kit/run-test.sh" "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so" \
+              > "$RUNNER_TEMP/shared-alternate.log" 2>&1
+          grep -F '[TEST-KIT] initialize token=NO' "$RUNNER_TEMP/shared-alternate.log"
+          grep -F '[SCRIPT] PASS: standard direct PKCS #11 and external OpenSSL integration test completed' \
+            "$RUNNER_TEMP/shared-alternate.log"
+          test ! -e "$GITHUB_WORKSPACE/downloaded/tokens"
+          generated_home="$RUNNER_TEMP/softhsm-generated-home"
+          no_template="$RUNNER_TEMP/softhsm-no-template"
+          mkdir -p "$generated_home" "$no_template"
+          cp "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so" "$no_template/libsofthsm2.so"
+          HOME="$generated_home" "$kit/bin/portable-token-e2e" probe \
+            "$no_template/libsofthsm2.so"
+          grep -F 'directories.tokendir = tokens' \
+            "$generated_home/.config/softhsm2/softhsm2.conf"
+          test -d "$generated_home/.config/softhsm2/tokens"
+          test ! -e "$no_template/tokens"
+          export HOME="$RUNNER_TEMP/softhsm-exclusion-home"
+          mkdir -p "$HOME"
           sed -i 's/^INITIALIZE_TOKEN=AUTO$/INITIALIZE_TOKEN=YES/' "$kit/testkit.conf"
           sed -i 's/^EXCLUDED_FUNCTIONS=$/EXCLUDED_FUNCTIONS=C_InitToken,C_InitPIN,C_SetPIN/' \
             "$kit/testkit.conf"
@@ -253,11 +276,27 @@ jobs:
         env:
           PORTABLE_PRODUCT_DIR: downloaded
         run: |
+          export HOME="$RUNNER_TEMP/softhsm-user-home"
+          mkdir -p "$HOME"
           mkdir -p dist artifact-testkit
           scripts/portable/build-test-kit-unix.sh linux-arm64
           mkdir "$RUNNER_TEMP/packaged-testkit"
           unzip -q dist/softhsm-testkit-linux-arm64.zip -d "$RUNNER_TEMP/packaged-testkit"
           bash "$RUNNER_TEMP/packaged-testkit/run-test.sh"
+          P11_TEST_OBJECT_ID_HEX=504f525441424c46 \
+          P11_TEST_KEY_LABEL=portable-ci-rsa-alternate \
+            bash "$RUNNER_TEMP/packaged-testkit/run-test.sh" \
+              "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so"
+          test ! -e "$GITHUB_WORKSPACE/downloaded/tokens"
+          generated_home="$RUNNER_TEMP/softhsm-generated-home"
+          no_template="$RUNNER_TEMP/softhsm-no-template"
+          mkdir -p "$generated_home" "$no_template"
+          cp "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so" "$no_template/libsofthsm2.so"
+          HOME="$generated_home" "$RUNNER_TEMP/packaged-testkit/bin/portable-token-e2e" probe \
+            "$no_template/libsofthsm2.so"
+          test -f "$generated_home/.config/softhsm2/softhsm2.conf"
+          test -d "$generated_home/.config/softhsm2/tokens"
+          test ! -e "$no_template/tokens"
           unzip -q dist/softhsm-testkit-linux-arm64.zip -d artifact-testkit
       - uses: actions/upload-artifact@v7
         with:
@@ -284,12 +323,24 @@ jobs:
         run: |
           call scripts\portable\build-test-kit-windows.cmd
           powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-x64.zip' -DestinationPath $env:RUNNER_TEMP\packaged-testkit"
+          set "USERPROFILE=%RUNNER_TEMP%\softhsm-user-home"
           call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd"
           if errorlevel 1 exit /b %ERRORLEVEL%
-          set "P11_TEST_INITIALIZE_TOKEN=YES"
+          set "P11_TEST_OBJECT_ID_HEX=504f525441424c46"
+          set "P11_TEST_KEY_LABEL=portable-ci-rsa-alternate"
           call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd" "%CD%\downloaded\softhsm2.dll"
           if errorlevel 1 exit /b %ERRORLEVEL%
-          set "P11_TEST_INITIALIZE_TOKEN="
+          set "P11_TEST_OBJECT_ID_HEX="
+          set "P11_TEST_KEY_LABEL="
+          if exist "%CD%\downloaded\tokens" exit /b 1
+          set "USERPROFILE=%RUNNER_TEMP%\softhsm-generated-home"
+          mkdir "%RUNNER_TEMP%\softhsm-no-template"
+          copy /y "%CD%\downloaded\softhsm2.dll" "%RUNNER_TEMP%\softhsm-no-template\softhsm2.dll"
+          "%RUNNER_TEMP%\packaged-testkit\bin\portable-token-e2e.exe" probe "%RUNNER_TEMP%\softhsm-no-template\softhsm2.dll"
+          if errorlevel 1 exit /b %ERRORLEVEL%
+          if not exist "%USERPROFILE%\softhsm2.conf" exit /b 1
+          if not exist "%USERPROFILE%\tokens" exit /b 1
+          if exist "%RUNNER_TEMP%\softhsm-no-template\tokens" exit /b 1
           powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-x64.zip' -DestinationPath 'artifact-testkit'"
       - uses: actions/upload-artifact@v7
         with:
@@ -316,12 +367,24 @@ jobs:
         run: |
           call scripts\portable\build-test-kit-windows.cmd
           powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-arm64.zip' -DestinationPath $env:RUNNER_TEMP\packaged-testkit"
+          set "USERPROFILE=%RUNNER_TEMP%\softhsm-user-home"
           call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd"
           if errorlevel 1 exit /b %ERRORLEVEL%
-          set "P11_TEST_INITIALIZE_TOKEN=YES"
+          set "P11_TEST_OBJECT_ID_HEX=504f525441424c46"
+          set "P11_TEST_KEY_LABEL=portable-ci-rsa-alternate"
           call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd" "%CD%\downloaded\softhsm2.dll"
           if errorlevel 1 exit /b %ERRORLEVEL%
-          set "P11_TEST_INITIALIZE_TOKEN="
+          set "P11_TEST_OBJECT_ID_HEX="
+          set "P11_TEST_KEY_LABEL="
+          if exist "%CD%\downloaded\tokens" exit /b 1
+          set "USERPROFILE=%RUNNER_TEMP%\softhsm-generated-home"
+          mkdir "%RUNNER_TEMP%\softhsm-no-template"
+          copy /y "%CD%\downloaded\softhsm2.dll" "%RUNNER_TEMP%\softhsm-no-template\softhsm2.dll"
+          "%RUNNER_TEMP%\packaged-testkit\bin\portable-token-e2e.exe" probe "%RUNNER_TEMP%\softhsm-no-template\softhsm2.dll"
+          if errorlevel 1 exit /b %ERRORLEVEL%
+          if not exist "%USERPROFILE%\softhsm2.conf" exit /b 1
+          if not exist "%USERPROFILE%\tokens" exit /b 1
+          if exist "%RUNNER_TEMP%\softhsm-no-template\tokens" exit /b 1
           powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-arm64.zip' -DestinationPath 'artifact-testkit'"
       - uses: actions/upload-artifact@v7
         with:
@@ -344,11 +407,27 @@ jobs:
         env:
           PORTABLE_PRODUCT_DIR: downloaded
         run: |
+          export HOME="$RUNNER_TEMP/softhsm-user-home"
+          mkdir -p "$HOME"
           mkdir -p dist artifact-testkit
           scripts/portable/build-test-kit-unix.sh macos-universal
           mkdir "$RUNNER_TEMP/packaged-testkit"
           unzip -q dist/softhsm-testkit-macos-universal.zip -d "$RUNNER_TEMP/packaged-testkit"
           bash "$RUNNER_TEMP/packaged-testkit/run-test.sh"
+          P11_TEST_OBJECT_ID_HEX=504f525441424c46 \
+          P11_TEST_KEY_LABEL=portable-ci-rsa-alternate \
+            bash "$RUNNER_TEMP/packaged-testkit/run-test.sh" \
+              "$GITHUB_WORKSPACE/downloaded/libsofthsm2.dylib"
+          test ! -e "$GITHUB_WORKSPACE/downloaded/tokens"
+          generated_home="$RUNNER_TEMP/softhsm-generated-home"
+          no_template="$RUNNER_TEMP/softhsm-no-template"
+          mkdir -p "$generated_home" "$no_template"
+          cp "$GITHUB_WORKSPACE/downloaded/libsofthsm2.dylib" "$no_template/libsofthsm2.dylib"
+          HOME="$generated_home" "$RUNNER_TEMP/packaged-testkit/bin/portable-token-e2e" probe \
+            "$no_template/libsofthsm2.dylib"
+          test -f "$generated_home/.config/softhsm2/softhsm2.conf"
+          test -d "$generated_home/.config/softhsm2/tokens"
+          test ! -e "$no_template/tokens"
           unzip -q dist/softhsm-testkit-macos-universal.zip -d artifact-testkit
       - uses: actions/upload-artifact@v7
         with:
@@ -405,5 +484,5 @@ jobs:
             gh release create "$RELEASE_TAG" release-assets/* \
               --target "$GITHUB_SHA" \
               --title "SoftHSM portable $RELEASE_TAG" \
-              --notes "Portable, installer-free PKCS #11 modules and independently downloadable self-contained test kits for Linux x64/ARM64, Windows x64/ARM64, and macOS universal. Extract a matching test-kit ZIP and run run-test.cmd or bash run-test.sh with no arguments: the bundled SoftHSM module and configuration are selected automatically and copied to an isolated disposable directory. To test another library, pass its path as the only argument; alternate libraries are loaded directly from their original path without copying, preserving adjacent configuration, relative token storage, and caller-provided SOFTHSM2_CONF. The included testkit.conf controls AUTO/YES/NO initialization, user/SO PINs, slot/labels, and a comma-separated exclusion list of PKCS #11 C_* functions. AUTO initializes only the bundled disposable SoftHSM; alternate libraries use safe existing-token mode, which blocks C_InitToken, C_InitPIN, and C_SetPIN before invocation. GOST and RSA generation and signing remain required for every compatible module; private-key import/export round trips remain mandatory for bundled SoftHSM but are skipped for alternate vendor libraries that may forbid exportable generated keys or private-key import. GOST and RSA scenarios have explicit non-overlapping trace boundaries, distinct labels/IDs and key-type-qualified searches; the functional test does not query CKA_KEY_GEN_MECHANISM. CI tests the full default path, scenario separation, direct explicit-library path, safe AUTO behavior, and the pre-invocation exclusion guard. Test kits include the module, precompiled client, static OpenSSL, launchers, source, headers, licenses, and environment manifest. GitHub Actions artifacts contain direct payload without nested ZIPs; SHA256SUMS covers all five product and five test-kit archives."
+              --notes "Portable, installer-free PKCS #11 modules and independently downloadable self-contained test kits for Linux x64/ARM64, Windows x64/ARM64, and macOS universal. SoftHSM now materializes one canonical per-user configuration on first use: an adjacent softhsm.conf is copied as the initial template, or a safe default is generated when no template exists. Later loads from any directory and both 32/64-bit processes reuse that same user configuration and token store; tokens are not copied from or created beside the module. SOFTHSM2_CONF remains an explicit highest-priority override. Extract a matching test-kit ZIP and run run-test.cmd or bash run-test.sh with no arguments; pass another library path as the only argument to load it directly without copying. The included testkit.conf controls AUTO/YES/NO initialization, user/SO PINs, slot/labels, and excluded C_* functions. AUTO initializes bundled SoftHSM only when its canonical user config is absent; existing configs and alternate libraries use safe existing-token mode. GOST and RSA generation/signing remain required for compatible modules; private-key import/export round trips remain mandatory for bundled SoftHSM but are skipped for alternate vendor libraries that may forbid them. CI verifies first-use copy, default generation without a template, shared bundled/alternate storage, no adjacent token directory, safe AUTO behavior, exclusion guards, full RSA/GOST/CSR/CMS E2E, and all five platforms. Test kits include the module, precompiled client, static OpenSSL, launchers, source, headers, licenses, and environment manifest. GitHub Actions artifacts contain direct payload without nested ZIPs; SHA256SUMS covers all five product and five test-kit archives."
           fi

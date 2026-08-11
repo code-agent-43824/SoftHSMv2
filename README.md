@@ -64,14 +64,21 @@ The unit tests requires CppUnit.
 
 This fork provides installer-free ZIP archives for Linux x64, Linux ARM64,
 Windows x64, Windows ARM64, and universal macOS. Extract one archive and point
-the application directly at the PKCS #11 module. The module reads
-`softhsm.conf` from its own directory by default and creates the configured
-`tokens` directory beside it. Relative token paths are resolved from the
+the application directly at the PKCS #11 module. On first use, the module
+creates its standard per-user configuration if needed. If `softhsm.conf` is
+present beside the module it is copied there as the initial template;
+otherwise a safe default is generated. Later loads always reuse the per-user
+file, so modules in different directories and 32/64-bit processes use the same
+configuration and token store. The locations are
+`%USERPROFILE%\softhsm2.conf` on Windows and
+`~/.config/softhsm2/softhsm2.conf` on Unix/macOS. The default relative
+`directories.tokendir = tokens` stores tokens beside that user configuration,
+not beside the module. Relative token paths are resolved from the active
 configuration file, so the application's working directory does not matter.
 
 Portable builds statically include OpenSSL. Linux and Windows also statically
 include their C/C++ runtime; macOS uses the system libc++. The `SOFTHSM2_CONF`
-environment variable remains available as an explicit override. See
+environment variable remains available as an explicit highest-priority override. See
 `packaging/portable/README.txt` for the archive layout.
 
 Each platform archive is produced and uploaded by a build job. A separate,

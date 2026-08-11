@@ -2031,6 +2031,13 @@ int main(int argc, char** argv)
 {
     try
     {
+        if (argc == 3 && std::string(argv[1]) == "probe")
+        {
+            Module module(fs::absolute(argv[2]));
+            (void)slots(module, CK_FALSE);
+            std::cout << "PKCS #11 module initialized and enumerated successfully\n";
+            return 0;
+        }
         if (argc == 4 && std::string(argv[1]) == "prepare")
         {
             prepare(fs::absolute(argv[2]), fs::absolute(argv[3]));
@@ -2043,6 +2050,7 @@ int main(int argc, char** argv)
             return 0;
         }
         std::cerr << "usage:\n"
+                  << "  portable-token-e2e probe <module>\n"
                   << "  portable-token-e2e prepare <module> <work>\n"
                   << "  portable-token-e2e finish <module> <work> <leaf.der> <ca.der> <payload> <cms.der>\n"
                   << "environment:\n"

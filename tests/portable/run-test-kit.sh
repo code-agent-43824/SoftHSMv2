@@ -11,6 +11,7 @@ module_name=$(sed -n 's/^MODULE_NAME=//p' "$kit_dir/testkit.env")
 test -n "$module_name"
 config_file="$kit_dir/testkit.conf"
 test -f "$config_file"
+user_config="${HOME:?HOME is required}/.config/softhsm2/softhsm2.conf"
 
 cfg_initialize=AUTO
 cfg_excluded=
@@ -47,7 +48,13 @@ done < "$config_file"
 initialize_setting=${P11_TEST_INITIALIZE_TOKEN:-$cfg_initialize}
 initialize_setting=$(printf '%s' "$initialize_setting" | tr '[:lower:]' '[:upper:]')
 case "$initialize_setting" in
-  AUTO) [[ $# -eq 0 ]] && initialize=YES || initialize=NO ;;
+  AUTO)
+    if [[ $# -eq 0 && ! -e "$user_config" && -z ${SOFTHSM2_CONF:-} ]]; then
+      initialize=YES
+    else
+      initialize=NO
+    fi
+    ;;
   YES|NO) initialize=$initialize_setting ;;
   *) echo 'INITIALIZE_TOKEN must be AUTO, YES, or NO' >&2; exit 2 ;;
 esac
@@ -96,10 +103,10 @@ set_optional P11_TEST_OBJECT_ID_HEX "${P11_TEST_OBJECT_ID_HEX:-$cfg_object_id}"
 
 if [[ $# -eq 1 ]]; then
   module=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
-  expect_portable_token_dir=NO
+  bundled_mode=NO
 else
   module="$kit_dir/$module_name"
-  expect_portable_token_dir=YES
+  bundled_mode=YES
 fi
 if [[ ! -f "$module" ]]; then
   printf 'PKCS #11 library is not a file: %s\n' "$module" >&2
@@ -122,11 +129,12 @@ export OPENSSL_CONF="$kit_dir/config/openssl.cnf"
 printf '[TEST-KIT] platform=%s\n' "$(sed -n 's/^PLATFORM=//p' "$kit_dir/testkit.env")"
 printf '[TEST-KIT] settings=%s\n' "$config_file"
 printf '[TEST-KIT] PKCS #11 library=%s\n' "$module"
-printf '[TEST-KIT] SoftHSM config=%s\n' "$config"
+printf '[TEST-KIT] adjacent SoftHSM config template=%s\n' "$config"
+printf '[TEST-KIT] canonical user config=%s\n' "$user_config"
 printf '[TEST-KIT] initialize token=%s\n' "$initialize"
 printf '[TEST-KIT] excluded functions=%s\n' "${excluded:-<none>}"
 printf '[TEST-KIT] precompiled client=%s\n' "$P11_TEST_CLIENT"
 printf '[TEST-KIT] bundled OpenSSL=%s\n' "$kit_dir/bin/openssl"
 
 "$kit_dir/scripts/run-fresh-integration.sh" "$module" \
-  "$kit_dir/bin/openssl" "$config" "$expect_portable_token_dir"
+  "$kit_dir/bin/openssl" "$config" "$bundled_mode"

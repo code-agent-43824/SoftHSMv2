@@ -4,10 +4,12 @@ softhsm2.conf \- SoftHSM configuration file
 .SH SYNOPSIS
 .B softhsm2.conf
 .SH DESCRIPTION
-This is the configuration file for SoftHSM. It can be found on a
-default location, but can also be relocated by using the
-environment variable. Any configuration must be done according
-to the file format found in this document.
+This is the configuration file for SoftHSM. The standard per-user file is
+created automatically on first use. An adjacent softhsm.conf or softhsm2.conf,
+when present, is copied as its initial template; otherwise a safe default is
+generated. The file can also be relocated by using the environment variable.
+Any configuration must be done according to the file format found in this
+document.
 .SH FILE FORMAT
 Each configuration option is a pair of name and value separated by
 a equality sign. The configuration option must be located on a single line.
@@ -109,7 +111,10 @@ When defined, the value will be used as path to the configuration file.
 .SH FILES
 .TP
 .I ~/.config/softhsm2/softhsm2.conf
-default user-specific location of the SoftHSM configuration file; if it exists it will override the system wide configuration
+default user-specific location of the SoftHSM configuration file on Unix and macOS; created automatically on first use
+.TP
+.I %USERPROFILE%\softhsm2.conf
+default user-specific location on Windows; created automatically on first use
 .TP
 .I @default_softhsm2_conf@
 default system-wide location of the SoftHSM configuration file
