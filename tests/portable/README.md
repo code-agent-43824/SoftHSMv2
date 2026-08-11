@@ -145,6 +145,7 @@ product platform:
 
 - `softhsm-testkit-linux-x64.zip`;
 - `softhsm-testkit-linux-arm64.zip`;
+- `softhsm-testkit-windows-x86.zip`;
 - `softhsm-testkit-windows-x64.zip`;
 - `softhsm-testkit-windows-arm64.zip`;
 - `softhsm-testkit-macos-universal.zip`.

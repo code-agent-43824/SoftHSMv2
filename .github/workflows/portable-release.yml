@@ -6,7 +6,7 @@ on:
       release_tag:
         description: Release tag to create or update
         required: true
-        default: v2.7.0-portable.18
+        default: v2.7.0-portable.19
 
 permissions:
   contents: read
@@ -89,6 +89,26 @@ jobs:
         with:
           name: softhsm-portable-windows-x64
           path: artifact/softhsm-portable-windows-x64/
+          if-no-files-found: error
+          retention-days: 90
+
+  build-windows-x86:
+    name: Build Windows x86
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build package
+        shell: cmd
+        env:
+          PORTABLE_ARCH: x86
+        run: scripts\portable\build-windows.cmd
+      - name: Prepare flat Actions artifact
+        shell: powershell
+        run: Expand-Archive -LiteralPath dist\softhsm-portable-windows-x86.zip -DestinationPath artifact\softhsm-portable-windows-x86
+      - uses: actions/upload-artifact@v7
+        with:
+          name: softhsm-portable-windows-x86
+          path: artifact/softhsm-portable-windows-x86/
           if-no-files-found: error
           retention-days: 90
 
@@ -349,6 +369,50 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+  verify-windows-x86:
+    name: Verify downloaded Windows x86 package
+    needs: build-windows-x86
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: softhsm-portable-windows-x86
+          path: downloaded
+      - name: Build and test downloadable test kit
+        shell: cmd
+        env:
+          PORTABLE_ARCH: x86
+          PORTABLE_PRODUCT_DIR: downloaded
+        run: |
+          call scripts\portable\build-test-kit-windows.cmd
+          powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-x86.zip' -DestinationPath $env:RUNNER_TEMP\packaged-testkit"
+          set "USERPROFILE=%RUNNER_TEMP%\softhsm-user-home"
+          call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd"
+          if errorlevel 1 exit /b %ERRORLEVEL%
+          set "P11_TEST_OBJECT_ID_HEX=504f525441424c46"
+          set "P11_TEST_KEY_LABEL=portable-ci-rsa-alternate"
+          call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd" "%CD%\downloaded\softhsm2.dll"
+          if errorlevel 1 exit /b %ERRORLEVEL%
+          set "P11_TEST_OBJECT_ID_HEX="
+          set "P11_TEST_KEY_LABEL="
+          if exist "%CD%\downloaded\tokens" exit /b 1
+          set "USERPROFILE=%RUNNER_TEMP%\softhsm-generated-home"
+          mkdir "%RUNNER_TEMP%\softhsm-no-template"
+          copy /y "%CD%\downloaded\softhsm2.dll" "%RUNNER_TEMP%\softhsm-no-template\softhsm2.dll"
+          "%RUNNER_TEMP%\packaged-testkit\bin\portable-token-e2e.exe" probe "%RUNNER_TEMP%\softhsm-no-template\softhsm2.dll"
+          if errorlevel 1 exit /b %ERRORLEVEL%
+          if not exist "%USERPROFILE%\softhsm2.conf" exit /b 1
+          if not exist "%USERPROFILE%\tokens" exit /b 1
+          if exist "%RUNNER_TEMP%\softhsm-no-template\tokens" exit /b 1
+          powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-x86.zip' -DestinationPath 'artifact-testkit'"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: softhsm-testkit-windows-x86
+          path: artifact-testkit/
+          if-no-files-found: error
+          retention-days: 90
+
   verify-windows-arm64:
     name: Verify downloaded Windows ARM64 package
     needs: build-windows-arm64
@@ -441,6 +505,7 @@ jobs:
     needs:
       - verify-linux-x64
       - verify-linux-arm64
+      - verify-windows-x86
       - verify-windows-x64
       - verify-windows-arm64
       - verify-macos-universal
@@ -462,11 +527,11 @@ jobs:
             (cd "$source" && zip -X -9 -r "$GITHUB_WORKSPACE/release-assets/$name.zip" .)
             count=$((count + 1))
           done
-          test "$count" -eq 10
+          test "$count" -eq 12
           (cd release-assets && sha256sum *.zip > SHA256SUMS)
       - name: Verify release archive layout
         run: |
-          test "$(find release-assets -maxdepth 1 -type f -name '*.zip' | wc -l)" -eq 10
+          test "$(find release-assets -maxdepth 1 -type f -name '*.zip' | wc -l)" -eq 12
           for archive in release-assets/*.zip; do
             if zipinfo -1 "$archive" | grep -Eq '\.zip$'; then
               echo "nested ZIP found in $archive" >&2
@@ -484,5 +549,5 @@ jobs:
             gh release create "$RELEASE_TAG" release-assets/* \
               --target "$GITHUB_SHA" \
               --title "SoftHSM portable $RELEASE_TAG" \
-              --notes "Portable, installer-free PKCS #11 modules and independently downloadable self-contained test kits for Linux x64/ARM64, Windows x64/ARM64, and macOS universal. SoftHSM now materializes one canonical per-user configuration on first use: an adjacent softhsm.conf is copied as the initial template, or a safe default is generated when no template exists. Later loads from any directory and both 32/64-bit processes reuse that same user configuration and token store; tokens are not copied from or created beside the module. SOFTHSM2_CONF remains an explicit highest-priority override. Extract a matching test-kit ZIP and run run-test.cmd or bash run-test.sh with no arguments; pass another library path as the only argument to load it directly without copying. The included testkit.conf controls AUTO/YES/NO initialization, user/SO PINs, slot/labels, and excluded C_* functions. AUTO initializes bundled SoftHSM only when its canonical user config is absent; existing configs and alternate libraries use safe existing-token mode. GOST and RSA generation/signing remain required for compatible modules; private-key import/export round trips remain mandatory for bundled SoftHSM but are skipped for alternate vendor libraries that may forbid them. CI verifies first-use copy, default generation without a template, shared bundled/alternate storage, no adjacent token directory, safe AUTO behavior, exclusion guards, full RSA/GOST/CSR/CMS E2E, and all five platforms. Test kits include the module, precompiled client, static OpenSSL, launchers, source, headers, licenses, and environment manifest. GitHub Actions artifacts contain direct payload without nested ZIPs; SHA256SUMS covers all five product and five test-kit archives."
+              --notes "Portable, installer-free PKCS #11 modules and independently downloadable self-contained test kits for Linux x64/ARM64, Windows x86/x64/ARM64, and macOS universal. SoftHSM now materializes one canonical per-user configuration on first use: an adjacent softhsm.conf is copied as the initial template, or a safe default is generated when no template exists. Later loads from any directory and both 32/64-bit processes reuse that same user configuration and token store; tokens are not copied from or created beside the module. SOFTHSM2_CONF remains an explicit highest-priority override. Extract a matching test-kit ZIP and run run-test.cmd or bash run-test.sh with no arguments; pass another library path as the only argument to load it directly without copying. The included testkit.conf controls AUTO/YES/NO initialization, user/SO PINs, slot/labels, and excluded C_* functions. AUTO initializes bundled SoftHSM only when its canonical user config is absent; existing configs and alternate libraries use safe existing-token mode. GOST and RSA generation/signing remain required for compatible modules; private-key import/export round trips remain mandatory for bundled SoftHSM but are skipped for alternate vendor libraries that may forbid them. CI verifies first-use copy, default generation without a template, shared bundled/alternate storage, no adjacent token directory, safe AUTO behavior, exclusion guards, full RSA/GOST/CSR/CMS E2E, and all six platforms. Test kits include the module, precompiled client, static OpenSSL, launchers, source, headers, licenses, and environment manifest. GitHub Actions artifacts contain direct payload without nested ZIPs; SHA256SUMS covers all six product and six test-kit archives."
           fi

@@ -63,7 +63,7 @@ The unit tests requires CppUnit.
 ### Portable binary releases
 
 This fork provides installer-free ZIP archives for Linux x64, Linux ARM64,
-Windows x64, Windows ARM64, and universal macOS. Extract one archive and point
+Windows x86, Windows x64, Windows ARM64, and universal macOS. Extract one archive and point
 the application directly at the PKCS #11 module. On first use, the module
 creates its standard per-user configuration if needed. If `softhsm.conf` is
 present beside the module it is copied there as the initial template;
@@ -89,7 +89,7 @@ uses only PKCS #11 calls to run separate GOST digest/key/signing checks and RSA
 key/import/export/CSR/CMS checks. The two key families use distinct labels and
 IDs, key-type-qualified searches, and explicit trace boundaries. Shell and
 PowerShell launchers use the OpenSSL command line as the independent RSA CSR,
-CA, certificate, and CMS verifier. The release job runs only after all five
+CA, certificate, and CMS verifier. The release job runs only after all six
 fresh-runner verification jobs have passed.
 
 Each release also provides a self-contained test-kit ZIP per platform. Extract

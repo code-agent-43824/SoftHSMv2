@@ -21,6 +21,28 @@ $StageDir = Join-Path $WorkDir "stage"
 $OutputDir = Join-Path $RootDir "dist"
 $ArchiveName = "softhsm-portable-windows-$($env:PORTABLE_ARCH).zip"
 
+switch ($env:PORTABLE_ARCH.ToLowerInvariant()) {
+    "x86" {
+        $OpenSSLTarget = "VC-WIN32"
+        $BotanCpu = "x86_32"
+        $CMakeArch = "Win32"
+        $ExpectedMachinePattern = '14C machine \(x86\)'
+    }
+    "x64" {
+        $OpenSSLTarget = "VC-WIN64A"
+        $BotanCpu = "x86_64"
+        $CMakeArch = "x64"
+        $ExpectedMachinePattern = '8664 machine \(x64\)'
+    }
+    "arm64" {
+        $OpenSSLTarget = "VC-WIN64-ARM"
+        $BotanCpu = "arm64"
+        $CMakeArch = "ARM64"
+        $ExpectedMachinePattern = 'AA64 machine \(ARM64\)'
+    }
+    default { throw "unsupported PORTABLE_ARCH: $($env:PORTABLE_ARCH)" }
+}
+
 New-Item -ItemType Directory -Force -Path $WorkDir, $OutputDir | Out-Null
 $OpenSSLUrl = "https://github.com/openssl/openssl/releases/download/openssl-$($env:OPENSSL_VERSION)/openssl-$($env:OPENSSL_VERSION).tar.gz"
 Invoke-WebRequest -Uri $OpenSSLUrl -OutFile $OpenSSLArchive
@@ -32,7 +54,6 @@ tar -xzf $OpenSSLArchive -C $WorkDir
 
 Push-Location $OpenSSLSource
 try {
-    $OpenSSLTarget = if ($env:PORTABLE_ARCH -eq "arm64") { "VC-WIN64-ARM" } else { "VC-WIN64A" }
     perl Configure $OpenSSLTarget no-shared no-module no-tests no-asm "--prefix=$OpenSSLPrefix" "--libdir=lib"
     if ($LASTEXITCODE -ne 0) { throw "OpenSSL configure failed" }
     nmake
@@ -52,7 +73,6 @@ if ($ActualBotanHash -ne $env:BOTAN_SHA256.ToLowerInvariant()) {
 }
 tar -xJf $BotanArchive -C $WorkDir
 
-$BotanCpu = if ($env:PORTABLE_ARCH -eq "arm64") { "arm64" } else { "x86_64" }
 python (Join-Path $BotanSource "configure.py") --cc=msvc --os=windows --cpu=$BotanCpu `
     --msvc-runtime=MT --disable-shared --minimized-build --enable-modules=streebog,gost_3410,emsa_raw `
     --without-documentation "--with-build-dir=$BotanBuild"
@@ -62,7 +82,6 @@ if ($LASTEXITCODE -ne 0) { throw "Botan build failed" }
 $BotanLibrary = Get-ChildItem -Path $BotanBuild -Filter "botan*.lib" | Select-Object -First 1
 if (-not $BotanLibrary) { throw "Botan static library was not produced" }
 
-$CMakeArch = if ($env:PORTABLE_ARCH -eq "arm64") { "ARM64" } else { "x64" }
 cmake -S $RootDir -B $BuildDir -A $CMakeArch `
     -DCMAKE_BUILD_TYPE=Release `
     -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
@@ -90,6 +109,12 @@ Copy-Item (Join-Path $RootDir "packaging/portable/README.txt") (Join-Path $Stage
 Copy-Item (Join-Path $RootDir "LICENSE") (Join-Path $StageDir "LICENSE-SoftHSM.txt")
 Copy-Item (Join-Path $OpenSSLSource "LICENSE.txt") (Join-Path $StageDir "LICENSE-OpenSSL.txt")
 Copy-Item (Join-Path $BotanSource "license.txt") (Join-Path $StageDir "LICENSE-Botan.txt")
+
+$MachineHeader = & dumpbin /headers (Join-Path $StageDir "softhsm2.dll") |
+    Select-String -Pattern $ExpectedMachinePattern
+if (-not $MachineHeader) {
+    throw "portable module does not have the expected $($env:PORTABLE_ARCH) PE machine type"
+}
 
 $UnexpectedDlls = & dumpbin /dependents (Join-Path $StageDir "softhsm2.dll") |
     Select-String -Pattern 'libcrypto|libssl|vcruntime|msvcp|ucrtbased' -CaseSensitive:$false

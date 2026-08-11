@@ -17,6 +17,22 @@ $OpenSSLPrefix = Join-Path $WorkDir "openssl-install"
 $StageDir = Join-Path $WorkDir "stage"
 $OutputDir = Join-Path $RootDir "dist"
 
+switch ($env:PORTABLE_ARCH.ToLowerInvariant()) {
+    "x86" {
+        $OpenSSLTarget = "VC-WIN32"
+        $ExpectedMachinePattern = '14C machine \(x86\)'
+    }
+    "x64" {
+        $OpenSSLTarget = "VC-WIN64A"
+        $ExpectedMachinePattern = '8664 machine \(x64\)'
+    }
+    "arm64" {
+        $OpenSSLTarget = "VC-WIN64-ARM"
+        $ExpectedMachinePattern = 'AA64 machine \(ARM64\)'
+    }
+    default { throw "unsupported PORTABLE_ARCH: $($env:PORTABLE_ARCH)" }
+}
+
 New-Item -ItemType Directory -Force -Path $WorkDir, $StageDir, $OutputDir,
     (Join-Path $StageDir "bin"), (Join-Path $StageDir "config"),
     (Join-Path $StageDir "scripts"), (Join-Path $StageDir "src"),
@@ -31,8 +47,7 @@ tar -xzf $OpenSSLArchive -C $WorkDir
 
 Push-Location $OpenSSLSource
 try {
-    $Target = if ($env:PORTABLE_ARCH -eq "arm64") { "VC-WIN64-ARM" } else { "VC-WIN64A" }
-    perl Configure $Target no-shared no-module no-tests no-asm /MT `
+    perl Configure $OpenSSLTarget no-shared no-module no-tests no-asm /MT `
         "--prefix=$OpenSSLPrefix" "--libdir=lib"
     if ($LASTEXITCODE -ne 0) { throw "OpenSSL configure failed" }
     nmake build_sw
@@ -97,7 +112,12 @@ $Environment = @(
 )
 $Environment | Set-Content -Encoding utf8 (Join-Path $StageDir "ENVIRONMENT.txt")
 
-foreach ($Binary in @($OpenSSLExe, $Client)) {
+foreach ($Binary in @($OpenSSLExe, $Client, (Join-Path $StageDir "softhsm2.dll"))) {
+    $MachineHeader = & dumpbin /headers $Binary |
+        Select-String -Pattern $ExpectedMachinePattern
+    if (-not $MachineHeader) {
+        throw "$Binary does not have the expected $($env:PORTABLE_ARCH) PE machine type"
+    }
     $Unexpected = & dumpbin /dependents $Binary |
         Select-String -Pattern 'libcrypto|libssl|vcruntime|msvcp|ucrtbased' -CaseSensitive:$false
     if ($Unexpected) {
