@@ -3,7 +3,10 @@ SoftHSM portable PKCS #11 module
 
 No installer is required. Extract every file from this archive into one
 directory and configure your application to load the module from that exact
-path:
+path. Always name the module by an absolute path: a relative path given to the
+Windows loader is appended to every directory of the DLL search list, and the
+system directory is searched ahead of the current one, so a stray copy of
+softhsm2.dll elsewhere on the machine would be loaded instead of this one.
 
   Linux:   libsofthsm2.so
   Windows: softhsm2.dll
