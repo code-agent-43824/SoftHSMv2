@@ -543,33 +543,125 @@ bool SimpleConfigLoader::string2bool(std::string stringValue, bool* boolValue)
 	return false;
 }
 
+#ifdef _WIN32
+# ifdef SOFTHSM2_PORTABLE_USER_CONFIG
+#  define USER_PATH_TAIL "\\" CONFIG_DIRECTORY "\\" USER_CONFIG_FILE
+# else
+#  define USER_PATH_TAIL "\\" USER_CONFIG_FILE
+# endif
+
+/* Reads a variable from the process environment block rather than from the C
+ * runtime's copy of it. A module loaded into someone else's process cannot
+ * assume the two agree: the runtime takes its snapshot when it initialises,
+ * and a statically linked runtime inside a DLL keeps a snapshot of its own.
+ * The runtime is still consulted as a second opinion.
+ */
+static bool readEnvironmentValue(const char* name, char* value, size_t size)
+{
+	const DWORD written = GetEnvironmentVariableA(name, value, (DWORD) size);
+	if (written > 0 && written < size && value[0] != '\0')
+	{
+		return true;
+	}
+
+	const char* runtimeValue = getenv(name);
+	if (runtimeValue == NULL || runtimeValue[0] == '\0')
+	{
+		return false;
+	}
+	if (strlen(runtimeValue) + 1 > size)
+	{
+		return false;
+	}
+	memcpy(value, runtimeValue, strlen(runtimeValue) + 1);
+	return true;
+}
+
+/* Last resort: ask the shell where the profile lives. This works when the
+ * environment carries nothing useful at all. Resolved on demand so the
+ * portable module gains no import of its own.
+ */
+static bool readShellProfileDirectory(char* value, size_t size)
+{
+	typedef HRESULT (WINAPI *SHGetFolderPathAFunction)(HWND, int, HANDLE, DWORD, LPSTR);
+	const int profileFolder = 0x0028;	/* CSIDL_PROFILE */
+	const DWORD currentPath = 0;		/* SHGFP_TYPE_CURRENT */
+
+	if (size < MAX_PATH)
+	{
+		return false;
+	}
+
+	HMODULE shell = LoadLibraryA("shell32.dll");
+	if (shell == NULL)
+	{
+		return false;
+	}
+
+	bool resolved = false;
+	SHGetFolderPathAFunction getFolderPath =
+		(SHGetFolderPathAFunction) (void*) GetProcAddress(shell, "SHGetFolderPathA");
+	if (getFolderPath != NULL &&
+	    getFolderPath(NULL, profileFolder, NULL, currentPath, value) == S_OK)
+	{
+		resolved = (value[0] != '\0');
+	}
+	FreeLibrary(shell);
+	return resolved;
+}
+
+/* Joins the home directory with the configuration file name. Refuses to
+ * truncate: a shortened path is not a shorter answer, it is a different and
+ * wrong one, and silently using it is how a module ends up reading a
+ * configuration nobody wrote.
+ */
+static char* composeUserConfigPath(const char* home)
+{
+	char path[1024];
+	const int written = snprintf(path, sizeof(path), "%s" USER_PATH_TAIL, home);
+	if (written < 0 || (size_t) written >= sizeof(path))
+	{
+		ERROR_MSG("Per-user SoftHSM configuration path does not fit in %zu bytes: %s",
+			  sizeof(path), home);
+		return NULL;
+	}
+	return strdup(path);
+}
+#endif
+
 /* Returns a user-specific path for configuration.
  */
 static char *get_user_path(void)
 {
 #ifdef _WIN32
-	char path[512];
-	const char *user_profile = getenv("USERPROFILE");
-	const char *home_drive = getenv("HOMEDRIVE");
-	const char *home_path = getenv("HOMEPATH");
+	char home[1024];
+	char homeDrive[512];
 
-	if (user_profile && user_profile[0] != 0) {
-# ifdef SOFTHSM2_PORTABLE_USER_CONFIG
-		snprintf(path, sizeof(path), "%s\\" CONFIG_DIRECTORY "\\%s", user_profile, USER_CONFIG_FILE);
-# else
-		snprintf(path, sizeof(path), "%s\\%s", user_profile, USER_CONFIG_FILE);
-# endif
-		return strdup(path);
+	if (readEnvironmentValue("USERPROFILE", home, sizeof(home)))
+	{
+		return composeUserConfigPath(home);
 	}
 
-	if (home_drive && home_path) {
-# ifdef SOFTHSM2_PORTABLE_USER_CONFIG
-		snprintf(path, sizeof(path), "%s%s\\" CONFIG_DIRECTORY "\\%s", home_drive, home_path, USER_CONFIG_FILE);
-# else
-		snprintf(path, sizeof(path), "%s%s\\%s", home_drive, home_path, USER_CONFIG_FILE);
-# endif
-		return strdup(path);
+	if (readEnvironmentValue("HOMEDRIVE", homeDrive, sizeof(homeDrive)) &&
+	    readEnvironmentValue("HOMEPATH", home, sizeof(home)))
+	{
+		char combined[1024];
+		const int written = snprintf(combined, sizeof(combined), "%s%s", homeDrive, home);
+		if (written > 0 && (size_t) written < sizeof(combined))
+		{
+			return composeUserConfigPath(combined);
+		}
+		ERROR_MSG("HOMEDRIVE and HOMEPATH together do not fit in %zu bytes",
+			  sizeof(combined));
 	}
+
+	if (readShellProfileDirectory(home, sizeof(home)))
+	{
+		return composeUserConfigPath(home);
+	}
+
+	ERROR_MSG("Cannot determine the user profile directory: USERPROFILE is empty, "
+		  "HOMEDRIVE with HOMEPATH is unusable, and the shell reports no profile folder");
 	return NULL;
 #else
 	char path[_POSIX_PATH_MAX];
