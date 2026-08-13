@@ -761,17 +761,14 @@ CK_RV SoftHSM::C_GetSlotInfo(CK_SLOT_ID slotID, CK_SLOT_INFO_PTR pInfo)
 		memset(pInfo->manufacturerID, ' ', sizeof(pInfo->manufacturerID));
 		if (slotID == 0)
 		{
-			// Published pkcs11-tool output from real devices prints the slot
-			// as "Aktiv Rutoken ECP 00 00" - reader index and slot index as
-			// two-digit groups, not a bare "0".
-			memcpy(pInfo->slotDescription, "Aktiv Rutoken ECP 00 00", 23);
+			memcpy(pInfo->slotDescription, "Aktiv Rutoken ECP 0", 19);
 			memcpy(pInfo->manufacturerID, "Aktiv Co.", 9);
 		}
 		pInfo->flags = CKF_HW_SLOT | CKF_REMOVABLE_DEVICE;
 		if (slotID == 0) pInfo->flags |= CKF_TOKEN_PRESENT;
-		pInfo->hardwareVersion.major = 67;
-		pInfo->hardwareVersion.minor = 4;
-		pInfo->firmwareVersion.major = 34;
+		pInfo->hardwareVersion.major = 60;
+		pInfo->hardwareVersion.minor = 1;
+		pInfo->firmwareVersion.major = 30;
 		pInfo->firmwareVersion.minor = 2;
 		return CKR_OK;
 	}
@@ -824,9 +821,11 @@ CK_RV SoftHSM::C_GetTokenInfo(CK_SLOT_ID slotID, CK_TOKEN_INFO_PTR pInfo)
 		serial ^= static_cast<unsigned char>(pInfo->serialNumber[i]);
 		serial *= 16777619U;
 	}
-	serial = (serial & 0x6fffffffU) | 0x10000000U;
+	// The reference device prints eight decimal digits, so stay in that shape
+	// rather than emitting hex that can contain letters.
+	serial = serial % 90000000U + 10000000U;
 	char serialText[9];
-	snprintf(serialText, sizeof(serialText), "%08x", serial);
+	snprintf(serialText, sizeof(serialText), "%08u", serial);
 
 	const CK_FLAGS stateFlags = pInfo->flags &
 		(CKF_TOKEN_INITIALIZED | CKF_USER_PIN_INITIALIZED |
@@ -849,9 +848,9 @@ CK_RV SoftHSM::C_GetTokenInfo(CK_SLOT_ID slotID, CK_TOKEN_INFO_PTR pInfo)
 	pInfo->flags = CKF_RNG | CKF_LOGIN_REQUIRED | stateFlags;
 	pInfo->ulMinPinLen = 6;
 	pInfo->ulMaxPinLen = 249;
-	pInfo->hardwareVersion.major = 67;
-	pInfo->hardwareVersion.minor = 4;
-	pInfo->firmwareVersion.major = 34;
+	pInfo->hardwareVersion.major = 60;
+	pInfo->hardwareVersion.minor = 1;
+	pInfo->firmwareVersion.major = 30;
 	pInfo->firmwareVersion.minor = 2;
 	return CKR_OK;
 }
@@ -1673,7 +1672,7 @@ CK_RV SoftHSM::C_GetMechanismInfo(CK_SLOT_ID slotID, CK_MECHANISM_TYPE type, CK_
 				break;
 			case CKM_EC_KEY_PAIR_GEN:
 				pInfo->ulMinKeySize = 256;
-				pInfo->ulMaxKeySize = 521;
+				pInfo->ulMaxKeySize = 256;
 				pInfo->flags = CKF_HW | CKF_GENERATE_KEY_PAIR | CKF_EC_F_P |
 					CKF_EC_NAMEDCURVE | CKF_EC_UNCOMPRESS;
 				break;
@@ -1684,7 +1683,7 @@ CK_RV SoftHSM::C_GetMechanismInfo(CK_SLOT_ID slotID, CK_MECHANISM_TYPE type, CK_
 			case CKM_ECDSA_SHA384:
 			case CKM_ECDSA_SHA512:
 				pInfo->ulMinKeySize = 256;
-				pInfo->ulMaxKeySize = 521;
+				pInfo->ulMaxKeySize = 256;
 				pInfo->flags = CKF_HW | CKF_SIGN | CKF_VERIFY | CKF_EC_F_P |
 					CKF_EC_NAMEDCURVE | CKF_EC_UNCOMPRESS;
 				break;
@@ -1700,7 +1699,7 @@ CK_RV SoftHSM::C_GetMechanismInfo(CK_SLOT_ID slotID, CK_MECHANISM_TYPE type, CK_
 				break;
 			case CKM_ECDH1_DERIVE:
 				pInfo->ulMinKeySize = 255;
-				pInfo->ulMaxKeySize = 521;
+				pInfo->ulMaxKeySize = 512;
 				pInfo->flags = CKF_HW | CKF_DERIVE | CKF_EC_F_P | CKF_EC_NAMEDCURVE | CKF_EC_UNCOMPRESS;
 				break;
 			case CKM_CONCATENATE_BASE_AND_KEY:
