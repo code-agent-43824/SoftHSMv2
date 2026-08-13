@@ -761,7 +761,10 @@ CK_RV SoftHSM::C_GetSlotInfo(CK_SLOT_ID slotID, CK_SLOT_INFO_PTR pInfo)
 		memset(pInfo->manufacturerID, ' ', sizeof(pInfo->manufacturerID));
 		if (slotID == 0)
 		{
-			memcpy(pInfo->slotDescription, "Aktiv Rutoken ECP 0", 19);
+			// Published pkcs11-tool output from real devices prints the slot
+			// as "Aktiv Rutoken ECP 00 00" - reader index and slot index as
+			// two-digit groups, not a bare "0".
+			memcpy(pInfo->slotDescription, "Aktiv Rutoken ECP 00 00", 23);
 			memcpy(pInfo->manufacturerID, "Aktiv Co.", 9);
 		}
 		pInfo->flags = CKF_HW_SLOT | CKF_REMOVABLE_DEVICE;
@@ -837,8 +840,13 @@ CK_RV SoftHSM::C_GetTokenInfo(CK_SLOT_ID slotID, CK_TOKEN_INFO_PTR pInfo)
 	memcpy(pInfo->model, "Rutoken ECP", 11);
 	memset(pInfo->serialNumber, ' ', sizeof(pInfo->serialNumber));
 	memcpy(pInfo->serialNumber, serialText, 8);
-	pInfo->flags = CKF_RNG | CKF_LOGIN_REQUIRED | CKF_SO_PIN_TO_BE_CHANGED |
-		CKF_USER_PIN_TO_BE_CHANGED | stateFlags;
+	// A real Rutoken ECP reports "rng, login required, PIN initialized, token
+	// initialized" and nothing more. The two "PIN to be changed" flags were
+	// asserted here unconditionally, which tells an application the token is
+	// not ready for use until its PINs are replaced - a plausible reason for
+	// compatibility complaints. The remaining state flags still come from the
+	// backing token, so a genuinely fresh PIN state is still reported.
+	pInfo->flags = CKF_RNG | CKF_LOGIN_REQUIRED | stateFlags;
 	pInfo->ulMinPinLen = 6;
 	pInfo->ulMaxPinLen = 249;
 	pInfo->hardwareVersion.major = 67;
