@@ -1208,6 +1208,16 @@ extern "C" {
 #define CKM_GOSTR3411_2012_256                  (CK_VENDOR_PKCS11_RU_TEAM_TC26 | 0x012UL)
 /* Compatibility spelling used by older TC26 and Rutoken headers. */
 #define CKM_GOSTR3411_12_256                    CKM_GOSTR3411_2012_256
+/* Remaining TC26 numbering, matching the OpenSC header so that pkcs11-tool
+   prints the same names a Rutoken device produces. Not implemented here; they
+   exist so the compatibility profile can advertise the device's list. */
+#define CKM_GOSTR3410_512_KEY_PAIR_GEN          (CK_VENDOR_PKCS11_RU_TEAM_TC26 | 0x005UL)
+#define CKM_GOSTR3410_512                       (CK_VENDOR_PKCS11_RU_TEAM_TC26 | 0x006UL)
+#define CKM_GOSTR3410_12_DERIVE                 (CK_VENDOR_PKCS11_RU_TEAM_TC26 | 0x007UL)
+#define CKM_GOSTR3410_WITH_GOSTR3411_12_512     (CK_VENDOR_PKCS11_RU_TEAM_TC26 | 0x009UL)
+#define CKM_GOSTR3411_12_512                    (CK_VENDOR_PKCS11_RU_TEAM_TC26 | 0x013UL)
+#define CKM_GOSTR3411_12_256_HMAC               (CK_VENDOR_PKCS11_RU_TEAM_TC26 | 0x014UL)
+#define CKM_GOSTR3411_12_512_HMAC               (CK_VENDOR_PKCS11_RU_TEAM_TC26 | 0x015UL)
 #define CKM_GOST28147_KEY_GEN                   (0x1220UL)
 #define CKM_GOST28147_ECB                       (0x1221UL)
 #define CKM_GOST28147                           (0x1222UL)

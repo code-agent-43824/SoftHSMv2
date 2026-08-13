@@ -831,8 +831,24 @@ CK_RV SoftHSM::C_GetTokenInfo(CK_SLOT_ID slotID, CK_TOKEN_INFO_PTR pInfo)
 		(CKF_TOKEN_INITIALIZED | CKF_USER_PIN_INITIALIZED |
 		 CKF_USER_PIN_COUNT_LOW | CKF_USER_PIN_FINAL_TRY | CKF_USER_PIN_LOCKED |
 		 CKF_SO_PIN_COUNT_LOW | CKF_SO_PIN_FINAL_TRY | CKF_SO_PIN_LOCKED);
-	memset(pInfo->label, ' ', sizeof(pInfo->label));
-	memcpy(pInfo->label, "Rutoken ECP <no label>", 22);
+	// A Rutoken with no label of its own reports "Rutoken ECP <no label>"; one
+	// that has been labelled reports that label. Mirror both: substitute the
+	// placeholder only when the backing token's label is genuinely blank, and
+	// otherwise leave the label the standard requires us to report.
+	bool labelIsBlank = true;
+	for (size_t i = 0; i < sizeof(pInfo->label); ++i)
+	{
+		if (pInfo->label[i] != ' ' && pInfo->label[i] != '\0')
+		{
+			labelIsBlank = false;
+			break;
+		}
+	}
+	if (labelIsBlank)
+	{
+		memset(pInfo->label, ' ', sizeof(pInfo->label));
+		memcpy(pInfo->label, "Rutoken ECP <no label>", 22);
+	}
 	memset(pInfo->manufacturerID, ' ', sizeof(pInfo->manufacturerID));
 	memcpy(pInfo->manufacturerID, "Aktiv Co.", 9);
 	memset(pInfo->model, ' ', sizeof(pInfo->model));
@@ -1031,37 +1047,123 @@ void SoftHSM::prepareSupportedMechanisms(std::map<std::string, CK_MECHANISM_TYPE
 
 // Keep the Rutoken facade honest: expose the mechanisms from the reference
 // device in its order, but only when the current build really implements them.
+namespace
+{
+	// The mechanism list of a reference Rutoken ECP, in the order and with the
+	// flags and key sizes the device itself reports. Entries this build does
+	// not implement are advertised deliberately: some applications decide
+	// compatibility from the list alone, and the missing algorithms are meant
+	// to be implemented later. Calling one of them fails with
+	// CKR_MECHANISM_INVALID from the operation itself.
+	//
+	// Mechanisms with no assigned name are Rutoken vendor extensions; OpenSC
+	// prints them as mechtype-0x..., which is what the device shows too.
+	struct FakeRutokenMechanism
+	{
+		CK_MECHANISM_TYPE type;
+		CK_ULONG minKeySize;
+		CK_ULONG maxKeySize;
+		CK_FLAGS flags;
+	};
+
+	const CK_FLAGS FAKE_RUTOKEN_EC =
+		CKF_EC_F_P | CKF_EC_NAMEDCURVE | CKF_EC_UNCOMPRESS;
+
+	const FakeRutokenMechanism FAKE_RUTOKEN_MECHANISMS[] = {
+		{ CKM_RSA_PKCS_KEY_PAIR_GEN, 512, 4096, CKF_HW | CKF_GENERATE_KEY_PAIR },
+		{ CKM_RSA_PKCS, 512, 4096, CKF_HW | CKF_ENCRYPT | CKF_DECRYPT | CKF_SIGN | CKF_VERIFY },
+		{ CKM_RSA_X_509, 512, 4096, CKF_HW | CKF_ENCRYPT | CKF_DECRYPT | CKF_SIGN | CKF_VERIFY },
+		{ CKM_RSA_PKCS_OAEP, 512, 4096, CKF_HW | CKF_ENCRYPT | CKF_DECRYPT },
+		{ CKM_RSA_PKCS_PSS, 512, 4096, CKF_HW | CKF_SIGN | CKF_VERIFY },
+		{ CKM_MD5_RSA_PKCS, 512, 4096, CKF_HW | CKF_SIGN | CKF_VERIFY },
+		{ CKM_SHA1_RSA_PKCS, 512, 4096, CKF_HW | CKF_SIGN | CKF_VERIFY },
+		{ CKM_SHA224_RSA_PKCS, 512, 4096, CKF_HW | CKF_SIGN | CKF_VERIFY },
+		{ CKM_SHA256_RSA_PKCS, 512, 4096, CKF_HW | CKF_SIGN | CKF_VERIFY },
+		{ CKM_SHA384_RSA_PKCS, 768, 4096, CKF_HW | CKF_SIGN | CKF_VERIFY },
+		{ CKM_SHA512_RSA_PKCS, 768, 4096, CKF_HW | CKF_SIGN | CKF_VERIFY },
+		{ CKM_SHA1_RSA_PKCS_PSS, 512, 4096, CKF_HW | CKF_SIGN | CKF_VERIFY },
+		{ CKM_SHA224_RSA_PKCS_PSS, 512, 4096, CKF_HW | CKF_SIGN | CKF_VERIFY },
+		{ CKM_SHA256_RSA_PKCS_PSS, 512, 4096, CKF_HW | CKF_SIGN | CKF_VERIFY },
+		{ CKM_SHA384_RSA_PKCS_PSS, 768, 4096, CKF_HW | CKF_SIGN | CKF_VERIFY },
+		{ CKM_SHA512_RSA_PKCS_PSS, 768, 4096, CKF_HW | CKF_SIGN | CKF_VERIFY },
+		{ CKM_MD5, 0, 0, CKF_DIGEST },
+		{ CKM_SHA_1, 0, 0, CKF_DIGEST },
+		{ CKM_SHA224, 0, 0, CKF_DIGEST },
+		{ CKM_SHA256, 0, 0, CKF_DIGEST },
+		{ CKM_SHA384, 0, 0, CKF_DIGEST },
+		{ CKM_SHA512, 0, 0, CKF_DIGEST },
+		{ CKM_GOSTR3410_KEY_PAIR_GEN, 0, 0, CKF_HW | CKF_GENERATE_KEY_PAIR },
+		{ CKM_GOSTR3410, 0, 0, CKF_HW | CKF_SIGN | CKF_VERIFY },
+		{ CKM_GOSTR3410_DERIVE, 0, 0, CKF_HW | CKF_DERIVE },
+		{ CKM_GOSTR3410_512_KEY_PAIR_GEN, 0, 0, CKF_HW | CKF_GENERATE_KEY_PAIR },
+		{ CKM_GOSTR3410_512, 0, 0, CKF_HW | CKF_SIGN | CKF_VERIFY },
+		{ CKM_GOSTR3410_12_DERIVE, 0, 0, CKF_HW | CKF_DERIVE },
+		{ 0xD4321038UL, 0, 0, CKF_HW | CKF_DERIVE },
+		{ CKM_GOSTR3411, 0, 0, CKF_HW | CKF_DIGEST },
+		{ CKM_GOSTR3411_12_256, 0, 0, CKF_HW | CKF_DIGEST },
+		{ CKM_GOSTR3411_12_512, 0, 0, CKF_HW | CKF_DIGEST },
+		{ CKM_GOSTR3410_WITH_GOSTR3411, 0, 0, CKF_HW | CKF_SIGN | CKF_VERIFY },
+		{ CKM_GOSTR3410_WITH_GOSTR3411_12_256, 0, 0, CKF_HW | CKF_SIGN | CKF_VERIFY },
+		{ CKM_GOSTR3410_WITH_GOSTR3411_12_512, 0, 0, CKF_HW | CKF_SIGN | CKF_VERIFY },
+		{ CKM_GOST28147_KEY_WRAP, 0, 0, CKF_HW | CKF_WRAP | CKF_UNWRAP },
+		{ CKM_GOST28147_ECB, 0, 0, CKF_HW | CKF_ENCRYPT | CKF_DECRYPT },
+		{ 0x8000000BUL, 0, 0, CKF_HW | CKF_ENCRYPT | CKF_DECRYPT },
+		{ CKM_GOST28147, 0, 0, CKF_HW | CKF_ENCRYPT | CKF_DECRYPT },
+		{ CKM_GOST28147_KEY_GEN, 0, 0, CKF_HW | CKF_GENERATE },
+		{ CKM_GOST28147_MAC, 0, 0, CKF_HW | CKF_SIGN | CKF_VERIFY },
+		{ 0xD4321034UL, 0, 0, CKF_HW | CKF_GENERATE },
+		{ 0xD4321030UL, 0, 0, CKF_HW | CKF_GENERATE },
+		{ 0xD4321035UL, 0, 0, CKF_HW | CKF_ENCRYPT | CKF_DECRYPT },
+		{ 0xD4321031UL, 0, 0, CKF_HW | CKF_ENCRYPT | CKF_DECRYPT },
+		{ 0xD4321036UL, 0, 0, CKF_HW | CKF_ENCRYPT | CKF_DECRYPT },
+		{ 0xD4321032UL, 0, 0, CKF_HW | CKF_ENCRYPT | CKF_DECRYPT },
+		{ 0xD432102EUL, 0, 0, CKF_HW | CKF_ENCRYPT | CKF_DECRYPT },
+		{ 0xD432102DUL, 0, 0, CKF_HW | CKF_ENCRYPT | CKF_DECRYPT },
+		{ 0xD4321037UL, 0, 0, CKF_HW | CKF_SIGN | CKF_VERIFY },
+		{ 0xD4321033UL, 0, 0, CKF_HW | CKF_SIGN | CKF_VERIFY },
+		{ CKM_GOSTR3411_12_256_HMAC, 0, 0, CKF_HW | CKF_SIGN | CKF_VERIFY },
+		{ CKM_GOSTR3411_12_512_HMAC, 0, 0, CKF_HW | CKF_SIGN | CKF_VERIFY },
+		{ CKM_GOSTR3411_HMAC, 0, 0, CKF_SIGN | CKF_VERIFY },
+		{ CKM_EC_KEY_PAIR_GEN, 256, 256, CKF_HW | CKF_GENERATE_KEY_PAIR | FAKE_RUTOKEN_EC },
+		{ CKM_ECDSA, 256, 256, CKF_HW | CKF_SIGN | CKF_VERIFY | FAKE_RUTOKEN_EC },
+		{ CKM_ECDSA_SHA1, 256, 256, CKF_HW | CKF_SIGN | CKF_VERIFY | FAKE_RUTOKEN_EC },
+		{ CKM_ECDSA_SHA224, 256, 256, CKF_HW | CKF_SIGN | CKF_VERIFY | FAKE_RUTOKEN_EC },
+		{ CKM_ECDSA_SHA256, 256, 256, CKF_HW | CKF_SIGN | CKF_VERIFY | FAKE_RUTOKEN_EC },
+		{ CKM_ECDSA_SHA384, 256, 256, CKF_HW | CKF_SIGN | CKF_VERIFY | FAKE_RUTOKEN_EC },
+		{ CKM_ECDSA_SHA512, 256, 256, CKF_HW | CKF_SIGN | CKF_VERIFY | FAKE_RUTOKEN_EC },
+		{ 0xD4321028UL, 0, 0, CKF_HW | CKF_DERIVE },
+		{ CKM_CONCATENATE_BASE_AND_KEY, 0, 0, CKF_HW | CKF_DERIVE },
+		{ 0xD432102AUL, 0, 0, CKF_HW | CKF_DERIVE },
+		{ 0xD4321039UL, 0, 0, CKF_HW | CKF_DERIVE },
+		{ CKM_ECDH1_DERIVE, 255, 512, CKF_HW | CKF_DERIVE | FAKE_RUTOKEN_EC },
+		{ 0xD432102BUL, 0, 0, CKF_HW | CKF_WRAP | CKF_UNWRAP },
+		{ 0xD432102CUL, 0, 0, CKF_HW | CKF_WRAP | CKF_UNWRAP },
+		{ 0x80000003UL, 0, 0, CKF_HW | CKF_UNWRAP },
+		{ CKM_GENERIC_SECRET_KEY_GEN, 80, 2048,
+		  CKF_GENERATE | CKF_GENERATE_KEY_PAIR | CKF_DERIVE }
+	};
+
+	const FakeRutokenMechanism* findFakeRutokenMechanism(CK_MECHANISM_TYPE type)
+	{
+		const size_t count = sizeof(FAKE_RUTOKEN_MECHANISMS) / sizeof(FAKE_RUTOKEN_MECHANISMS[0]);
+		for (size_t i = 0; i < count; ++i)
+		{
+			if (FAKE_RUTOKEN_MECHANISMS[i].type == type)
+			{
+				return &FAKE_RUTOKEN_MECHANISMS[i];
+			}
+		}
+		return NULL;
+	}
+}
+
 void SoftHSM::prepareFakeRutokenMechanisms()
 {
-	const CK_MECHANISM_TYPE reference[] = {
-		CKM_RSA_PKCS_KEY_PAIR_GEN, CKM_RSA_PKCS, CKM_RSA_X_509,
-		CKM_RSA_PKCS_OAEP, CKM_RSA_PKCS_PSS, CKM_MD5_RSA_PKCS,
-		CKM_SHA1_RSA_PKCS, CKM_SHA224_RSA_PKCS, CKM_SHA256_RSA_PKCS,
-		CKM_SHA384_RSA_PKCS, CKM_SHA512_RSA_PKCS,
-		CKM_SHA1_RSA_PKCS_PSS, CKM_SHA224_RSA_PKCS_PSS,
-		CKM_SHA256_RSA_PKCS_PSS, CKM_SHA384_RSA_PKCS_PSS,
-		CKM_SHA512_RSA_PKCS_PSS, CKM_MD5, CKM_SHA_1, CKM_SHA224,
-		CKM_SHA256, CKM_SHA384, CKM_SHA512,
-		CKM_GOSTR3410_KEY_PAIR_GEN, CKM_GOSTR3410,
-		CKM_GOSTR3411, CKM_GOSTR3411_2012_256,
-		CKM_GOSTR3410_WITH_GOSTR3411,
-		CKM_GOSTR3410_WITH_GOSTR3411_2012_256,
-		CKM_GOSTR3411_HMAC,
-		CKM_EC_KEY_PAIR_GEN, CKM_ECDSA, CKM_ECDSA_SHA1,
-		CKM_ECDSA_SHA224, CKM_ECDSA_SHA256, CKM_ECDSA_SHA384,
-		CKM_ECDSA_SHA512, CKM_EDDSA, CKM_EC_EDWARDS_KEY_PAIR_GEN,
-		CKM_ECDH1_DERIVE, CKM_CONCATENATE_BASE_AND_KEY,
-		CKM_GENERIC_SECRET_KEY_GEN
-	};
-	const std::list<CK_MECHANISM_TYPE> implemented = supportedMechanisms;
+	const size_t count = sizeof(FAKE_RUTOKEN_MECHANISMS) / sizeof(FAKE_RUTOKEN_MECHANISMS[0]);
 	supportedMechanisms.clear();
-	for (size_t i = 0; i < sizeof(reference) / sizeof(reference[0]); ++i)
+	for (size_t i = 0; i < count; ++i)
 	{
-		if (std::find(implemented.begin(), implemented.end(), reference[i]) != implemented.end() &&
-			std::find(supportedMechanisms.begin(), supportedMechanisms.end(), reference[i]) == supportedMechanisms.end())
-		{
-			supportedMechanisms.push_back(reference[i]);
-		}
+		supportedMechanisms.push_back(FAKE_RUTOKEN_MECHANISMS[i].type);
 	}
 	nrSupportedMechanisms = supportedMechanisms.size();
 }
@@ -1154,6 +1256,21 @@ CK_RV SoftHSM::C_GetMechanismInfo(CK_SLOT_ID slotID, CK_MECHANISM_TYPE type, CK_
 	{
 		return CKR_SLOT_ID_INVALID;
 	}
+
+	// The compatibility profile answers from the reference device's own table,
+	// including for mechanisms this build does not implement. Attempting to
+	// use one of those still fails, with CKR_MECHANISM_INVALID from the
+	// operation that was asked for.
+	if (fakeRutokenECP)
+	{
+		const FakeRutokenMechanism* entry = findFakeRutokenMechanism(type);
+		if (entry == NULL) return CKR_MECHANISM_INVALID;
+		pInfo->ulMinKeySize = entry->minKeySize;
+		pInfo->ulMaxKeySize = entry->maxKeySize;
+		pInfo->flags = entry->flags;
+		return CKR_OK;
+	}
+
 	if (!isMechanismPermitted(NULL, type))
 		return CKR_MECHANISM_INVALID;
 
@@ -1614,101 +1731,6 @@ CK_RV SoftHSM::C_GetMechanismInfo(CK_SLOT_ID slotID, CK_MECHANISM_TYPE type, CK_
 			DEBUG_MSG("The selected mechanism is not supported");
 			return CKR_MECHANISM_INVALID;
 			break;
-	}
-
-	if (fakeRutokenECP)
-	{
-		const CK_FLAGS implemented = pInfo->flags;
-		switch (type)
-		{
-			case CKM_MD5:
-			case CKM_SHA_1:
-			case CKM_SHA224:
-			case CKM_SHA256:
-			case CKM_SHA384:
-			case CKM_SHA512:
-				pInfo->flags = implemented;
-				break;
-			case CKM_RSA_PKCS_KEY_PAIR_GEN:
-				pInfo->flags = CKF_HW | CKF_GENERATE_KEY_PAIR;
-				pInfo->ulMinKeySize = 512;
-				pInfo->ulMaxKeySize = 4096;
-				break;
-			case CKM_RSA_PKCS:
-			case CKM_RSA_X_509:
-				pInfo->flags = CKF_HW | CKF_ENCRYPT | CKF_DECRYPT | CKF_SIGN | CKF_VERIFY;
-				pInfo->ulMinKeySize = 512;
-				pInfo->ulMaxKeySize = 4096;
-				break;
-			case CKM_RSA_PKCS_OAEP:
-				pInfo->flags = CKF_HW | CKF_ENCRYPT | CKF_DECRYPT;
-				pInfo->ulMinKeySize = 512;
-				pInfo->ulMaxKeySize = 4096;
-				break;
-			case CKM_RSA_PKCS_PSS:
-			case CKM_MD5_RSA_PKCS:
-			case CKM_SHA1_RSA_PKCS:
-			case CKM_SHA224_RSA_PKCS:
-			case CKM_SHA256_RSA_PKCS:
-			case CKM_SHA1_RSA_PKCS_PSS:
-			case CKM_SHA224_RSA_PKCS_PSS:
-			case CKM_SHA256_RSA_PKCS_PSS:
-				pInfo->flags = CKF_HW | CKF_SIGN | CKF_VERIFY;
-				pInfo->ulMinKeySize = 512;
-				pInfo->ulMaxKeySize = 4096;
-				break;
-			case CKM_SHA384_RSA_PKCS:
-			case CKM_SHA512_RSA_PKCS:
-			case CKM_SHA384_RSA_PKCS_PSS:
-			case CKM_SHA512_RSA_PKCS_PSS:
-				pInfo->flags = CKF_HW | CKF_SIGN | CKF_VERIFY;
-				pInfo->ulMinKeySize = 768;
-				pInfo->ulMaxKeySize = 4096;
-				break;
-			case CKM_GENERIC_SECRET_KEY_GEN:
-				pInfo->ulMinKeySize = 80;
-				pInfo->ulMaxKeySize = 2048;
-				pInfo->flags = implemented;
-				break;
-			case CKM_EC_KEY_PAIR_GEN:
-				pInfo->ulMinKeySize = 256;
-				pInfo->ulMaxKeySize = 256;
-				pInfo->flags = CKF_HW | CKF_GENERATE_KEY_PAIR | CKF_EC_F_P |
-					CKF_EC_NAMEDCURVE | CKF_EC_UNCOMPRESS;
-				break;
-			case CKM_ECDSA:
-			case CKM_ECDSA_SHA1:
-			case CKM_ECDSA_SHA224:
-			case CKM_ECDSA_SHA256:
-			case CKM_ECDSA_SHA384:
-			case CKM_ECDSA_SHA512:
-				pInfo->ulMinKeySize = 256;
-				pInfo->ulMaxKeySize = 256;
-				pInfo->flags = CKF_HW | CKF_SIGN | CKF_VERIFY | CKF_EC_F_P |
-					CKF_EC_NAMEDCURVE | CKF_EC_UNCOMPRESS;
-				break;
-			case CKM_EC_EDWARDS_KEY_PAIR_GEN:
-				pInfo->ulMinKeySize = 256;
-				pInfo->ulMaxKeySize = 256;
-				pInfo->flags = CKF_HW | CKF_GENERATE_KEY_PAIR | CKF_EC_F_P | CKF_EC_NAMEDCURVE;
-				break;
-			case CKM_EDDSA:
-				pInfo->ulMinKeySize = 256;
-				pInfo->ulMaxKeySize = 256;
-				pInfo->flags = CKF_HW | CKF_SIGN | CKF_VERIFY | CKF_EC_F_P | CKF_EC_NAMEDCURVE;
-				break;
-			case CKM_ECDH1_DERIVE:
-				pInfo->ulMinKeySize = 255;
-				pInfo->ulMaxKeySize = 512;
-				pInfo->flags = CKF_HW | CKF_DERIVE | CKF_EC_F_P | CKF_EC_NAMEDCURVE | CKF_EC_UNCOMPRESS;
-				break;
-			case CKM_CONCATENATE_BASE_AND_KEY:
-				pInfo->flags = CKF_HW | CKF_DERIVE;
-				break;
-			default:
-				pInfo->flags = implemented | CKF_HW;
-				break;
-		}
 	}
 
 	return CKR_OK;

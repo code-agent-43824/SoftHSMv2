@@ -41,21 +41,29 @@ which loads the PKCS #11 module:
   FAKE_RUTOKEN_ECP = true
 
 The module then reports the Rutoken ECP 2.19 library identity, a 15-slot reader
-topology with the token in slot 0, Aktiv/Rutoken token metadata, hardware and
-firmware versions, a stable eight-hex-digit device-style serial number, and the
-advertised 6..249 PIN range. Session operations addressed to facade slot 0 are
-routed to the stored SoftHSM token without exposing its internal slot ID. The
-profile changes presentation only: it does not reset or rewrite objects and
-does not alter key, import/export, cryptographic, or actual PIN semantics.
+topology with the token in slot 0, Aktiv/Rutoken token metadata, hardware
+version 60.1 and firmware version 30.2, a stable eight-decimal-digit
+device-style serial number, and the advertised 6..249 PIN range. A token whose
+own label is blank is reported as "Rutoken ECP <no label>", exactly as the
+device does; a token that carries a label reports that label as the standard
+requires. Session operations addressed to facade slot 0 are routed to the
+stored SoftHSM token without exposing its internal slot ID. The profile does
+not reset or rewrite objects and does not alter key, import/export,
+cryptographic, or actual PIN semantics.
 
-The mechanism list is deliberately the working intersection between the
-Rutoken reference list and mechanisms actually implemented by this portable
-build, in reference order and with Rutoken-like flags and limits. Unsupported
-physical-device mechanisms are not falsely advertised. This mode is intended
-for application compatibility tests; it does not turn software cryptography
-into certified hardware and cannot emulate USB insertion, firmware defects,
-timing, or every vendor extension. Set the option to false for normal SoftHSM
-identity and behavior.
+The mechanism list is the reference device's own list of 70 mechanisms, in its
+order and with its key sizes and flags, including mechanisms this build does
+not implement yet. Advertising them is deliberate: applications routinely
+decide compatibility from the list alone, and the remaining algorithms are
+planned. An operation asked for with an unimplemented mechanism fails with
+CKR_MECHANISM_INVALID rather than producing a wrong result, and a mechanism
+absent from the reference device is rejected the same way. Because the list
+also gates which mechanisms may be used, the profile makes anything outside
+the device's list unavailable while it is enabled. This mode is intended for
+application compatibility tests; it does not turn software cryptography into
+certified hardware and cannot emulate USB insertion, firmware defects, timing,
+or every vendor extension. Set the option to false for normal SoftHSM identity
+and behavior.
 
 The module statically includes OpenSSL and minimized Botan Streebog and GOST
 34.10 components. Linux and Windows builds also statically include their C/C++ runtime;

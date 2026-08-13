@@ -2161,22 +2161,30 @@ static void verifyRutokenProfile(const fs::path& modulePath)
         paddedText(slot.manufacturerID, sizeof(slot.manufacturerID)) != "Aktiv Co." ||
         (slot.flags & (CKF_HW_SLOT | CKF_REMOVABLE_DEVICE | CKF_TOKEN_PRESENT)) !=
             (CKF_HW_SLOT | CKF_REMOVABLE_DEVICE | CKF_TOKEN_PRESENT) ||
-        slot.hardwareVersion.major != 67 || slot.hardwareVersion.minor != 4 ||
-        slot.firmwareVersion.major != 34 || slot.firmwareVersion.minor != 2)
+        slot.hardwareVersion.major != 60 || slot.hardwareVersion.minor != 1 ||
+        slot.firmwareVersion.major != 30 || slot.firmwareVersion.minor != 2)
         fail("slot 0 information does not match the Rutoken ECP reference profile");
 
     const CK_TOKEN_INFO token = tokenInfo(module, 0);
     const std::string serial = paddedText(reinterpret_cast<const unsigned char*>(token.serialNumber),
                                           sizeof(token.serialNumber));
-    if (paddedText(token.label, sizeof(token.label)) != "Rutoken ECP <no label>" ||
+    // A Rutoken with no label of its own reports "Rutoken ECP <no label>"; a
+    // labelled one reports its label.  The caller states which of the two the
+    // backing store should produce.
+    const std::string expectedLabel = environment("P11_PROFILE_EXPECTED_LABEL").empty() ?
+        configuredTokenLabel() : environment("P11_PROFILE_EXPECTED_LABEL");
+    if (paddedText(token.label, sizeof(token.label)) != expectedLabel ||
         paddedText(token.manufacturerID, sizeof(token.manufacturerID)) != "Aktiv Co." ||
         paddedText(reinterpret_cast<const unsigned char*>(token.model), sizeof(token.model)) != "Rutoken ECP" ||
         serial.size() != 8 || !std::all_of(serial.begin(), serial.end(), [](char c) {
-            return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+            return c >= '0' && c <= '9';
         }) || token.ulMinPinLen != 6 || token.ulMaxPinLen != 249 ||
-        token.hardwareVersion.major != 67 || token.hardwareVersion.minor != 4 ||
-        token.firmwareVersion.major != 34 || token.firmwareVersion.minor != 2)
+        token.hardwareVersion.major != 60 || token.hardwareVersion.minor != 1 ||
+        token.firmwareVersion.major != 30 || token.firmwareVersion.minor != 2)
         fail("token information does not match the Rutoken ECP reference profile");
+    if ((token.flags & (CKF_RNG | CKF_LOGIN_REQUIRED)) != (CKF_RNG | CKF_LOGIN_REQUIRED) ||
+        (token.flags & (CKF_SO_PIN_TO_BE_CHANGED | CKF_USER_PIN_TO_BE_CHANGED)) != 0)
+        fail("Rutoken token flags differ from the reference device");
 
     CK_TOKEN_INFO absent{};
     check(invoke("C_GetTokenInfo", "slotID=1, pInfo=&absent",
@@ -2189,34 +2197,173 @@ static void verifyRutokenProfile(const fs::path& modulePath)
     std::vector<CK_MECHANISM_TYPE> mechanisms(mechanismCount);
     callOk("C_GetMechanismList", "slotID=0, pMechanismList=buffer, pulCount=&count",
            [&] { return module->C_GetMechanismList(0, mechanisms.data(), &mechanismCount); });
-    if (mechanisms.empty() || std::adjacent_find(mechanisms.begin(), mechanisms.end()) != mechanisms.end())
-        fail("Rutoken mechanism intersection is empty or contains adjacent duplicates");
-    const CK_MECHANISM_TYPE requiredProfileMechanisms[] = {
-        CKM_RSA_PKCS_KEY_PAIR_GEN, CKM_SHA256_RSA_PKCS, CKM_SHA256,
-        CKM_GOSTR3410_KEY_PAIR_GEN, CKM_GOSTR3410,
-        CKM_GOSTR3411_2012_256, CKM_GOSTR3410_WITH_GOSTR3411_2012_256
+    // The whole mechanism list of a reference Rutoken ECP, in its order and
+    // with its key sizes and flags.  Applications decide compatibility from
+    // this list, so the profile reproduces it exactly, including mechanisms
+    // this build does not implement yet; calling one of those still fails.
+    static const struct { CK_MECHANISM_TYPE type; CK_ULONG minKeySize, maxKeySize; CK_FLAGS flags; } reference[] = {
+        {CKM_RSA_PKCS_KEY_PAIR_GEN, 512, 4096,
+         CKF_HW | CKF_GENERATE_KEY_PAIR},
+        {CKM_RSA_PKCS, 512, 4096,
+         CKF_HW | CKF_ENCRYPT | CKF_DECRYPT | CKF_SIGN | CKF_VERIFY},
+        {CKM_RSA_X_509, 512, 4096,
+         CKF_HW | CKF_ENCRYPT | CKF_DECRYPT | CKF_SIGN | CKF_VERIFY},
+        {CKM_RSA_PKCS_OAEP, 512, 4096,
+         CKF_HW | CKF_ENCRYPT | CKF_DECRYPT},
+        {CKM_RSA_PKCS_PSS, 512, 4096,
+         CKF_HW | CKF_SIGN | CKF_VERIFY},
+        {CKM_MD5_RSA_PKCS, 512, 4096,
+         CKF_HW | CKF_SIGN | CKF_VERIFY},
+        {CKM_SHA1_RSA_PKCS, 512, 4096,
+         CKF_HW | CKF_SIGN | CKF_VERIFY},
+        {CKM_SHA224_RSA_PKCS, 512, 4096,
+         CKF_HW | CKF_SIGN | CKF_VERIFY},
+        {CKM_SHA256_RSA_PKCS, 512, 4096,
+         CKF_HW | CKF_SIGN | CKF_VERIFY},
+        {CKM_SHA384_RSA_PKCS, 768, 4096,
+         CKF_HW | CKF_SIGN | CKF_VERIFY},
+        {CKM_SHA512_RSA_PKCS, 768, 4096,
+         CKF_HW | CKF_SIGN | CKF_VERIFY},
+        {CKM_SHA1_RSA_PKCS_PSS, 512, 4096,
+         CKF_HW | CKF_SIGN | CKF_VERIFY},
+        {CKM_SHA224_RSA_PKCS_PSS, 512, 4096,
+         CKF_HW | CKF_SIGN | CKF_VERIFY},
+        {CKM_SHA256_RSA_PKCS_PSS, 512, 4096,
+         CKF_HW | CKF_SIGN | CKF_VERIFY},
+        {CKM_SHA384_RSA_PKCS_PSS, 768, 4096,
+         CKF_HW | CKF_SIGN | CKF_VERIFY},
+        {CKM_SHA512_RSA_PKCS_PSS, 768, 4096,
+         CKF_HW | CKF_SIGN | CKF_VERIFY},
+        {CKM_MD5, 0, 0,
+         CKF_DIGEST},
+        {CKM_SHA_1, 0, 0,
+         CKF_DIGEST},
+        {CKM_SHA224, 0, 0,
+         CKF_DIGEST},
+        {CKM_SHA256, 0, 0,
+         CKF_DIGEST},
+        {CKM_SHA384, 0, 0,
+         CKF_DIGEST},
+        {CKM_SHA512, 0, 0,
+         CKF_DIGEST},
+        {CKM_GOSTR3410_KEY_PAIR_GEN, 0, 0,
+         CKF_HW | CKF_GENERATE_KEY_PAIR},
+        {CKM_GOSTR3410, 0, 0,
+         CKF_HW | CKF_SIGN | CKF_VERIFY},
+        {CKM_GOSTR3410_DERIVE, 0, 0,
+         CKF_HW | CKF_DERIVE},
+        {CKM_GOSTR3410_512_KEY_PAIR_GEN, 0, 0,
+         CKF_HW | CKF_GENERATE_KEY_PAIR},
+        {CKM_GOSTR3410_512, 0, 0,
+         CKF_HW | CKF_SIGN | CKF_VERIFY},
+        {CKM_GOSTR3410_12_DERIVE, 0, 0,
+         CKF_HW | CKF_DERIVE},
+        {0xD4321038UL, 0, 0,
+         CKF_HW | CKF_DERIVE},
+        {CKM_GOSTR3411, 0, 0,
+         CKF_HW | CKF_DIGEST},
+        {CKM_GOSTR3411_12_256, 0, 0,
+         CKF_HW | CKF_DIGEST},
+        {CKM_GOSTR3411_12_512, 0, 0,
+         CKF_HW | CKF_DIGEST},
+        {CKM_GOSTR3410_WITH_GOSTR3411, 0, 0,
+         CKF_HW | CKF_SIGN | CKF_VERIFY},
+        {CKM_GOSTR3410_WITH_GOSTR3411_12_256, 0, 0,
+         CKF_HW | CKF_SIGN | CKF_VERIFY},
+        {CKM_GOSTR3410_WITH_GOSTR3411_12_512, 0, 0,
+         CKF_HW | CKF_SIGN | CKF_VERIFY},
+        {CKM_GOST28147_KEY_WRAP, 0, 0,
+         CKF_HW | CKF_WRAP | CKF_UNWRAP},
+        {CKM_GOST28147_ECB, 0, 0,
+         CKF_HW | CKF_ENCRYPT | CKF_DECRYPT},
+        {0x8000000BUL, 0, 0,
+         CKF_HW | CKF_ENCRYPT | CKF_DECRYPT},
+        {CKM_GOST28147, 0, 0,
+         CKF_HW | CKF_ENCRYPT | CKF_DECRYPT},
+        {CKM_GOST28147_KEY_GEN, 0, 0,
+         CKF_HW | CKF_GENERATE},
+        {CKM_GOST28147_MAC, 0, 0,
+         CKF_HW | CKF_SIGN | CKF_VERIFY},
+        {0xD4321034UL, 0, 0,
+         CKF_HW | CKF_GENERATE},
+        {0xD4321030UL, 0, 0,
+         CKF_HW | CKF_GENERATE},
+        {0xD4321035UL, 0, 0,
+         CKF_HW | CKF_ENCRYPT | CKF_DECRYPT},
+        {0xD4321031UL, 0, 0,
+         CKF_HW | CKF_ENCRYPT | CKF_DECRYPT},
+        {0xD4321036UL, 0, 0,
+         CKF_HW | CKF_ENCRYPT | CKF_DECRYPT},
+        {0xD4321032UL, 0, 0,
+         CKF_HW | CKF_ENCRYPT | CKF_DECRYPT},
+        {0xD432102EUL, 0, 0,
+         CKF_HW | CKF_ENCRYPT | CKF_DECRYPT},
+        {0xD432102DUL, 0, 0,
+         CKF_HW | CKF_ENCRYPT | CKF_DECRYPT},
+        {0xD4321037UL, 0, 0,
+         CKF_HW | CKF_SIGN | CKF_VERIFY},
+        {0xD4321033UL, 0, 0,
+         CKF_HW | CKF_SIGN | CKF_VERIFY},
+        {CKM_GOSTR3411_12_256_HMAC, 0, 0,
+         CKF_HW | CKF_SIGN | CKF_VERIFY},
+        {CKM_GOSTR3411_12_512_HMAC, 0, 0,
+         CKF_HW | CKF_SIGN | CKF_VERIFY},
+        {CKM_GOSTR3411_HMAC, 0, 0,
+         CKF_SIGN | CKF_VERIFY},
+        {CKM_ECDSA_KEY_PAIR_GEN, 256, 256,
+         CKF_HW | CKF_GENERATE_KEY_PAIR | CKF_EC_F_P | CKF_EC_NAMEDCURVE | CKF_EC_UNCOMPRESS},
+        {CKM_ECDSA, 256, 256,
+         CKF_HW | CKF_SIGN | CKF_VERIFY | CKF_EC_F_P | CKF_EC_NAMEDCURVE | CKF_EC_UNCOMPRESS},
+        {CKM_ECDSA_SHA1, 256, 256,
+         CKF_HW | CKF_SIGN | CKF_VERIFY | CKF_EC_F_P | CKF_EC_NAMEDCURVE | CKF_EC_UNCOMPRESS},
+        {CKM_ECDSA_SHA224, 256, 256,
+         CKF_HW | CKF_SIGN | CKF_VERIFY | CKF_EC_F_P | CKF_EC_NAMEDCURVE | CKF_EC_UNCOMPRESS},
+        {CKM_ECDSA_SHA256, 256, 256,
+         CKF_HW | CKF_SIGN | CKF_VERIFY | CKF_EC_F_P | CKF_EC_NAMEDCURVE | CKF_EC_UNCOMPRESS},
+        {CKM_ECDSA_SHA384, 256, 256,
+         CKF_HW | CKF_SIGN | CKF_VERIFY | CKF_EC_F_P | CKF_EC_NAMEDCURVE | CKF_EC_UNCOMPRESS},
+        {CKM_ECDSA_SHA512, 256, 256,
+         CKF_HW | CKF_SIGN | CKF_VERIFY | CKF_EC_F_P | CKF_EC_NAMEDCURVE | CKF_EC_UNCOMPRESS},
+        {0xD4321028UL, 0, 0,
+         CKF_HW | CKF_DERIVE},
+        {CKM_CONCATENATE_BASE_AND_KEY, 0, 0,
+         CKF_HW | CKF_DERIVE},
+        {0xD432102AUL, 0, 0,
+         CKF_HW | CKF_DERIVE},
+        {0xD4321039UL, 0, 0,
+         CKF_HW | CKF_DERIVE},
+        {CKM_ECDH1_DERIVE, 255, 512,
+         CKF_HW | CKF_DERIVE | CKF_EC_F_P | CKF_EC_NAMEDCURVE | CKF_EC_UNCOMPRESS},
+        {0xD432102BUL, 0, 0,
+         CKF_HW | CKF_WRAP | CKF_UNWRAP},
+        {0xD432102CUL, 0, 0,
+         CKF_HW | CKF_WRAP | CKF_UNWRAP},
+        {0x80000003UL, 0, 0,
+         CKF_HW | CKF_UNWRAP},
+        {CKM_GENERIC_SECRET_KEY_GEN, 80, 2048,
+         CKF_GENERATE | CKF_GENERATE_KEY_PAIR | CKF_DERIVE},
     };
-    for (CK_MECHANISM_TYPE required : requiredProfileMechanisms)
-        if (std::find(mechanisms.begin(), mechanisms.end(), required) == mechanisms.end())
-            fail("portable Rutoken profile omitted a required implemented RSA/GOST mechanism");
-    for (CK_MECHANISM_TYPE mechanism : mechanisms)
+    const size_t referenceCount = sizeof(reference) / sizeof(reference[0]);
+    if (mechanisms.size() != referenceCount)
+        fail("Rutoken profile advertises " + std::to_string(mechanisms.size()) +
+             " mechanisms instead of the reference " + std::to_string(referenceCount));
+    for (size_t i = 0; i < referenceCount; ++i)
     {
+        if (mechanisms[i] != reference[i].type)
+            fail("Rutoken mechanism " + std::to_string(i) + " is " + hexNumber(mechanisms[i]) +
+                 " where the reference device reports " + hexNumber(reference[i].type));
         CK_MECHANISM_INFO info{};
-        callOk("C_GetMechanismInfo", "slotID=0, type=" + hexNumber(mechanism) + ", pInfo=&info",
-               [&] { return module->C_GetMechanismInfo(0, mechanism, &info); });
-        if (mechanism == CKM_RSA_PKCS_KEY_PAIR_GEN &&
-            (info.ulMinKeySize != 512 || info.ulMaxKeySize != 4096 ||
-             info.flags != (CKF_HW | CKF_GENERATE_KEY_PAIR)))
-            fail("Rutoken RSA key-generation mechanism metadata differs from the reference");
-        if (mechanism == CKM_SHA256 && info.flags != CKF_DIGEST)
-            fail("Rutoken SHA-256 mechanism metadata differs from the reference");
-        if (mechanism == CKM_GOSTR3411_2012_256 && info.flags != (CKF_HW | CKF_DIGEST))
-            fail("Rutoken Streebog-256 mechanism metadata differs from the reference");
-        if ((mechanism == CKM_GOSTR3410 ||
-             mechanism == CKM_GOSTR3410_WITH_GOSTR3411_2012_256) &&
-            info.flags != (CKF_HW | CKF_SIGN))
-            fail("Rutoken GOST signing mechanism metadata differs from the implemented reference intersection");
+        callOk("C_GetMechanismInfo", "slotID=0, type=" + hexNumber(mechanisms[i]) + ", pInfo=&info",
+               [&] { return module->C_GetMechanismInfo(0, mechanisms[i], &info); });
+        if (info.ulMinKeySize != reference[i].minKeySize ||
+            info.ulMaxKeySize != reference[i].maxKeySize || info.flags != reference[i].flags)
+            fail("Rutoken mechanism " + hexNumber(mechanisms[i]) +
+                 " metadata differs from the reference device");
     }
+    CK_MECHANISM_INFO absentMechanism{};
+    check(invoke("C_GetMechanismInfo", "slotID=0, type=CKM_AES_KEY_GEN, pInfo=&info",
+                 [&] { return module->C_GetMechanismInfo(0, CKM_AES_KEY_GEN, &absentMechanism); }),
+          CKR_MECHANISM_INVALID, "C_GetMechanismInfo(mechanism absent from the reference device)");
 
     if ((token.flags & CKF_TOKEN_INITIALIZED) != 0)
     {

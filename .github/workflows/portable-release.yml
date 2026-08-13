@@ -278,7 +278,7 @@ jobs:
             > "$RUNNER_TEMP/tokens-after-profile.sha256"
           cmp "$RUNNER_TEMP/tokens-before-profile.sha256" \
             "$RUNNER_TEMP/tokens-after-profile.sha256"
-          P11_TEST_TOKEN_LABEL='Rutoken ECP <no label>' \
+          P11_TEST_TOKEN_LABEL=portable-ci-token \
           P11_TEST_OBJECT_ID_HEX=504f525441424c47 \
           P11_TEST_KEY_LABEL=portable-ci-rsa-rutoken \
             bash "$kit/run-test.sh" "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so" \
@@ -296,6 +296,11 @@ jobs:
             "$generated_home/softhsm/softhsm.conf"
           test -d "$generated_home/softhsm/tokens"
           test ! -e "$no_template/tokens"
+          perl -0pi -e 's/FAKE_RUTOKEN_ECP = false/FAKE_RUTOKEN_ECP = true/' \
+            "$generated_home/softhsm/softhsm.conf"
+          HOME="$generated_home" P11_PROFILE_EXPECTED_LABEL='Rutoken ECP <no label>' \
+            "$kit/bin/portable-token-e2e" rutoken-profile \
+              "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so"
           export HOME="$RUNNER_TEMP/softhsm-exclusion-home"
           mkdir -p "$HOME"
           sed -i 's/^INITIALIZE_TOKEN=AUTO$/INITIALIZE_TOKEN=YES/' "$kit/testkit.conf"
@@ -354,7 +359,7 @@ jobs:
             "$HOME/softhsm/softhsm.conf"
           "$RUNNER_TEMP/packaged-testkit/bin/portable-token-e2e" rutoken-profile \
             "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so"
-          P11_TEST_TOKEN_LABEL='Rutoken ECP <no label>' \
+          P11_TEST_TOKEN_LABEL=portable-ci-token \
           P11_TEST_OBJECT_ID_HEX=504f525441424c47 \
           P11_TEST_KEY_LABEL=portable-ci-rsa-rutoken \
             bash "$RUNNER_TEMP/packaged-testkit/run-test.sh" \
@@ -407,7 +412,7 @@ jobs:
           powershell -NoProfile -Command "(Get-Content -Raw '%USERPROFILE%\softhsm\softhsm.conf').Replace('FAKE_RUTOKEN_ECP = false','FAKE_RUTOKEN_ECP = true') | Set-Content -NoNewline -Encoding ascii '%USERPROFILE%\softhsm\softhsm.conf'"
           "%RUNNER_TEMP%\packaged-testkit\bin\portable-token-e2e.exe" rutoken-profile "%CD%\downloaded\softhsm2.dll"
           if errorlevel 1 exit /b %ERRORLEVEL%
-          set "P11_TEST_TOKEN_LABEL=Rutoken ECP <no label>"
+          set "P11_TEST_TOKEN_LABEL=portable-ci-token"
           set "P11_TEST_OBJECT_ID_HEX=504f525441424c47"
           set "P11_TEST_KEY_LABEL=portable-ci-rsa-rutoken"
           call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd" "%CD%\downloaded\softhsm2.dll"
@@ -462,7 +467,7 @@ jobs:
           powershell -NoProfile -Command "(Get-Content -Raw '%USERPROFILE%\softhsm\softhsm.conf').Replace('FAKE_RUTOKEN_ECP = false','FAKE_RUTOKEN_ECP = true') | Set-Content -NoNewline -Encoding ascii '%USERPROFILE%\softhsm\softhsm.conf'"
           "%RUNNER_TEMP%\packaged-testkit\bin\portable-token-e2e.exe" rutoken-profile "%CD%\downloaded\softhsm2.dll"
           if errorlevel 1 exit /b %ERRORLEVEL%
-          set "P11_TEST_TOKEN_LABEL=Rutoken ECP <no label>"
+          set "P11_TEST_TOKEN_LABEL=portable-ci-token"
           set "P11_TEST_OBJECT_ID_HEX=504f525441424c47"
           set "P11_TEST_KEY_LABEL=portable-ci-rsa-rutoken"
           call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd" "%CD%\downloaded\softhsm2.dll"
@@ -517,7 +522,7 @@ jobs:
           powershell -NoProfile -Command "(Get-Content -Raw '%USERPROFILE%\softhsm\softhsm.conf').Replace('FAKE_RUTOKEN_ECP = false','FAKE_RUTOKEN_ECP = true') | Set-Content -NoNewline -Encoding ascii '%USERPROFILE%\softhsm\softhsm.conf'"
           "%RUNNER_TEMP%\packaged-testkit\bin\portable-token-e2e.exe" rutoken-profile "%CD%\downloaded\softhsm2.dll"
           if errorlevel 1 exit /b %ERRORLEVEL%
-          set "P11_TEST_TOKEN_LABEL=Rutoken ECP <no label>"
+          set "P11_TEST_TOKEN_LABEL=portable-ci-token"
           set "P11_TEST_OBJECT_ID_HEX=504f525441424c47"
           set "P11_TEST_KEY_LABEL=portable-ci-rsa-rutoken"
           call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd" "%CD%\downloaded\softhsm2.dll"
@@ -571,7 +576,7 @@ jobs:
             "$HOME/softhsm/softhsm.conf"
           "$RUNNER_TEMP/packaged-testkit/bin/portable-token-e2e" rutoken-profile \
             "$GITHUB_WORKSPACE/downloaded/libsofthsm2.dylib"
-          P11_TEST_TOKEN_LABEL='Rutoken ECP <no label>' \
+          P11_TEST_TOKEN_LABEL=portable-ci-token \
           P11_TEST_OBJECT_ID_HEX=504f525441424c47 \
           P11_TEST_KEY_LABEL=portable-ci-rsa-rutoken \
             bash "$RUNNER_TEMP/packaged-testkit/run-test.sh" \

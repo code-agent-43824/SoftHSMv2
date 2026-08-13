@@ -284,6 +284,16 @@ and requires the OpenSSL backend. GOST 2012 is gated by
   point of the fork, not a trick.** *Reason:* it exists to test software that
   talks to a Rutoken ECP in places where the physical token cannot be inserted,
   such as a cloud server. It is opt-in and defaults to false.
+- **Under that profile the module advertises the reference device's whole
+  mechanism list, including mechanisms this build does not implement.** This
+  reverses the earlier decision not to advertise what is not implemented.
+  *Reason:* the owner's decision of 13 August 2026 — applications judge
+  compatibility from the list alone, and the missing algorithms are planned.
+  Calling an unimplemented mechanism fails with `CKR_MECHANISM_INVALID` from
+  the operation itself. The list, its order, key sizes and flags come from one
+  source: the raw `pkcs11-tool -M` output of the owner's device, mirrored in
+  `verifyRutokenProfile` in `tests/portable/portable-token-e2e.cpp`. Change
+  either only against a new reading of a real device.
 - **Portable modules ignore `SOFTHSM2_CONF`, adjacent files and system
   configuration paths**, using one fixed per-user configuration and token store
   (`%USERPROFILE%\softhsm\softhsm.conf`, `~/softhsm/softhsm.conf`). *Reason:*
