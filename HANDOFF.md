@@ -18,21 +18,37 @@
 
 ## Точный следующий шаг
 
-Запустить workflow `Diagnostic Windows x64` на ветке
-`claude/diag-windows-x64-module-path` (только `workflow_dispatch`), скачать
-артефакт `softhsm-diagnostic-windows-x64`, подложить `softhsm2.dll` из него в
-каталог кита x64 на стенде и выполнить:
+Диагностическая сборка готова. Прогон `Diagnostic Windows x64` на ветке
+`claude/diag-windows-x64-module-path` завершён успешно:
+
+    https://github.com/code-agent-43824/SoftHSMv2/actions/runs/31668557298
+
+Артефакт `softhsm-diagnostic-windows-x64` (~2 МБ) лежит там же, срок хранения
+7 дней. Порядок:
+
+1. Скачать артефакт, взять из него `softhsm2.dll`.
+2. Подменить им `softhsm2.dll` в каталоге кита x64 на стенде, старый отложить.
+3. Выполнить падающий вызов и такой же с абсолютным путём, для сравнения:
 
 ```
 .\bin\pkcs11-tool.exe --module .\softhsm2.dll -I
+.\bin\pkcs11-tool.exe --module C:\...\softhsm-testkit-windows-x64\softhsm2.dll -I
 ```
 
-Модуль собран с `DEBUG_LOG_STDERR`, поэтому сообщение, предшествующее
-`CKR_GENERAL_ERROR`, выйдет прямо на консоль вместе с файлом и строкой
-исходника. Оно назовёт ветку отказа, после чего можно чинить.
+Модуль собран с `DEBUG_LOG_STDERR` и `SOFTHSM_LOG_FILE_AND_LINE`, поэтому
+каждое сообщение уходит на `stderr` до чтения конфигурации и мимо журнала
+событий. Перед `CKR_GENERAL_ERROR` будет строка вида
+`...\SimpleConfigLoader.cpp(NNN): <текст>` — она называет ветку отказа.
+
+От релизной эта сборка отличается только двумя `/D` в
+`CMAKE_CXX_FLAGS_RELEASE`: та же цепочка, тот же раннер `windows-2025`, те же
+проверки типа PE-машины и отсутствия лишних зависимостей. Если на ней дефект
+не воспроизведётся — это улика, а не случайность.
 
 Ветка диагностическая, в `main` не идёт: в ней правлен
-`scripts/portable/build-windows.ps1` и добавлен одноразовый workflow.
+`scripts/portable/build-windows.ps1` и добавлен одноразовый workflow,
+срабатывающий на push в саму эту ветку (`workflow_dispatch` неприменим —
+GitHub диспатчит только workflow, чей файл есть и в ветке по умолчанию).
 
 ## О чём знать следующему агенту
 
