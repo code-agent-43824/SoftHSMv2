@@ -339,10 +339,23 @@ is not reused. The current tag is `v2.7.0-portable.23`.
 ## Deployment
 
 There is no server. A "deploy" is a GitHub release of the portable archives,
-produced only by the `Portable release` workflow (`workflow_dispatch`, input
-`release_tag`). It builds six platform archives, verifies each on a fresh
-runner of the same architecture as an outside consumer would, and publishes
-only if all six pass.
+produced only by the `Portable release` workflow. It builds six platform
+archives, verifies each on a fresh runner of the same architecture as an
+outside consumer would, and publishes only if all six pass.
+
+That workflow runs in two modes, and only one of them publishes:
+
+- **Automatically**, after `CI` succeeds on `main` (`workflow_run`). It builds
+  and verifies all six platforms and stops there; the archives stay as run
+  artifacts. This is the owner's requirement that the product be built in full
+  after any change to the trunk. A newer automatic run supersedes an older one.
+- **On `workflow_dispatch` with `release_tag`**, which additionally publishes.
+  Release tags are numbered by hand and never reused, so cutting one stays a
+  deliberate act.
+
+Under `workflow_run` the checkout must name
+`github.event.workflow_run.head_sha`: `github.sha` there is the default
+branch's tip, which is not necessarily the commit CI approved.
 
 - **Never create or push a release tag from a session.** The workflow creates
   the tag; the proxy refuses tag pushes by policy (§12).

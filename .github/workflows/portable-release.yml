@@ -7,6 +7,20 @@ on:
         description: Release tag to create or update
         required: true
         default: v2.7.0-portable.23
+  # Build and verify the whole product on every change to the trunk, once the
+  # quick CI on that commit has passed. Only a manual dispatch publishes a
+  # release; an automatic run stops after the six verification jobs and leaves
+  # the archives as run artifacts.
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+# An automatic build for an older commit is worthless once a newer one starts,
+# so supersede it. A manual release run is never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_run' }}
 
 permissions:
   contents: read
@@ -25,6 +39,7 @@ env:
 jobs:
   build-linux-x64:
     name: Build Linux x64 (glibc 2.31)
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
     container: ubuntu:20.04
     steps:
@@ -34,6 +49,8 @@ jobs:
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             build-essential ca-certificates cmake curl perl pkg-config python3 unzip xz-utils zip
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - name: Build package
         env:
           PORTABLE_ARCH: x64
@@ -52,6 +69,7 @@ jobs:
 
   build-linux-arm64:
     name: Build Linux ARM64 (glibc 2.31)
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04-arm
     container: ubuntu:20.04
     steps:
@@ -61,6 +79,8 @@ jobs:
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             build-essential ca-certificates cmake curl perl pkg-config python3 unzip xz-utils zip
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - name: Build package
         env:
           PORTABLE_ARCH: arm64
@@ -79,9 +99,12 @@ jobs:
 
   build-windows-x64:
     name: Build Windows x64
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - name: Build package
         shell: cmd
         env:
@@ -99,9 +122,12 @@ jobs:
 
   build-windows-x86:
     name: Build Windows x86
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - name: Build package
         shell: cmd
         env:
@@ -119,9 +145,12 @@ jobs:
 
   build-windows-arm64:
     name: Build Windows ARM64
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: windows-11-arm
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - name: Build package
         shell: cmd
         env:
@@ -139,9 +168,12 @@ jobs:
 
   build-macos-universal:
     name: Build macOS universal
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - name: Build package
         run: scripts/portable/build-macos.sh
       - name: Prepare flat Actions artifact
@@ -168,6 +200,8 @@ jobs:
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             build-essential ca-certificates curl file opensc patchelf perl unzip zip
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: actions/download-artifact@v8
         with:
           name: softhsm-portable-linux-x64
@@ -335,6 +369,8 @@ jobs:
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             build-essential ca-certificates curl file opensc patchelf perl unzip zip
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: actions/download-artifact@v8
         with:
           name: softhsm-portable-linux-arm64
@@ -387,6 +423,8 @@ jobs:
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: actions/download-artifact@v8
         with:
           name: softhsm-portable-windows-x64
@@ -442,6 +480,8 @@ jobs:
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: actions/download-artifact@v8
         with:
           name: softhsm-portable-windows-x86
@@ -497,6 +537,8 @@ jobs:
     runs-on: windows-11-arm
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: actions/download-artifact@v8
         with:
           name: softhsm-portable-windows-arm64
@@ -552,6 +594,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: actions/download-artifact@v8
         with:
           name: softhsm-portable-macos-universal
@@ -600,6 +644,9 @@ jobs:
 
   release:
     name: Publish all verified portable packages
+    # Automatic runs build and verify; they do not publish. Release tags are
+    # numbered by hand and never reused, so a tag is only cut on dispatch.
+    if: github.event_name == 'workflow_dispatch'
     needs:
       - verify-linux-x64
       - verify-linux-arm64
@@ -612,6 +659,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: actions/download-artifact@v8
         with:
           pattern: softhsm-*
@@ -654,12 +703,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: |
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" release-assets/* --clobber
           else
             gh release create "$RELEASE_TAG" release-assets/* \
-              --target "$GITHUB_SHA" \
+              --target "$RELEASE_COMMIT" \
               --title "SoftHSM portable $RELEASE_TAG" \
               --notes "Portable, installer-free PKCS #11 modules and independently downloadable self-contained test kits for Linux x64/ARM64, Windows x86/x64/ARM64, and macOS universal. Every portable module copy uses exactly one per-user configuration and store: ~/softhsm/softhsm.conf and ~/softhsm/tokens (under %USERPROFILE% on Windows). The module creates them on first use and deliberately ignores SOFTHSM2_CONF, adjacent files, working-directory files, and system configuration paths. Test-kit launchers load modules in place and retain all scenario evidence under test-output inside the extracted kit; they do not copy files into temporary directories. AUTO initializes the selected SoftHSM token and user PIN only when the canonical store is empty, for both bundled and explicitly supplied modules; later runs reuse it and replace only the configured test IDs. The complete GOST/RSA/CSR/certificate/CMS test then reloads the module and proves the resulting persistent objects are usable without C_InitToken, C_InitPIN, or C_SetPIN. Every test kit also contains a ready-to-run OpenSC pkcs11-tool and its non-system dependencies; the launcher finishes by requiring pkcs11-tool -I and -T to load the selected module, without a separate OpenSC installation. FAKE_RUTOKEN_ECP changes only the external Rutoken ECP 2.19 presentation and does not alter the object store or cryptographic semantics. All six platform builds are verified on separate fresh runners."
           fi
