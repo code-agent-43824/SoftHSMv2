@@ -45,6 +45,7 @@ static void printFlag(CK_FLAGS flags, CK_FLAGS bit, const char* name)
 int main(int argc, char** argv)
 {
 	void* handle;
+	void* symbol;
 	CK_C_GetFunctionList getList;
 	CK_C_EX_GetFunctionListExtended getListExtended;
 	CK_FUNCTION_LIST_PTR p11 = NULL_PTR;
@@ -65,15 +66,19 @@ int main(int argc, char** argv)
 #ifdef _WIN32
 	handle = (void*) LoadLibraryA(argv[1]);
 	if (handle == NULL) { fprintf(stderr, "LoadLibrary failed\n"); return 1; }
-	getList = (CK_C_GetFunctionList) GetProcAddress((HMODULE) handle, "C_GetFunctionList");
-	getListExtended = (CK_C_EX_GetFunctionListExtended)
-		GetProcAddress((HMODULE) handle, "C_EX_GetFunctionListExtended");
+	/* GetProcAddress returns FARPROC, which is a different function type; the
+	   round trip through a data pointer is what every PKCS #11 loader does. */
+	symbol = (void*) GetProcAddress((HMODULE) handle, "C_GetFunctionList");
+	getList = (CK_C_GetFunctionList) symbol;
+	symbol = (void*) GetProcAddress((HMODULE) handle, "C_EX_GetFunctionListExtended");
+	getListExtended = (CK_C_EX_GetFunctionListExtended) symbol;
 #else
 	handle = dlopen(argv[1], RTLD_NOW);
 	if (handle == NULL) { fprintf(stderr, "dlopen: %s\n", dlerror()); return 1; }
-	getList = (CK_C_GetFunctionList) dlsym(handle, "C_GetFunctionList");
-	getListExtended = (CK_C_EX_GetFunctionListExtended)
-		dlsym(handle, "C_EX_GetFunctionListExtended");
+	symbol = dlsym(handle, "C_GetFunctionList");
+	getList = (CK_C_GetFunctionList) symbol;
+	symbol = dlsym(handle, "C_EX_GetFunctionListExtended");
+	getListExtended = (CK_C_EX_GetFunctionListExtended) symbol;
 #endif
 	if (getList == NULL) { fprintf(stderr, "C_GetFunctionList is not exported\n"); return 1; }
 	if (getListExtended == NULL)
