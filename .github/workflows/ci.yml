@@ -43,7 +43,7 @@ jobs:
       # gate were compiled and run only by the release workflow, so a break in
       # either surfaced at release time. Same compiler flags the test-kit
       # builder uses, so the two cannot drift apart.
-      - name: Build the vendor-neutral PKCS #11 client
+      - name: "Build the vendor-neutral PKCS #11 client"
         run: |
           c++ -std=c++17 -O2 -Wall -Wextra -Werror -static-libstdc++ -static-libgcc \
             -I src/lib/pkcs11 tests/portable/portable-token-e2e.cpp \
