@@ -38,3 +38,28 @@ jobs:
             echo 'portable module unexpectedly depends on external crypto libraries' >&2
             exit 1
           fi
+      # The Rutoken profile is the point of this fork, and until now nothing
+      # exercised it on push: the client below and the whole rutoken-profile
+      # gate were compiled and run only by the release workflow, so a break in
+      # either surfaced at release time. Same compiler flags the test-kit
+      # builder uses, so the two cannot drift apart.
+      - name: Build the vendor-neutral PKCS #11 client
+        run: |
+          c++ -std=c++17 -O2 -Wall -Wextra -Werror -static-libstdc++ -static-libgcc \
+            -I src/lib/pkcs11 tests/portable/portable-token-e2e.cpp \
+            -ldl -o portable-token-e2e
+      - name: Verify the Rutoken ECP compatibility profile
+        run: |
+          export HOME="$GITHUB_WORKSPACE/profile-gate-home"
+          mkdir -p "$HOME"
+          module="$GITHUB_WORKSPACE/portable-product/libsofthsm2.so"
+          # The first load writes the default user configuration and store.
+          ./portable-token-e2e probe "$module"
+          perl -0pi -e 's/FAKE_RUTOKEN_ECP = false/FAKE_RUTOKEN_ECP = true/' \
+            "$HOME/softhsm/softhsm.conf"
+          grep -F 'FAKE_RUTOKEN_ECP = true' "$HOME/softhsm/softhsm.conf"
+          # A store whose token has never been labelled must report the
+          # placeholder the device uses. The labelled branch needs an
+          # initialized token and stays with the release workflow.
+          P11_PROFILE_EXPECTED_LABEL='Rutoken ECP <no label>' \
+            ./portable-token-e2e rutoken-profile "$module"
