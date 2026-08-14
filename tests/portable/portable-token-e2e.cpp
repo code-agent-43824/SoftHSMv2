@@ -2194,17 +2194,25 @@ static void verifyRutokenExtension(Module& module, const CK_TOKEN_INFO& token)
     if (extended.ulATRLen > sizeof(extended.ATR))
         fail("C_EX_GetTokenInfoExtended reports an ATR longer than its own field");
 
-    // The two views of the token must agree on the serial number.
-    unsigned long long fromText = 0;
+    // The two views of the token must agree on the serial number. The device
+    // packs it as right-aligned binary-coded decimal, so reading the field's
+    // nibbles back has to spell the digits C_GetTokenInfo printed.
+    std::string fromText;
     for (size_t i = 0; i < sizeof(token.serialNumber); ++i)
     {
         const unsigned char digit = static_cast<unsigned char>(token.serialNumber[i]);
-        if (digit >= '0' && digit <= '9') fromText = fromText * 10 + (digit - '0');
+        if (digit >= '0' && digit <= '9') fromText.push_back(static_cast<char>(digit));
     }
-    unsigned long long fromBytes = 0;
+    std::string fromBytes;
     for (size_t i = 0; i < sizeof(extended.serialNumber); ++i)
-        fromBytes = (fromBytes << 8) | extended.serialNumber[i];
-    if (fromText != fromBytes)
+    {
+        fromBytes.push_back(static_cast<char>('0' + (extended.serialNumber[i] >> 4)));
+        fromBytes.push_back(static_cast<char>('0' + (extended.serialNumber[i] & 0x0F)));
+        if ((extended.serialNumber[i] >> 4) > 9 || (extended.serialNumber[i] & 0x0F) > 9)
+            fail("C_EX_GetTokenInfoExtended serial number is not binary-coded decimal");
+    }
+    if (fromBytes.substr(fromBytes.size() - fromText.size()) != fromText ||
+        fromBytes.find_first_not_of('0') < fromBytes.size() - fromText.size())
         fail("C_GetTokenInfo and C_EX_GetTokenInfoExtended disagree about the serial number");
 
     // A caller compiled against a different structure has to be told, not fed

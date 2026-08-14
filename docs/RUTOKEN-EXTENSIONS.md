@@ -56,17 +56,44 @@ Rutoken SDK **v.2026** (релиз 15.05.2026), `rutoken-sdk-latest.zip`
 | `ulSizeofThisStructure` | `[in]` размер от вызывающего, `[out]` заполненный; несовпадение → `CKR_BUFFER_TOO_SMALL` |
 | `ulTokenType` | `TOKEN_TYPE_RUTOKEN_ECP`; поле объявлено вендором устаревшим, но его ещё читают |
 | `ulTokenClass` | `TOKEN_CLASS_ECP` |
-| `serialNumber[8]` | тот же серийник, что и в `C_GetTokenInfo`, big-endian — два представления обязаны сходиться |
-| `flags` | постоянные возможности ECP + `*_PIN_NOT_DEFAULT` по состоянию токена + `FW_CHECKSUM_UNAVAILIBLE` |
+| `serialNumber[8]` | тот же серийник, что и в `C_GetTokenInfo`, в BCD — два представления обязаны сходиться |
+| `flags` | постоянные возможности эталона + `*_PIN_NOT_DEFAULT` по состоянию токена |
 | `ulAdminRetryCountLeft`, `ulUserRetryCountLeft` | выводятся из стандартных флагов: `LOCKED` → 0, `FINAL_TRY` → 1, `COUNT_LOW` → 2, иначе максимум |
-| `ulBatteryVoltage`, `ulBatteryPercentage`, `ulBatteryFlags` | 0 — устройство питается от шины |
-| `ulFirmwareChecksum` | 0 при выставленном `TOKEN_FLAGS_FW_CHECKSUM_UNAVAILIBLE`: прошивки нет, и у вендора для этого есть свой флаг |
-| остальное | константы эталонного устройства, собраны в одном месте в `SoftHSM.cpp` |
+| остальное | константы эталонного устройства, собраны в одном именованном блоке в `SoftHSM.cpp` |
 
-Константы, которые из программного токена не выводятся и требуют снятия с
-железа: `ulProtocolNumber`, `ulMicrocodeNumber`, `ulOrderNumber`, состав
-`flags`, границы PIN-кодов и счётчики попыток, `ulTotalMemory` /
-`ulFreeMemory`, `ATR`, `ulBodyColor`.
+### Показания эталонного устройства (14.08.2026)
+
+Сняты `tests/portable/rutoken-reference-dump.c` с `rtPKCS11ECP.dll` владельца.
+Всё, что из программного токена не выводится, взято отсюда.
+
+| поле | значение |
+| --- | --- |
+| `ulSizeofThisStructure` | 164 на Windows (`CK_ULONG` там 4 байта, упаковка 1), 256 на Linux |
+| `ulTokenType` / `ulTokenClass` | `0x01` / `0x01` — ECP |
+| `ulProtocolNumber` | `0x01` |
+| `ulMicrocodeNumber` | `0x1E` (30 — совпадает со старшей версией прошивки) |
+| `ulOrderNumber` | `2` |
+| `flags` | `0x00001C0F`: `ADMIN_CHANGE_USER_PIN`, `USER_CHANGE_USER_PIN`, `ADMIN_PIN_NOT_DEFAULT`, `USER_PIN_NOT_DEFAULT`, `SUPPORT_JOURNAL`, `USER_PIN_UTF8`, `ADMIN_PIN_UTF8` |
+| PIN-коды | оба 6..249, попыток 10 из 10 |
+| `serialNumber` | `00 00 00 00 47 73 84 61` при печатном `47738461` — **BCD**, выровнено вправо |
+| память | 103200 свободно из 131072 |
+| `ATR` | 15 байт `3B8B015275746F6B656E20445320C1`, внутри читается `Rutoken DS` |
+| `ulBodyColor` | `0` (`UNKNOWN`) |
+| `ulFirmwareChecksum` | `0x4D27D7A2`, флаг `FW_CHECKSUM_UNAVAILIBLE` **не** выставлен |
+| батарея | 0 мВ, процент и флаги — `0xFFFFFFFF` |
+
+Два флага, которых у эталона нет и которые мы поэтому не заявляем:
+`SUPPORT_FKN` и `SUPPORT_SECURE_MESSAGING`.
+
+**Серийник — BCD, а не двоичное число.** Печатные восемь цифр лежат по две в
+байте: `47738461` → `47 73 84 61` в младших четырёх байтах. Двоичная запись
+того же числа дала бы `02 D8 6E 5D` — приложение, читающее поле как BCD,
+показало бы мусор. Сквозной гейт проверяет именно эту раскладку.
+
+На эталонном устройстве оба PIN-кода сменены с заводских, отсюда оба флага
+`*_PIN_NOT_DEFAULT`. У нас они выводятся косвенно, из
+`CKF_TOKEN_INITIALIZED` и `CKF_USER_PIN_INITIALIZED`; прямой способ владелец
+обещал дать позже, задача записана в `docs/PLAN.md`.
 
 ## Полный список функций
 

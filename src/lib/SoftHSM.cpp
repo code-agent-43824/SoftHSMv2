@@ -881,33 +881,40 @@ CK_RV SoftHSM::C_GetTokenInfo(CK_SLOT_ID slotID, CK_TOKEN_INFO_PTR pInfo)
 // so that C_GetTokenInfo and C_EX_GetTokenInfoExtended never disagree.
 namespace
 {
-	// Device constants. See docs/RUTOKEN-EXTENSIONS.md.
-	const CK_ULONG FAKE_RUTOKEN_PROTOCOL_NUMBER  = 0x20;
-	const CK_ULONG FAKE_RUTOKEN_MICROCODE_NUMBER = 0x18;
-	const CK_ULONG FAKE_RUTOKEN_ORDER_NUMBER     = 0;
-	const CK_ULONG FAKE_RUTOKEN_TOTAL_MEMORY     = 128 * 1024;
-	const CK_ULONG FAKE_RUTOKEN_FREE_MEMORY      = 96 * 1024;
+	// Device constants, read off the reference device with
+	// tests/portable/rutoken-reference-dump.c. See docs/RUTOKEN-EXTENSIONS.md.
+	const CK_ULONG FAKE_RUTOKEN_PROTOCOL_NUMBER  = 0x01;
+	const CK_ULONG FAKE_RUTOKEN_MICROCODE_NUMBER = 0x1E;
+	const CK_ULONG FAKE_RUTOKEN_ORDER_NUMBER     = 2;
+	const CK_ULONG FAKE_RUTOKEN_TOTAL_MEMORY     = 131072;
+	const CK_ULONG FAKE_RUTOKEN_FREE_MEMORY      = 103200;
 	const CK_ULONG FAKE_RUTOKEN_MIN_ADMIN_PIN    = 6;
-	const CK_ULONG FAKE_RUTOKEN_MAX_ADMIN_PIN    = 32;
+	const CK_ULONG FAKE_RUTOKEN_MAX_ADMIN_PIN    = 249;
 	const CK_ULONG FAKE_RUTOKEN_MIN_USER_PIN     = 6;
-	const CK_ULONG FAKE_RUTOKEN_MAX_USER_PIN     = 32;
+	const CK_ULONG FAKE_RUTOKEN_MAX_USER_PIN     = 249;
 	const CK_ULONG FAKE_RUTOKEN_MAX_ADMIN_RETRY  = 10;
 	const CK_ULONG FAKE_RUTOKEN_MAX_USER_RETRY   = 10;
 	const CK_ULONG FAKE_RUTOKEN_BODY_COLOR       = TOKEN_BODY_COLOR_UNKNOWN;
+	const CK_ULONG FAKE_RUTOKEN_FIRMWARE_CHECKSUM = 0x4D27D7A2;
 
-	// The device's answer-to-reset. An empty ATR is reported as a zero length
-	// rather than as invented bytes.
-	const CK_BYTE FAKE_RUTOKEN_ATR[] = { 0 };
-	const CK_ULONG FAKE_RUTOKEN_ATR_LEN = 0;
+	// The reference device's answer-to-reset. The printable run in the middle
+	// spells "Rutoken DS".
+	const CK_BYTE FAKE_RUTOKEN_ATR[] = {
+		0x3B, 0x8B, 0x01, 0x52, 0x75, 0x74, 0x6F, 0x6B,
+		0x65, 0x6E, 0x20, 0x44, 0x53, 0x20, 0xC1
+	};
+	const CK_ULONG FAKE_RUTOKEN_ATR_LEN = sizeof(FAKE_RUTOKEN_ATR);
 
-	// Constant capabilities of a Rutoken ECP. The "PIN is not default" bits are
-	// added from the token's own state below; the firmware checksum is declared
-	// unavailable because we have no firmware to checksum, which is a state the
-	// vendor's own flag exists to express.
+	// A bus-powered token reports no voltage and all-ones for the two battery
+	// fields it cannot answer.
+	const CK_ULONG FAKE_RUTOKEN_BATTERY_UNKNOWN = 0xFFFFFFFF;
+
+	// Constant capabilities of the reference Rutoken ECP. The "PIN is not
+	// default" bits are added from the token's own state below.
 	const CK_FLAGS FAKE_RUTOKEN_EXTENDED_FLAGS =
 		TOKEN_FLAGS_ADMIN_CHANGE_USER_PIN | TOKEN_FLAGS_USER_CHANGE_USER_PIN |
-		TOKEN_FLAGS_SUPPORT_FKN | TOKEN_FLAGS_SUPPORT_SECURE_MESSAGING |
-		TOKEN_FLAGS_SUPPORT_JOURNAL | TOKEN_FLAGS_FW_CHECKSUM_UNAVAILIBLE;
+		TOKEN_FLAGS_SUPPORT_JOURNAL | TOKEN_FLAGS_USER_PIN_UTF8 |
+		TOKEN_FLAGS_ADMIN_PIN_UTF8;
 
 	// How many attempts a PIN has left, as implied by the standard flags.
 	CK_ULONG retriesLeft(CK_FLAGS flags, CK_FLAGS locked, CK_FLAGS finalTry,
@@ -965,20 +972,28 @@ CK_RV SoftHSM::C_EX_GetTokenInfoExtended(CK_SLOT_ID slotID, CK_TOKEN_INFO_EXTEND
 						  CKF_USER_PIN_FINAL_TRY, CKF_USER_PIN_COUNT_LOW,
 						  FAKE_RUTOKEN_MAX_USER_RETRY);
 
-	// C_GetTokenInfo already produced the profile's eight decimal digits; carry
-	// the same number here as a big-endian integer so the two views agree.
-	unsigned long serial = 0;
+	// The reference device packs its printed serial as binary-coded decimal,
+	// right aligned: "47738461" comes back as 00 00 00 00 47 73 84 61, not as
+	// the binary value of that number. Carry the digits C_GetTokenInfo already
+	// produced through the same encoding so the two views agree.
+	char digits[sizeof(tokenInfo.serialNumber) + 1];
+	size_t digitCount = 0;
 	for (size_t i = 0; i < sizeof(tokenInfo.serialNumber); ++i)
 	{
-		const unsigned char digit = static_cast<unsigned char>(tokenInfo.serialNumber[i]);
-		if (digit < '0' || digit > '9') continue;
-		serial = serial * 10 + static_cast<unsigned long>(digit - '0');
+		const char digit = static_cast<char>(tokenInfo.serialNumber[i]);
+		if (digit >= '0' && digit <= '9') digits[digitCount++] = digit;
 	}
-	for (size_t i = 0; i < sizeof(pInfo->serialNumber); ++i)
+	// Two digits share a byte, so the field holds at most twice as many.
+	if (digitCount > sizeof(pInfo->serialNumber) * 2)
+		digitCount = sizeof(pInfo->serialNumber) * 2;
+	for (size_t i = 0; i < digitCount; ++i)
 	{
-		const size_t shift = (sizeof(pInfo->serialNumber) - 1 - i) * 8;
-		pInfo->serialNumber[i] = shift < sizeof(serial) * 8 ?
-			static_cast<CK_BYTE>((serial >> shift) & 0xFF) : 0;
+		// Count nibbles back from the end, so an odd digit count still lands
+		// right aligned: the last digit takes the low nibble of the last byte.
+		const size_t nibble = digitCount - 1 - i;
+		const size_t byte = sizeof(pInfo->serialNumber) - 1 - nibble / 2;
+		const CK_BYTE value = static_cast<CK_BYTE>(digits[i] - '0');
+		pInfo->serialNumber[byte] |= (nibble % 2) ? static_cast<CK_BYTE>(value << 4) : value;
 	}
 
 	pInfo->ulTotalMemory = FAKE_RUTOKEN_TOTAL_MEMORY;
@@ -989,9 +1004,9 @@ CK_RV SoftHSM::C_EX_GetTokenInfoExtended(CK_SLOT_ID slotID, CK_TOKEN_INFO_EXTEND
 	pInfo->ulTokenClass = TOKEN_CLASS_ECP;
 	pInfo->ulBatteryVoltage = 0;
 	pInfo->ulBodyColor = FAKE_RUTOKEN_BODY_COLOR;
-	pInfo->ulFirmwareChecksum = 0;
-	pInfo->ulBatteryPercentage = 0;
-	pInfo->ulBatteryFlags = 0;
+	pInfo->ulFirmwareChecksum = FAKE_RUTOKEN_FIRMWARE_CHECKSUM;
+	pInfo->ulBatteryPercentage = FAKE_RUTOKEN_BATTERY_UNKNOWN;
+	pInfo->ulBatteryFlags = FAKE_RUTOKEN_BATTERY_UNKNOWN;
 
 	return CKR_OK;
 }
