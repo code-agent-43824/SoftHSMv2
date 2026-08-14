@@ -7,6 +7,7 @@
  */
 
 #include "pkcs11.h"
+#include "rutoken.h"
 
 #include <algorithm>
 #include <array>
@@ -438,6 +439,17 @@ public:
     }
 
     CK_FUNCTION_LIST_PTR operator->() const { return p11_; }
+
+    // Vendor extensions are reached by symbol, the way the applications this
+    // profile targets reach them.
+    void* symbol(const char* name) const
+    {
+#ifdef _WIN32
+        return reinterpret_cast<void*>(GetProcAddress(handle_, name));
+#else
+        return dlsym(handle_, name);
+#endif
+    }
 
 private:
 #ifdef _WIN32
@@ -2136,6 +2148,82 @@ static void verifyReadyToken(const fs::path& modulePath)
     trace("READY", "fresh module load logged in without C_InitToken/C_InitPIN/C_SetPIN and found persistent GOST/RSA/certificate objects");
 }
 
+// The Rutoken extension: applications decide the module is a Rutoken by finding
+// C_EX_GetFunctionListExtended, so the symbol, the table and the one entry point
+// that reports anything all have to hold up.
+static void verifyRutokenExtension(Module& module, const CK_TOKEN_INFO& token)
+{
+    auto getList = reinterpret_cast<CK_C_EX_GetFunctionListExtended>(
+        module.symbol("C_EX_GetFunctionListExtended"));
+    if (getList == nullptr) fail("C_EX_GetFunctionListExtended was not exported");
+
+    CK_FUNCTION_LIST_EXTENDED_PTR ex = nullptr;
+    callOk("C_EX_GetFunctionListExtended", "ppFunctionList=&extendedList",
+           [&] { return getList(&ex); });
+    if (ex == nullptr) fail("C_EX_GetFunctionListExtended returned a null table");
+    if (ex->version.major != CRYPTOKI_LEGACY_VERSION_MAJOR ||
+        ex->version.minor != CRYPTOKI_LEGACY_VERSION_MINOR)
+        fail("the extended function table reports an unexpected Cryptoki version");
+    if (ex->C_EX_GetFunctionListExtended != getList)
+        fail("the extended table does not point back at the exported symbol");
+
+    // A null member crashes callers that index the table without checking.
+    const size_t entries = (sizeof(CK_FUNCTION_LIST_EXTENDED) - sizeof(CK_VERSION)) / sizeof(void*);
+    void* const* members = reinterpret_cast<void* const*>(
+        reinterpret_cast<const char*>(ex) + sizeof(CK_VERSION));
+    for (size_t i = 0; i < entries; ++i)
+        if (members[i] == nullptr)
+            fail("extended function table entry " + std::to_string(i) + " is null");
+    trace("PKCS11", "extended function table has " + std::to_string(entries) + " non-null entries");
+
+    CK_TOKEN_INFO_EXTENDED extended{};
+    extended.ulSizeofThisStructure = sizeof(extended);
+    callOk("C_EX_GetTokenInfoExtended", "slotID=0, pInfo=&extended",
+           [&] { return ex->C_EX_GetTokenInfoExtended(0, &extended); });
+    if (extended.ulSizeofThisStructure != sizeof(extended))
+        fail("C_EX_GetTokenInfoExtended did not report the size it filled");
+    if (extended.ulTokenType != TOKEN_TYPE_RUTOKEN_ECP ||
+        extended.ulTokenClass != TOKEN_CLASS_ECP)
+        fail("C_EX_GetTokenInfoExtended does not report a Rutoken ECP");
+    if (extended.ulMinUserPinLen == 0 || extended.ulMaxUserPinLen < extended.ulMinUserPinLen ||
+        extended.ulMinAdminPinLen == 0 || extended.ulMaxAdminPinLen < extended.ulMinAdminPinLen)
+        fail("C_EX_GetTokenInfoExtended reports an impossible PIN length range");
+    if (extended.ulUserRetryCountLeft > extended.ulMaxUserRetryCount ||
+        extended.ulAdminRetryCountLeft > extended.ulMaxAdminRetryCount)
+        fail("C_EX_GetTokenInfoExtended reports more retries left than the maximum");
+    if (extended.ulATRLen > sizeof(extended.ATR))
+        fail("C_EX_GetTokenInfoExtended reports an ATR longer than its own field");
+
+    // The two views of the token must agree on the serial number.
+    unsigned long long fromText = 0;
+    for (size_t i = 0; i < sizeof(token.serialNumber); ++i)
+    {
+        const unsigned char digit = static_cast<unsigned char>(token.serialNumber[i]);
+        if (digit >= '0' && digit <= '9') fromText = fromText * 10 + (digit - '0');
+    }
+    unsigned long long fromBytes = 0;
+    for (size_t i = 0; i < sizeof(extended.serialNumber); ++i)
+        fromBytes = (fromBytes << 8) | extended.serialNumber[i];
+    if (fromText != fromBytes)
+        fail("C_GetTokenInfo and C_EX_GetTokenInfoExtended disagree about the serial number");
+
+    // A caller compiled against a different structure has to be told, not fed
+    // a partially filled buffer.
+    CK_TOKEN_INFO_EXTENDED mismatched{};
+    mismatched.ulSizeofThisStructure = sizeof(mismatched) - 1;
+    check(invoke("C_EX_GetTokenInfoExtended", "slotID=0, ulSizeofThisStructure=wrong",
+                 [&] { return ex->C_EX_GetTokenInfoExtended(0, &mismatched); }),
+          CKR_BUFFER_TOO_SMALL, "C_EX_GetTokenInfoExtended(wrong structure size)");
+
+    // Everything else is advertised but not implemented, and has to say so.
+    check(invoke("C_EX_UnblockUserPIN", "hSession=0",
+                 [&] { return ex->C_EX_UnblockUserPIN(0); }),
+          CKR_FUNCTION_NOT_SUPPORTED, "C_EX_UnblockUserPIN(unimplemented extension)");
+    check(invoke("C_EX_FreeBuffer", "pBuffer=NULL_PTR",
+                 [&] { return ex->C_EX_FreeBuffer(nullptr); }),
+          CKR_FUNCTION_NOT_SUPPORTED, "C_EX_FreeBuffer(unimplemented extension)");
+}
+
 static void verifyRutokenProfile(const fs::path& modulePath)
 {
     Module module(modulePath);
@@ -2364,6 +2452,8 @@ static void verifyRutokenProfile(const fs::path& modulePath)
     check(invoke("C_GetMechanismInfo", "slotID=0, type=CKM_AES_KEY_GEN, pInfo=&info",
                  [&] { return module->C_GetMechanismInfo(0, CKM_AES_KEY_GEN, &absentMechanism); }),
           CKR_MECHANISM_INVALID, "C_GetMechanismInfo(mechanism absent from the reference device)");
+
+    verifyRutokenExtension(module, token);
 
     if ((token.flags & CKF_TOKEN_INITIALIZED) != 0)
     {

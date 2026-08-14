@@ -1784,3 +1784,399 @@ PKCS_API CK_RV C_UnwrapKeyAuthenticated
 {
     return CKR_FUNCTION_NOT_SUPPORTED;
 }
+
+/*****************************************************************************
+ Rutoken extension.
+
+ Applications built for a Rutoken look for C_EX_GetFunctionListExtended and
+ treat its absence as proof that the module is not a Rutoken, so the table is
+ always exported and always answered - like C_GetFunctionList, it says nothing
+ about identity on its own, and unlike a runtime flag it has to work before
+ C_Initialize. The one entry point that reports anything is
+ C_EX_GetTokenInfoExtended, and it answers only while the compatibility profile
+ is enabled. The rest are declared so that the table's layout is right, and
+ report CKR_FUNCTION_NOT_SUPPORTED; docs/RUTOKEN-EXTENSIONS.md records what
+ each of them does on a real device.
+ *****************************************************************************/
+
+// Return extended information about a token in a slot
+PKCS_API CK_RV C_EX_GetTokenInfoExtended(CK_SLOT_ID slotID, CK_TOKEN_INFO_EXTENDED_PTR pInfo)
+{
+	try
+	{
+		return SoftHSM::i()->C_EX_GetTokenInfoExtended(slotID, pInfo);
+	}
+	catch (...)
+	{
+		FatalException();
+	}
+
+	return CKR_FUNCTION_FAILED;
+}
+
+PKCS_API CK_RV C_EX_InitToken
+(
+	CK_SLOT_ID /*slotID*/, CK_UTF8CHAR_PTR /*pPin*/, CK_ULONG /*ulPinLen*/,
+	CK_RUTOKEN_INIT_PARAM_PTR /*pInitInfo*/
+)
+{
+	return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+PKCS_API CK_RV C_EX_UnblockUserPIN
+(
+	CK_SESSION_HANDLE /*hSession*/
+)
+{
+	return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+PKCS_API CK_RV C_EX_SetTokenName
+(
+	CK_SESSION_HANDLE /*hSession*/, CK_CHAR_PTR /*pLabel*/,
+	CK_ULONG /*ulLabelLen*/
+)
+{
+	return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+PKCS_API CK_RV C_EX_SetLicense
+(
+	CK_SESSION_HANDLE /*hSession*/, CK_ULONG /*ulLicenseNum*/,
+	CK_BYTE_PTR /*pLicense*/, CK_ULONG /*ulLicenseLen*/
+)
+{
+	return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+PKCS_API CK_RV C_EX_GetLicense
+(
+	CK_SESSION_HANDLE /*hSession*/, CK_ULONG /*ulLicenseNum*/,
+	CK_BYTE_PTR /*pLicense*/, CK_ULONG_PTR /*pulLicenseLen*/
+)
+{
+	return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+PKCS_API CK_RV C_EX_GetCertificateInfoText
+(
+	CK_SESSION_HANDLE /*hSession*/, CK_OBJECT_HANDLE /*hCert*/,
+	CK_CHAR_PTR* /*pInfo*/, CK_ULONG_PTR /*pulInfoLen*/
+)
+{
+	return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+PKCS_API CK_RV C_EX_PKCS7Sign
+(
+	CK_SESSION_HANDLE /*hSession*/, CK_BYTE_PTR /*pData*/,
+	CK_ULONG /*ulDataLen*/, CK_OBJECT_HANDLE /*hCert*/,
+	CK_BYTE_PTR* /*ppEnvelope*/, CK_ULONG_PTR /*pEnvelopeLen*/,
+	CK_OBJECT_HANDLE /*hPrivKey*/, CK_OBJECT_HANDLE_PTR /*phCertificates*/,
+	CK_ULONG /*ulCertificatesLen*/, CK_ULONG /*flags*/
+)
+{
+	return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+PKCS_API CK_RV C_EX_CreateCSR
+(
+	CK_SESSION_HANDLE /*hSession*/, CK_OBJECT_HANDLE /*hPublicKey*/,
+	CK_CHAR_PTR* /*dn*/, CK_ULONG /*dnLength*/, CK_BYTE_PTR* /*pCsr*/,
+	CK_ULONG_PTR /*pulCsrLength*/, CK_OBJECT_HANDLE /*hPrivKey*/,
+	CK_CHAR_PTR* /*pAttributes*/, CK_ULONG /*ulAttributesLength*/,
+	CK_CHAR_PTR* /*pExtensions*/, CK_ULONG /*ulExtensionsLength*/
+)
+{
+	return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+PKCS_API CK_RV C_EX_FreeBuffer
+(
+	CK_BYTE_PTR /*pBuffer*/
+)
+{
+	return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+PKCS_API CK_RV C_EX_GetTokenName
+(
+	CK_SESSION_HANDLE /*hSession*/, CK_CHAR_PTR /*pLabel*/,
+	CK_ULONG_PTR /*pulLabelLen*/
+)
+{
+	return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+PKCS_API CK_RV C_EX_SetLocalPIN
+(
+	CK_SLOT_ID /*slotID*/, CK_UTF8CHAR_PTR /*pUserPin*/,
+	CK_ULONG /*ulUserPinLen*/, CK_UTF8CHAR_PTR /*pNewLocalPin*/,
+	CK_ULONG /*ulNewLocalPinLen*/, CK_ULONG /*ulLocalID*/
+)
+{
+	return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+PKCS_API CK_RV C_EX_LoadActivationKey
+(
+	CK_SESSION_HANDLE /*hSession*/, CK_BYTE_PTR /*key*/,
+	CK_ULONG /*keySize*/
+)
+{
+	return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+PKCS_API CK_RV C_EX_SetActivationPassword
+(
+	CK_SLOT_ID /*slotID*/, CK_UTF8CHAR_PTR /*password*/
+)
+{
+	return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+PKCS_API CK_RV C_EX_GetVolumesInfo
+(
+	CK_SLOT_ID /*slotID*/, CK_VOLUME_INFO_EXTENDED_PTR /*pInfo*/,
+	CK_ULONG_PTR /*pulInfoCount*/
+)
+{
+	return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+PKCS_API CK_RV C_EX_GetDriveSize
+(
+	CK_SLOT_ID /*slotID*/, CK_ULONG_PTR /*pulDriveSize*/
+)
+{
+	return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+PKCS_API CK_RV C_EX_ChangeVolumeAttributes
+(
+	CK_SLOT_ID /*slotID*/, CK_USER_TYPE /*userType*/,
+	CK_UTF8CHAR_PTR /*pPin*/, CK_ULONG /*ulPinLen*/,
+	CK_VOLUME_ID_EXTENDED /*idVolume*/,
+	CK_ACCESS_MODE_EXTENDED /*newAccessMode*/, CK_BBOOL /*bPermanent*/
+)
+{
+	return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+PKCS_API CK_RV C_EX_FormatDrive
+(
+	CK_SLOT_ID /*slotID*/, CK_USER_TYPE /*userType*/,
+	CK_UTF8CHAR_PTR /*pPin*/, CK_ULONG /*ulPinLen*/,
+	CK_VOLUME_FORMAT_INFO_EXTENDED_PTR /*pInitParams*/,
+	CK_ULONG /*ulInitParamsCount*/
+)
+{
+	return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+PKCS_API CK_RV C_EX_TokenManage
+(
+	CK_SESSION_HANDLE /*hSession*/, CK_ULONG /*ulMode*/,
+	CK_VOID_PTR /*pValue*/
+)
+{
+	return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+PKCS_API CK_RV C_EX_GenerateActivationPassword
+(
+	CK_SESSION_HANDLE /*hSession*/, CK_ULONG /*ulPasswordNumber*/,
+	CK_UTF8CHAR_PTR /*pPassword*/, CK_ULONG_PTR /*pulPasswordSize*/,
+	CK_ULONG /*ulPasswordCharacterSet*/
+)
+{
+	return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+PKCS_API CK_RV C_EX_GetJournal
+(
+	CK_SLOT_ID /*slotID*/, CK_BYTE_PTR /*pJournal*/,
+	CK_ULONG_PTR /*pulJournalSize*/
+)
+{
+	return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+PKCS_API CK_RV C_EX_SignInvisibleInit
+(
+	CK_SESSION_HANDLE /*hSession*/, CK_MECHANISM_PTR /*pMechanism*/,
+	CK_OBJECT_HANDLE /*hKey*/
+)
+{
+	return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+PKCS_API CK_RV C_EX_SignInvisible
+(
+	CK_SESSION_HANDLE /*hSession*/, CK_BYTE_PTR /*pData*/,
+	CK_ULONG /*ulDataLen*/, CK_BYTE_PTR /*pSignature*/,
+	CK_ULONG_PTR /*pulSignatureLen*/
+)
+{
+	return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+PKCS_API CK_RV C_EX_SlotManage
+(
+	CK_SLOT_ID /*slotID*/, CK_ULONG /*ulMode*/, CK_VOID_PTR /*pValue*/
+)
+{
+	return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+PKCS_API CK_RV C_EX_WrapKey
+(
+	CK_SESSION_HANDLE /*hSession*/,
+	CK_MECHANISM_PTR /*pGenerationMechanism*/,
+	CK_ATTRIBUTE_PTR /*pKeyTemplate*/, CK_ULONG /*ulKeyAttributeCount*/,
+	CK_MECHANISM_PTR /*pDerivationMechanism*/, CK_OBJECT_HANDLE /*hBaseKey*/,
+	CK_MECHANISM_PTR /*pWrappingMechanism*/, CK_BYTE_PTR /*pWrappedKey*/,
+	CK_ULONG_PTR /*pulWrappedKeyLen*/, CK_OBJECT_HANDLE_PTR /*phKey*/
+)
+{
+	return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+PKCS_API CK_RV C_EX_UnwrapKey
+(
+	CK_SESSION_HANDLE /*hSession*/,
+	CK_MECHANISM_PTR /*pDerivationMechanism*/, CK_OBJECT_HANDLE /*hBaseKey*/,
+	CK_MECHANISM_PTR /*pUnwrappingMechanism*/, CK_BYTE_PTR /*pWrappedKey*/,
+	CK_ULONG /*ulWrappedKeyLen*/, CK_ATTRIBUTE_PTR /*pKeyTemplate*/,
+	CK_ULONG /*ulKeyAttributeCount*/, CK_OBJECT_HANDLE_PTR /*phKey*/
+)
+{
+	return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+PKCS_API CK_RV C_EX_PKCS7VerifyInit
+(
+	CK_SESSION_HANDLE /*hSession*/, CK_BYTE_PTR /*pCms*/,
+	CK_ULONG /*ulCmsSize*/, CK_VENDOR_X509_STORE_PTR /*pStore*/,
+	CK_VENDOR_CRL_MODE /*ckMode*/, CK_FLAGS /*flags*/
+)
+{
+	return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+PKCS_API CK_RV C_EX_PKCS7Verify
+(
+	CK_SESSION_HANDLE /*hSession*/, CK_BYTE_PTR_PTR /*ppData*/,
+	CK_ULONG_PTR /*pulDataSize*/,
+	CK_VENDOR_BUFFER_PTR_PTR /*ppSignerCertificates*/,
+	CK_ULONG_PTR /*pulSignerCertificatesCount*/
+)
+{
+	return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+PKCS_API CK_RV C_EX_PKCS7VerifyUpdate
+(
+	CK_SESSION_HANDLE /*hSession*/, CK_BYTE_PTR /*pData*/,
+	CK_ULONG /*ulDataSize*/
+)
+{
+	return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+PKCS_API CK_RV C_EX_PKCS7VerifyFinal
+(
+	CK_SESSION_HANDLE /*hSession*/,
+	CK_VENDOR_BUFFER_PTR_PTR /*ppSignerCertificates*/,
+	CK_ULONG_PTR /*pulSignerCertificatesCount*/
+)
+{
+	return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+PKCS_API CK_RV C_EX_Authenticate
+(
+	CK_SESSION_HANDLE /*hSession*/, CK_OBJECT_HANDLE /*hAuthObject*/,
+	CK_BYTE_PTR /*pData*/, CK_ULONG /*ulDataSize*/
+)
+{
+	return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+PKCS_API CK_RV C_EX_Deauthenticate
+(
+	CK_SESSION_HANDLE /*hSession*/, CK_OBJECT_HANDLE /*hAuthObject*/
+)
+{
+	return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+PKCS_API CK_RV C_EX_UnblockAuthenticator
+(
+	CK_SESSION_HANDLE /*hSession*/, CK_OBJECT_HANDLE /*hAuthObject*/
+)
+{
+	return CKR_FUNCTION_NOT_SUPPORTED;
+}
+
+// The extended function table. Its member order is fixed by the vendor ABI.
+static CK_FUNCTION_LIST_EXTENDED functionListExtended =
+{
+	// Version information
+	{ CRYPTOKI_LEGACY_VERSION_MAJOR, CRYPTOKI_LEGACY_VERSION_MINOR },
+	// Function pointers
+	C_EX_GetFunctionListExtended,
+	C_EX_InitToken,
+	C_EX_GetTokenInfoExtended,
+	C_EX_UnblockUserPIN,
+	C_EX_SetTokenName,
+	C_EX_SetLicense,
+	C_EX_GetLicense,
+	C_EX_GetCertificateInfoText,
+	C_EX_PKCS7Sign,
+	C_EX_CreateCSR,
+	C_EX_FreeBuffer,
+	C_EX_GetTokenName,
+	C_EX_SetLocalPIN,
+	C_EX_LoadActivationKey,
+	C_EX_SetActivationPassword,
+	C_EX_GetVolumesInfo,
+	C_EX_GetDriveSize,
+	C_EX_ChangeVolumeAttributes,
+	C_EX_FormatDrive,
+	C_EX_TokenManage,
+	C_EX_GenerateActivationPassword,
+	C_EX_GetJournal,
+	C_EX_SignInvisibleInit,
+	C_EX_SignInvisible,
+	C_EX_SlotManage,
+	C_EX_WrapKey,
+	C_EX_UnwrapKey,
+	C_EX_PKCS7VerifyInit,
+	C_EX_PKCS7Verify,
+	C_EX_PKCS7VerifyUpdate,
+	C_EX_PKCS7VerifyFinal,
+	C_EX_Authenticate,
+	C_EX_Deauthenticate,
+	C_EX_UnblockAuthenticator
+};
+
+
+// Return the list of Rutoken extended functions
+PKCS_API CK_RV C_EX_GetFunctionListExtended(CK_FUNCTION_LIST_EXTENDED_PTR_PTR ppFunctionList)
+{
+	try
+	{
+		if (ppFunctionList == NULL_PTR) return CKR_ARGUMENTS_BAD;
+
+		*ppFunctionList = &functionListExtended;
+
+		return CKR_OK;
+	}
+	catch (...)
+	{
+		FatalException();
+	}
+
+	return CKR_FUNCTION_FAILED;
+}

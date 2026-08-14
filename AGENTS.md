@@ -254,6 +254,9 @@ the portable builds compile with warnings-as-errors settings from
 - `src/lib/crypto/BotanGOST2012{KeyGenerator,Signer}.{cpp,h}`,
   `BotanStreebog256.{cpp,h}` — GOST R 34.10-2012/256 and Streebog-256.
 - `src/lib/pkcs11/pkcs11.h` — the TC26 mechanism identifiers.
+- `src/lib/pkcs11/rutoken.h` — the Rutoken `C_EX_*` extension ABI, written from
+  the vendor SDK rather than copied from it. `docs/RUTOKEN-EXTENSIONS.md`
+  describes every entry point and names the SDK release the layout came from.
 - `src/lib/object_store/` — token and object persistence.
 - `scripts/portable/` — per-platform build scripts and OpenSC bundling.
 - `tests/portable/` — the vendor-neutral PKCS #11 client
@@ -294,6 +297,14 @@ and requires the OpenSSL backend. GOST 2012 is gated by
   source: the raw `pkcs11-tool -M` output of the owner's device, mirrored in
   `verifyRutokenProfile` in `tests/portable/portable-token-e2e.cpp`. Change
   either only against a new reading of a real device.
+- **The Rutoken extended function table is exported unconditionally, while the
+  one entry point that reports anything answers only under the profile.**
+  *Reason:* applications treat a missing `C_EX_GetFunctionListExtended` as
+  proof the module is not a Rutoken, an export cannot be hidden at runtime
+  anyway, and the profile flag is read from configuration during
+  `C_Initialize` — too late for a function that, like `C_GetFunctionList`, has
+  to work before it. Returning the table claims nothing on its own;
+  `C_EX_GetTokenInfoExtended` is the claim, and it is gated.
 - **Portable modules ignore `SOFTHSM2_CONF`, adjacent files and system
   configuration paths**, using one fixed per-user configuration and token store
   (`%USERPROFILE%\softhsm\softhsm.conf`, `~/softhsm/softhsm.conf`). *Reason:*

@@ -35,6 +35,7 @@
 #include "config.h"
 #include "log.h"
 #include "cryptoki.h"
+#include "rutoken.h"
 #include "SessionObjectStore.h"
 #include "ObjectStore.h"
 #include "SessionManager.h"
@@ -196,6 +197,9 @@ public:
         CK_ULONG          ulCipherTextLen,  /* the encapsulated key size */
 		CK_OBJECT_HANDLE_PTR phKey            /* the decapsulated key  */
 	);
+
+	// Rutoken extension. Only answered while the compatibility profile is on.
+	CK_RV C_EX_GetTokenInfoExtended(CK_SLOT_ID slotID, CK_TOKEN_INFO_EXTENDED_PTR pInfo);
 
 private:
 	// Constructor

@@ -65,6 +65,15 @@ certified hardware and cannot emulate USB insertion, firmware defects, timing,
 or every vendor extension. Set the option to false for normal SoftHSM identity
 and behavior.
 
+The module also exports the Rutoken extended function table through
+C_EX_GetFunctionListExtended, because applications written for a Rutoken often
+treat the absence of that symbol as proof that the module is not a Rutoken.
+Like C_GetFunctionList it answers at any time, including before C_Initialize,
+and returning it claims nothing on its own. Of the 34 entries in that table
+only C_EX_GetTokenInfoExtended reports anything, and only while the profile is
+enabled; every other entry returns CKR_FUNCTION_NOT_SUPPORTED. The functions
+are described in docs/RUTOKEN-EXTENSIONS.md.
+
 The module statically includes OpenSSL and minimized Botan Streebog and GOST
 34.10 components. Linux and Windows builds also statically include their C/C++ runtime;
 macOS uses the operating system's libc++. There are no non-system runtime

@@ -871,6 +871,131 @@ CK_RV SoftHSM::C_GetTokenInfo(CK_SLOT_ID slotID, CK_TOKEN_INFO_PTR pInfo)
 	return CKR_OK;
 }
 
+// Rutoken extension: extended token information.
+//
+// Most of this structure describes physical hardware, which a software token
+// cannot derive. Those values are the reference device's, kept together here
+// so that a fresh reading of a real device replaces them in one place. Every
+// value that does follow from the backing token - the serial, the PIN state
+// and what it implies for the retry counters - is taken from the token itself
+// so that C_GetTokenInfo and C_EX_GetTokenInfoExtended never disagree.
+namespace
+{
+	// Device constants. See docs/RUTOKEN-EXTENSIONS.md.
+	const CK_ULONG FAKE_RUTOKEN_PROTOCOL_NUMBER  = 0x20;
+	const CK_ULONG FAKE_RUTOKEN_MICROCODE_NUMBER = 0x18;
+	const CK_ULONG FAKE_RUTOKEN_ORDER_NUMBER     = 0;
+	const CK_ULONG FAKE_RUTOKEN_TOTAL_MEMORY     = 128 * 1024;
+	const CK_ULONG FAKE_RUTOKEN_FREE_MEMORY      = 96 * 1024;
+	const CK_ULONG FAKE_RUTOKEN_MIN_ADMIN_PIN    = 6;
+	const CK_ULONG FAKE_RUTOKEN_MAX_ADMIN_PIN    = 32;
+	const CK_ULONG FAKE_RUTOKEN_MIN_USER_PIN     = 6;
+	const CK_ULONG FAKE_RUTOKEN_MAX_USER_PIN     = 32;
+	const CK_ULONG FAKE_RUTOKEN_MAX_ADMIN_RETRY  = 10;
+	const CK_ULONG FAKE_RUTOKEN_MAX_USER_RETRY   = 10;
+	const CK_ULONG FAKE_RUTOKEN_BODY_COLOR       = TOKEN_BODY_COLOR_UNKNOWN;
+
+	// The device's answer-to-reset. An empty ATR is reported as a zero length
+	// rather than as invented bytes.
+	const CK_BYTE FAKE_RUTOKEN_ATR[] = { 0 };
+	const CK_ULONG FAKE_RUTOKEN_ATR_LEN = 0;
+
+	// Constant capabilities of a Rutoken ECP. The "PIN is not default" bits are
+	// added from the token's own state below; the firmware checksum is declared
+	// unavailable because we have no firmware to checksum, which is a state the
+	// vendor's own flag exists to express.
+	const CK_FLAGS FAKE_RUTOKEN_EXTENDED_FLAGS =
+		TOKEN_FLAGS_ADMIN_CHANGE_USER_PIN | TOKEN_FLAGS_USER_CHANGE_USER_PIN |
+		TOKEN_FLAGS_SUPPORT_FKN | TOKEN_FLAGS_SUPPORT_SECURE_MESSAGING |
+		TOKEN_FLAGS_SUPPORT_JOURNAL | TOKEN_FLAGS_FW_CHECKSUM_UNAVAILIBLE;
+
+	// How many attempts a PIN has left, as implied by the standard flags.
+	CK_ULONG retriesLeft(CK_FLAGS flags, CK_FLAGS locked, CK_FLAGS finalTry,
+			     CK_FLAGS countLow, CK_ULONG maximum)
+	{
+		if ((flags & locked) != 0) return 0;
+		if ((flags & finalTry) != 0) return 1;
+		if ((flags & countLow) != 0) return 2;
+		return maximum;
+	}
+}
+
+CK_RV SoftHSM::C_EX_GetTokenInfoExtended(CK_SLOT_ID slotID, CK_TOKEN_INFO_EXTENDED_PTR pInfo)
+{
+	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;
+	if (pInfo == NULL_PTR) return CKR_ARGUMENTS_BAD;
+
+	// Outside the compatibility profile this module is not a Rutoken and must
+	// not answer a Rutoken-only question.
+	if (!fakeRutokenECP) return CKR_FUNCTION_NOT_SUPPORTED;
+
+	// The caller states the size of the structure it compiled against. Refuse a
+	// structure that cannot even hold the fields we fill, and report back how
+	// much we filled.
+	if (pInfo->ulSizeofThisStructure != sizeof(CK_TOKEN_INFO_EXTENDED))
+		return CKR_BUFFER_TOO_SMALL;
+
+	CK_TOKEN_INFO tokenInfo;
+	const CK_RV rv = C_GetTokenInfo(slotID, &tokenInfo);
+	if (rv != CKR_OK) return rv;
+
+	memset(pInfo, 0, sizeof(*pInfo));
+	pInfo->ulSizeofThisStructure = sizeof(CK_TOKEN_INFO_EXTENDED);
+	pInfo->ulTokenType = TOKEN_TYPE_RUTOKEN_ECP;
+	pInfo->ulProtocolNumber = FAKE_RUTOKEN_PROTOCOL_NUMBER;
+	pInfo->ulMicrocodeNumber = FAKE_RUTOKEN_MICROCODE_NUMBER;
+	pInfo->ulOrderNumber = FAKE_RUTOKEN_ORDER_NUMBER;
+
+	pInfo->flags = FAKE_RUTOKEN_EXTENDED_FLAGS;
+	if ((tokenInfo.flags & CKF_TOKEN_INITIALIZED) != 0)
+		pInfo->flags |= TOKEN_FLAGS_ADMIN_PIN_NOT_DEFAULT;
+	if ((tokenInfo.flags & CKF_USER_PIN_INITIALIZED) != 0)
+		pInfo->flags |= TOKEN_FLAGS_USER_PIN_NOT_DEFAULT;
+
+	pInfo->ulMaxAdminPinLen = FAKE_RUTOKEN_MAX_ADMIN_PIN;
+	pInfo->ulMinAdminPinLen = FAKE_RUTOKEN_MIN_ADMIN_PIN;
+	pInfo->ulMaxUserPinLen = FAKE_RUTOKEN_MAX_USER_PIN;
+	pInfo->ulMinUserPinLen = FAKE_RUTOKEN_MIN_USER_PIN;
+	pInfo->ulMaxAdminRetryCount = FAKE_RUTOKEN_MAX_ADMIN_RETRY;
+	pInfo->ulMaxUserRetryCount = FAKE_RUTOKEN_MAX_USER_RETRY;
+	pInfo->ulAdminRetryCountLeft = retriesLeft(tokenInfo.flags, CKF_SO_PIN_LOCKED,
+						   CKF_SO_PIN_FINAL_TRY, CKF_SO_PIN_COUNT_LOW,
+						   FAKE_RUTOKEN_MAX_ADMIN_RETRY);
+	pInfo->ulUserRetryCountLeft = retriesLeft(tokenInfo.flags, CKF_USER_PIN_LOCKED,
+						  CKF_USER_PIN_FINAL_TRY, CKF_USER_PIN_COUNT_LOW,
+						  FAKE_RUTOKEN_MAX_USER_RETRY);
+
+	// C_GetTokenInfo already produced the profile's eight decimal digits; carry
+	// the same number here as a big-endian integer so the two views agree.
+	unsigned long serial = 0;
+	for (size_t i = 0; i < sizeof(tokenInfo.serialNumber); ++i)
+	{
+		const unsigned char digit = static_cast<unsigned char>(tokenInfo.serialNumber[i]);
+		if (digit < '0' || digit > '9') continue;
+		serial = serial * 10 + static_cast<unsigned long>(digit - '0');
+	}
+	for (size_t i = 0; i < sizeof(pInfo->serialNumber); ++i)
+	{
+		const size_t shift = (sizeof(pInfo->serialNumber) - 1 - i) * 8;
+		pInfo->serialNumber[i] = shift < sizeof(serial) * 8 ?
+			static_cast<CK_BYTE>((serial >> shift) & 0xFF) : 0;
+	}
+
+	pInfo->ulTotalMemory = FAKE_RUTOKEN_TOTAL_MEMORY;
+	pInfo->ulFreeMemory = FAKE_RUTOKEN_FREE_MEMORY;
+	memcpy(pInfo->ATR, FAKE_RUTOKEN_ATR,
+	       FAKE_RUTOKEN_ATR_LEN < sizeof(pInfo->ATR) ? FAKE_RUTOKEN_ATR_LEN : sizeof(pInfo->ATR));
+	pInfo->ulATRLen = FAKE_RUTOKEN_ATR_LEN;
+	pInfo->ulTokenClass = TOKEN_CLASS_ECP;
+	pInfo->ulBatteryVoltage = 0;
+	pInfo->ulBodyColor = FAKE_RUTOKEN_BODY_COLOR;
+	pInfo->ulFirmwareChecksum = 0;
+	pInfo->ulBatteryPercentage = 0;
+	pInfo->ulBatteryFlags = 0;
+
+	return CKR_OK;
+}
+
 void SoftHSM::prepareSupportedMechanisms(std::map<std::string, CK_MECHANISM_TYPE> &t)
 {
 #ifndef WITH_FIPS
