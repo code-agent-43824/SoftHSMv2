@@ -80,9 +80,34 @@ C_EX_GetFunctionListExtended, because applications written for a Rutoken often
 treat the absence of that symbol as proof that the module is not a Rutoken.
 Like C_GetFunctionList it answers at any time, including before C_Initialize,
 and returning it claims nothing on its own. Of the 34 entries in that table
-only C_EX_GetTokenInfoExtended reports anything, and only while the profile is
-enabled; every other entry returns CKR_FUNCTION_NOT_SUPPORTED. The functions
-are described in docs/RUTOKEN-EXTENSIONS.md.
+only C_EX_GetTokenInfoExtended and C_EX_GetTokenName report anything, and only
+while the profile is enabled; every other entry returns
+CKR_FUNCTION_NOT_SUPPORTED. C_EX_GetTokenName returns the token's label with
+its padding removed, in the usual two passes: a null buffer asks for the
+length, a short one is refused with CKR_BUFFER_TOO_SMALL. It reports the same
+name C_GetTokenInfo does, placeholder included. The functions are described in
+docs/RUTOKEN-EXTENSIONS.md.
+
+Two things outside the profile changed as well, and apply whether it is enabled
+or not.
+
+C_WaitForSlotEvent now supports its blocking form. Applications that watch for
+a device being plugged in or pulled out keep a thread in that call, and a
+module which refuses it looks incomplete to them. SoftHSM always keeps one
+spare slot holding an uninitialized token; initializing that token is the one
+event this library has, and it is reported once, to one waiting caller.
+C_Finalize releases a waiting caller with CKR_CRYPTOKI_NOT_INITIALIZED, and a
+second concurrent blocking caller is refused with CKR_FUNCTION_FAILED, both as
+the standard requires.
+
+CKA_START_DATE and CKA_END_DATE can now be read back from private objects.
+Attributes of a private object are stored encrypted; these two were written in
+the clear, so any later read of them failed with CKR_GENERAL_ERROR, which broke
+every caller that enumerates keys and reads their validity period. Tokens
+written by an earlier build keep working: a stored value the size of a CK_DATE
+is recognized as one of those and read as it is, and no ciphertext is ever that
+short. Dates written from now on are encrypted like every other attribute of a
+private object.
 
 The module statically includes OpenSSL and minimized Botan Streebog and GOST
 34.10 components. Linux and Windows builds also statically include their C/C++ runtime;

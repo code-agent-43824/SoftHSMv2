@@ -200,6 +200,7 @@ public:
 
 	// Rutoken extension. Only answered while the compatibility profile is on.
 	CK_RV C_EX_GetTokenInfoExtended(CK_SLOT_ID slotID, CK_TOKEN_INFO_EXTENDED_PTR pInfo);
+	CK_RV C_EX_GetTokenName(CK_SESSION_HANDLE hSession, CK_CHAR_PTR pLabel, CK_ULONG_PTR pulLabelLen);
 
 private:
 	// Constructor

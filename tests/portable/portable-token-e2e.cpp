@@ -2148,6 +2148,259 @@ static void verifyReadyToken(const fs::path& modulePath)
     trace("READY", "fresh module load logged in without C_InitToken/C_InitPIN/C_SetPIN and found persistent GOST/RSA/certificate objects");
 }
 
+// Confirm a value the module was told to keep private is not sitting in the
+// token files in the clear. P11_TEST_STORE_DIR names the token directory; with
+// it unset the check is skipped, because a caller pointed at someone else's
+// store has no business reading it.
+static void verifyStoredPrivately(const CK_BYTE* secret, size_t length, const char* what)
+{
+    const std::string storeDir = environment("P11_TEST_STORE_DIR");
+    if (storeDir.empty())
+    {
+        trace("STORE", std::string("P11_TEST_STORE_DIR is unset; not checking that ") + what +
+                       " is stored encrypted");
+        return;
+    }
+    if (!fs::is_directory(storeDir)) fail("P11_TEST_STORE_DIR is not a directory: " + storeDir);
+
+    size_t filesRead = 0;
+    for (const fs::directory_entry& entry : fs::recursive_directory_iterator(storeDir))
+    {
+        if (!entry.is_regular_file()) continue;
+        std::ifstream file(entry.path(), std::ios::binary);
+        if (!file) continue;
+        const std::string content((std::istreambuf_iterator<char>(file)),
+                                  std::istreambuf_iterator<char>());
+        filesRead++;
+        if (content.find(std::string(reinterpret_cast<const char*>(secret), length)) !=
+            std::string::npos)
+            fail(std::string("the ") + what + " is in " + entry.path().string() +
+                 " in the clear; a private object's attributes must be stored encrypted");
+    }
+    if (filesRead == 0) fail("P11_TEST_STORE_DIR holds no files: " + storeDir);
+    trace("STORE", std::string("searched ") + std::to_string(filesRead) + " token files; " +
+                   what + " is not among them in the clear");
+}
+
+// CKA_START_DATE and CKA_END_DATE on a private object. Attributes of a private
+// object are stored encrypted, and these two used to be written in the clear,
+// so every later read of them failed with CKR_GENERAL_ERROR - which took down
+// any caller that enumerates keys and reads their validity, whatever else it
+// was doing. Nothing here is Rutoken-specific; the defect is plain SoftHSM.
+static void verifyPrivateObjectDates(Module& module, CK_SESSION_HANDLE session)
+{
+    // The private key's dates are deliberately unlike the public key's: the
+    // on-disk check below looks for the private ones in the clear, and a
+    // public object stores its own in the clear quite legitimately.
+    const CK_DATE start{{'2', '7', '1', '8'}, {'0', '3'}, {'1', '4'}};
+    const CK_DATE end{{'3', '1', '4', '1'}, {'0', '5'}, {'0', '9'}};
+    CK_BBOOL yes = CK_TRUE;
+    CK_ULONG bits = 2048;
+    CK_BYTE exponent[] = {0x01, 0x00, 0x01};
+    const Bytes id = {'d', 'a', 't', 'e', 's'};
+
+    removePriorTestObjects(module, session, id);
+
+    const CK_DATE publicStart{{'2', '0', '2', '0'}, {'0', '1'}, {'0', '1'}};
+    const CK_DATE publicEnd{{'2', '0', '2', '1'}, {'0', '1'}, {'0', '1'}};
+    CK_ATTRIBUTE publicTemplate[] = {
+        {CKA_TOKEN, &yes, sizeof(yes)},
+        {CKA_MODULUS_BITS, &bits, sizeof(bits)},
+        {CKA_PUBLIC_EXPONENT, exponent, sizeof(exponent)},
+        {CKA_ID, const_cast<unsigned char*>(id.data()), static_cast<CK_ULONG>(id.size())},
+        {CKA_VERIFY, &yes, sizeof(yes)},
+        {CKA_START_DATE, const_cast<CK_DATE*>(&publicStart), sizeof(publicStart)},
+        {CKA_END_DATE, const_cast<CK_DATE*>(&publicEnd), sizeof(publicEnd)}
+    };
+    CK_ATTRIBUTE privateTemplate[] = {
+        {CKA_TOKEN, &yes, sizeof(yes)},
+        {CKA_PRIVATE, &yes, sizeof(yes)},
+        {CKA_ID, const_cast<unsigned char*>(id.data()), static_cast<CK_ULONG>(id.size())},
+        {CKA_SIGN, &yes, sizeof(yes)},
+        {CKA_START_DATE, const_cast<CK_DATE*>(&start), sizeof(start)},
+        {CKA_END_DATE, const_cast<CK_DATE*>(&end), sizeof(end)}
+    };
+    CK_MECHANISM mechanism{CKM_RSA_PKCS_KEY_PAIR_GEN, nullptr, 0};
+    CK_OBJECT_HANDLE publicKey = CK_INVALID_HANDLE;
+    CK_OBJECT_HANDLE privateKey = CK_INVALID_HANDLE;
+    callOk("C_GenerateKeyPair", "CKM_RSA_PKCS_KEY_PAIR_GEN with CKA_START_DATE and CKA_END_DATE",
+           [&] { return module->C_GenerateKeyPair(session, &mechanism, publicTemplate, 7,
+                                                  privateTemplate, 6, &publicKey, &privateKey); });
+
+    // Both keys must give the dates back, and give back what was written. The
+    // public key never had the defect; it is read too so that a fix which
+    // breaks the plain path cannot pass.
+    struct Subject { CK_OBJECT_HANDLE object; const char* name; const CK_DATE* from; const CK_DATE* to; };
+    const Subject subjects[] = {
+        {privateKey, "private key", &start, &end},
+        {publicKey, "public key", &publicStart, &publicEnd}
+    };
+    for (const Subject& subject : subjects)
+    {
+        CK_DATE readStart{};
+        CK_DATE readEnd{};
+        CK_ATTRIBUTE query[] = {
+            {CKA_START_DATE, &readStart, sizeof(readStart)},
+            {CKA_END_DATE, &readEnd, sizeof(readEnd)}
+        };
+        callOk("C_GetAttributeValue", std::string(subject.name) + ", CKA_START_DATE and CKA_END_DATE",
+               [&] { return module->C_GetAttributeValue(session, subject.object, query, 2); });
+        if (query[0].ulValueLen != sizeof(CK_DATE) || query[1].ulValueLen != sizeof(CK_DATE))
+            fail(std::string("the ") + subject.name + " does not report both dates at their full length");
+        if (memcmp(&readStart, subject.from, sizeof(CK_DATE)) != 0 ||
+            memcmp(&readEnd, subject.to, sizeof(CK_DATE)) != 0)
+            fail(std::string("the ") + subject.name + " gives back dates other than the ones written");
+    }
+
+    // A private object's attributes are stored encrypted, so the date must not
+    // be findable in the token files. Reading it back correctly does not prove
+    // that: the module also accepts a date left in the clear by an older build,
+    // which is what makes an old token still usable - and what would otherwise
+    // hide a write path that never encrypted anything.
+    verifyStoredPrivately(reinterpret_cast<const CK_BYTE*>(&start), sizeof(start),
+                          "CKA_START_DATE of the private key");
+    verifyStoredPrivately(reinterpret_cast<const CK_BYTE*>(&end), sizeof(end),
+                          "CKA_END_DATE of the private key");
+
+    // The same has to hold for a date written after the object exists, which
+    // is a different code path into the same store.
+    const CK_DATE later{{'2', '0', '3', '0'}, {'0', '1'}, {'0', '2'}};
+    CK_ATTRIBUTE change{CKA_START_DATE, const_cast<CK_DATE*>(&later), sizeof(later)};
+    callOk("C_SetAttributeValue", "private key, CKA_START_DATE moved forward",
+           [&] { return module->C_SetAttributeValue(session, privateKey, &change, 1); });
+    CK_DATE readBack{};
+    CK_ATTRIBUTE query{CKA_START_DATE, &readBack, sizeof(readBack)};
+    callOk("C_GetAttributeValue", "private key, CKA_START_DATE after the change",
+           [&] { return module->C_GetAttributeValue(session, privateKey, &query, 1); });
+    if (query.ulValueLen != sizeof(CK_DATE) || memcmp(&readBack, &later, sizeof(later)) != 0)
+        fail("a date written with C_SetAttributeValue does not read back");
+
+    // An empty date is legal and must stay readable as an empty one.
+    CK_ATTRIBUTE clear{CKA_START_DATE, nullptr, 0};
+    callOk("C_SetAttributeValue", "private key, CKA_START_DATE cleared",
+           [&] { return module->C_SetAttributeValue(session, privateKey, &clear, 1); });
+    CK_ATTRIBUTE size{CKA_START_DATE, nullptr, 0};
+    callOk("C_GetAttributeValue", "private key, CKA_START_DATE size after clearing",
+           [&] { return module->C_GetAttributeValue(session, privateKey, &size, 1); });
+    if (size.ulValueLen != 0) fail("a cleared date does not read back as empty");
+
+    // A date of the wrong length is still refused.
+    CK_BYTE stub[3] = {'2', '0', '3'};
+    CK_ATTRIBUTE tooShort{CKA_END_DATE, stub, sizeof(stub)};
+    check(invoke("C_SetAttributeValue", "private key, CKA_END_DATE of three bytes",
+                 [&] { return module->C_SetAttributeValue(session, privateKey, &tooShort, 1); }),
+          CKR_ATTRIBUTE_VALUE_INVALID, "C_SetAttributeValue(date of the wrong length)");
+
+    callOk("C_DestroyObject", "the private key of the date pair",
+           [&] { return module->C_DestroyObject(session, privateKey); });
+    callOk("C_DestroyObject", "the public key of the date pair",
+           [&] { return module->C_DestroyObject(session, publicKey); });
+}
+
+// C_WaitForSlotEvent. An application that watches for a device being plugged
+// in parks a thread in the blocking form, and a module that answers
+// CKR_FUNCTION_NOT_SUPPORTED there looks broken to it. Threads are deliberately
+// not used here: an event that is already pending satisfies the blocking form
+// straight away, which exercises the same entry path without a race to lose.
+// Returns the slot whose token it initialized on the way.
+static CK_SLOT_ID verifySlotEvents(Module& module)
+{
+    CK_SLOT_ID slot = CK_INVALID_HANDLE;
+
+    check(invoke("C_WaitForSlotEvent", "flags=CKF_DONT_BLOCK, pSlot=NULL_PTR",
+                 [&] { return module->C_WaitForSlotEvent(CKF_DONT_BLOCK, nullptr, nullptr); }),
+          CKR_ARGUMENTS_BAD, "C_WaitForSlotEvent(no pSlot)");
+    check(invoke("C_WaitForSlotEvent", "flags=CKF_DONT_BLOCK, pReserved set",
+                 [&] { return module->C_WaitForSlotEvent(CKF_DONT_BLOCK, &slot, &slot); }),
+          CKR_ARGUMENTS_BAD, "C_WaitForSlotEvent(pReserved not null)");
+
+    // Drain whatever the run so far has raised, so the state below is known.
+    while (invoke("C_WaitForSlotEvent", "flags=CKF_DONT_BLOCK, draining",
+                  [&] { return module->C_WaitForSlotEvent(CKF_DONT_BLOCK, &slot, nullptr); }) == CKR_OK)
+        trace("SLOT", "drained a pending event on slot " + std::to_string(slot));
+    check(invoke("C_WaitForSlotEvent", "flags=CKF_DONT_BLOCK, nothing pending",
+                 [&] { return module->C_WaitForSlotEvent(CKF_DONT_BLOCK, &slot, nullptr); }),
+          CKR_NO_EVENT, "C_WaitForSlotEvent(nothing pending)");
+
+    // SoftHSM keeps one spare slot holding an uninitialised token; filling it
+    // is the one thing that happens here which a watcher would call an event.
+    // The size-query form of C_GetSlotList is what tops the spare back up.
+    CK_ULONG count = 0;
+    callOk("C_GetSlotList", "tokenPresent=CK_FALSE, pSlotList=NULL_PTR",
+           [&] { return module->C_GetSlotList(CK_FALSE, nullptr, &count); });
+    std::vector<CK_SLOT_ID> all(count);
+    callOk("C_GetSlotList", "tokenPresent=CK_FALSE, pSlotList=&slots",
+           [&] { return module->C_GetSlotList(CK_FALSE, all.data(), &count); });
+    if (count == 0) fail("C_GetSlotList reported no slots at all");
+    const CK_SLOT_ID spare = all[count - 1];
+
+    const std::string soPin = environment("P11_TEST_SO_PIN", true);
+    std::array<CK_UTF8CHAR, 32> label{};
+    label.fill(' ');
+    const std::string spareLabel = "slot event token";
+    std::copy(spareLabel.begin(), spareLabel.end(), label.begin());
+    callOk("C_InitToken", "slotID=" + std::to_string(spare) + " (the spare slot)",
+           [&] { return module->C_InitToken(spare,
+                       reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(soPin.data())),
+                       static_cast<CK_ULONG>(soPin.size()), label.data()); });
+
+    // The blocking form, with the event already there: it must report that
+    // slot and must not have to be asked with CKF_DONT_BLOCK to do it.
+    slot = CK_INVALID_HANDLE;
+    callOk("C_WaitForSlotEvent", "flags=0 (blocking), one event pending",
+           [&] { return module->C_WaitForSlotEvent(0, &slot, nullptr); });
+    if (slot != spare)
+        fail("C_WaitForSlotEvent reported slot " + std::to_string(slot) + " where " +
+             std::to_string(spare) + " was initialized");
+
+    // An event is delivered once.
+    check(invoke("C_WaitForSlotEvent", "flags=CKF_DONT_BLOCK, after the event was taken",
+                 [&] { return module->C_WaitForSlotEvent(CKF_DONT_BLOCK, &slot, nullptr); }),
+          CKR_NO_EVENT, "C_WaitForSlotEvent(event already consumed)");
+
+    // Re-initializing a token that already exists wipes it but inserts
+    // nothing, so it is not an event.
+    callOk("C_InitToken", "slotID=" + std::to_string(spare) + " again",
+           [&] { return module->C_InitToken(spare,
+                       reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(soPin.data())),
+                       static_cast<CK_ULONG>(soPin.size()), label.data()); });
+    check(invoke("C_WaitForSlotEvent", "flags=CKF_DONT_BLOCK, after a re-initialization",
+                 [&] { return module->C_WaitForSlotEvent(CKF_DONT_BLOCK, &slot, nullptr); }),
+          CKR_NO_EVENT, "C_WaitForSlotEvent(re-initialization is not an insertion)");
+
+    return spare;
+}
+
+// Behaviour that has nothing to do with the Rutoken profile and has to hold
+// with it switched off. Run against a token this mode initializes itself.
+static void verifyCoreBehaviour(const fs::path& modulePath)
+{
+    Module module(modulePath);
+
+    // The slot it initialized is the one to work on: SoftHSM reports every
+    // slot as holding a token, spare ones included, so the last slot in the
+    // list is a fresh empty one rather than this.
+    const CK_SLOT_ID slot = verifySlotEvents(module);
+
+    // Its user PIN still has to be set before anything can be stored there.
+    const std::string soPin = environment("P11_TEST_SO_PIN", true);
+    const std::string userPin = environment("P11_TEST_USER_PIN", true);
+
+    CK_SESSION_HANDLE session = openSession(module, slot);
+    login(module, session, CKU_SO, soPin);
+    callOk("C_InitPIN", "hSession=session, pPin=<redacted>",
+           [&] { return module->C_InitPIN(session,
+                       reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(userPin.data())),
+                       static_cast<CK_ULONG>(userPin.size())); });
+    logout(module, session, "CKU_SO");
+    login(module, session, CKU_USER, userPin);
+
+    verifyPrivateObjectDates(module, session);
+
+    closeSession(module, session);
+    std::cout << "core PKCS #11 behaviour verified\n";
+}
+
 // The vendor hardware-feature object. Five of Rutoken Plugin's methods begin by
 // searching for it, and read eleven capability attributes from it in one call
 // with buffers already sized - so both the search and the exact lengths matter.
@@ -2347,6 +2600,50 @@ static void verifyRutokenExtension(Module& module, const CK_TOKEN_INFO& token)
     check(invoke("C_EX_GetTokenInfoExtended", "slotID=0, ulSizeofThisStructure=wrong",
                  [&] { return ex->C_EX_GetTokenInfoExtended(0, &mismatched); }),
           CKR_BUFFER_TOO_SMALL, "C_EX_GetTokenInfoExtended(wrong structure size)");
+
+    // C_EX_GetTokenName. Rutoken Control Center calls it right after
+    // C_EX_GetTokenInfoExtended and closes the session if it is refused, so
+    // both passes of the two-pass call have to work.
+    if ((token.flags & CKF_TOKEN_INITIALIZED) != 0)
+    {
+        const std::string expected =
+            paddedText(token.label, sizeof(token.label));
+        CK_SESSION_HANDLE session = CK_INVALID_HANDLE;
+        callOk("C_OpenSession", "slotID=0, flags=CKF_SERIAL_SESSION",
+               [&] { return module->C_OpenSession(0, CKF_SERIAL_SESSION, nullptr, nullptr,
+                                                  &session); });
+
+        CK_ULONG length = 0;
+        callOk("C_EX_GetTokenName", "pLabel=NULL_PTR (the size pass)",
+               [&] { return ex->C_EX_GetTokenName(session, nullptr, &length); });
+        if (length != expected.size())
+            fail("C_EX_GetTokenName reports length " + std::to_string(length) + " where the " +
+                 std::to_string(expected.size()) + " of the token's label is expected");
+
+        std::vector<CK_CHAR> name(length + 8, 0);
+        CK_ULONG got = static_cast<CK_ULONG>(name.size());
+        callOk("C_EX_GetTokenName", "pLabel=&buffer (the value pass)",
+               [&] { return ex->C_EX_GetTokenName(session, name.data(), &got); });
+        if (got != length ||
+            std::string(reinterpret_cast<const char*>(name.data()), got) != expected)
+            fail("C_EX_GetTokenName and C_GetTokenInfo disagree about the token's name");
+
+        if (length > 0)
+        {
+            CK_ULONG small = length - 1;
+            check(invoke("C_EX_GetTokenName", "pLabel=&buffer one byte short",
+                         [&] { return ex->C_EX_GetTokenName(session, name.data(), &small); }),
+                  CKR_BUFFER_TOO_SMALL, "C_EX_GetTokenName(buffer one byte short)");
+            if (small != length)
+                fail("C_EX_GetTokenName does not report the size a short buffer needed");
+        }
+
+        check(invoke("C_EX_GetTokenName", "hSession=CK_INVALID_HANDLE",
+                     [&] { return ex->C_EX_GetTokenName(CK_INVALID_HANDLE, name.data(), &got); }),
+              CKR_SESSION_HANDLE_INVALID, "C_EX_GetTokenName(bad session)");
+
+        closeSession(module, session);
+    }
 
     // Everything else is advertised but not implemented, and has to say so.
     check(invoke("C_EX_UnblockUserPIN", "hSession=0",
@@ -2640,12 +2937,18 @@ int main(int argc, char** argv)
             verifyReadyToken(fs::absolute(argv[2]));
             return 0;
         }
+        if (argc == 3 && std::string(argv[1]) == "core-behaviour")
+        {
+            verifyCoreBehaviour(fs::absolute(argv[2]));
+            return 0;
+        }
         std::cerr << "usage:\n"
                   << "  portable-token-e2e probe <module>\n"
                   << "  portable-token-e2e rutoken-profile <module>\n"
                   << "  portable-token-e2e prepare <module> <work>\n"
                   << "  portable-token-e2e finish <module> <work> <leaf.der> <ca.der> <payload> <cms.der>\n"
                   << "  portable-token-e2e ready <module>\n"
+                  << "  portable-token-e2e core-behaviour <module>\n"
                   << "environment:\n"
                   << "  P11_TEST_USER_PIN=<required secret>\n"
                   << "  P11_TEST_INITIALIZE_TOKEN=YES|NO (default NO)\n"

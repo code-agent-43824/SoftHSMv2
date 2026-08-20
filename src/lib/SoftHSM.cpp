@@ -108,6 +108,105 @@
 #include <unistd.h>
 #endif
 
+#ifdef HAVE_CXX11
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+
+namespace
+{
+	// Slot events, and with them the blocking form of C_WaitForSlotEvent.
+	// Applications that watch for a device being plugged in or pulled out run
+	// a thread parked in that call; answering CKR_FUNCTION_NOT_SUPPORTED tells
+	// them the library is not a real one.
+	//
+	// This state deliberately lives outside the SoftHSM singleton. C_Finalize
+	// destroys that object, and waking the parked thread to tell it exactly
+	// that is the whole point - so the thing it waits on has to outlive it.
+	//
+	// The wait uses the C++ runtime's own primitives rather than MutexFactory:
+	// an application may supply its own mutex callbacks through C_Initialize,
+	// and those can lock and unlock but have no way to express "sleep until
+	// something happens". This lock is internal and never visible to a caller.
+	struct SlotEventState
+	{
+		std::mutex lock;
+		std::condition_variable changed;
+		std::deque<CK_SLOT_ID> pending;
+		bool waiting;		// PKCS #11 allows one blocking caller at a time
+		unsigned long epoch;	// bumped by every C_Finalize
+
+		SlotEventState() : waiting(false), epoch(0) { }
+	};
+
+	SlotEventState& slotEvents()
+	{
+		static SlotEventState state;
+		return state;
+	}
+
+	void postSlotEvent(CK_SLOT_ID slotID)
+	{
+		SlotEventState& state = slotEvents();
+		std::lock_guard<std::mutex> guard(state.lock);
+		state.pending.push_back(slotID);
+		state.changed.notify_all();
+	}
+
+	// Called by C_Finalize. A parked caller has to be released, and PKCS #11
+	// says what it hears: the library it was waiting on is gone.
+	void endSlotEventEpoch()
+	{
+		SlotEventState& state = slotEvents();
+		std::lock_guard<std::mutex> guard(state.lock);
+		state.pending.clear();
+		state.epoch++;
+		state.changed.notify_all();
+	}
+
+	// The wait itself. Kept out of the SoftHSM class so that nothing here can
+	// touch an object C_Finalize may have destroyed while this thread slept.
+	CK_RV awaitSlotEvent(CK_FLAGS flags, CK_SLOT_ID_PTR pSlot)
+	{
+		SlotEventState& state = slotEvents();
+		std::unique_lock<std::mutex> guard(state.lock);
+
+		if (!state.pending.empty())
+		{
+			*pSlot = state.pending.front();
+			state.pending.pop_front();
+			return CKR_OK;
+		}
+
+		if (flags & CKF_DONT_BLOCK) return CKR_NO_EVENT;
+
+		// "If C_WaitForSlotEvent is called simultaneously by two threads with
+		// the blocking flag, C_WaitForSlotEvent returns CKR_FUNCTION_FAILED
+		// for the second thread."
+		if (state.waiting) return CKR_FUNCTION_FAILED;
+
+		const unsigned long epoch = state.epoch;
+		state.waiting = true;
+		state.changed.wait(guard, [&state, epoch] {
+			return !state.pending.empty() || state.epoch != epoch;
+		});
+		state.waiting = false;
+
+		if (state.epoch != epoch) return CKR_CRYPTOKI_NOT_INITIALIZED;
+
+		*pSlot = state.pending.front();
+		state.pending.pop_front();
+		return CKR_OK;
+	}
+}
+#else
+namespace
+{
+	void postSlotEvent(CK_SLOT_ID /*slotID*/) { }
+	void endSlotEventEpoch() { }
+}
+#endif
+
 // Initialise the one-and-only instance
 
 #ifdef HAVE_CXX11
@@ -673,6 +772,10 @@ CK_RV SoftHSM::C_Finalize(CK_VOID_PTR pReserved)
 	// Must be set to NULL_PTR in this version of PKCS#11
 	if (pReserved != NULL_PTR) return CKR_ARGUMENTS_BAD;
 
+	// Release anyone parked in C_WaitForSlotEvent before the state they would
+	// have reported on goes away.
+	endSlotEventEpoch();
+
 	if (handleManager != NULL) delete handleManager;
 	handleManager = NULL;
 	if (sessionManager != NULL) delete sessionManager;
@@ -1015,6 +1118,53 @@ CK_RV SoftHSM::C_EX_GetTokenInfoExtended(CK_SLOT_ID slotID, CK_TOKEN_INFO_EXTEND
 	pInfo->ulBatteryPercentage = FAKE_RUTOKEN_BATTERY_UNKNOWN;
 	pInfo->ulBatteryFlags = FAKE_RUTOKEN_BATTERY_UNKNOWN;
 
+	return CKR_OK;
+}
+
+// Return the token's name. Rutoken Control Center calls this immediately after
+// C_EX_GetTokenInfoExtended and closes the session if it is refused, so a
+// module that cannot answer never gets past the first screen.
+CK_RV SoftHSM::C_EX_GetTokenName(CK_SESSION_HANDLE hSession, CK_CHAR_PTR pLabel, CK_ULONG_PTR pulLabelLen)
+{
+	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;
+	if (pulLabelLen == NULL_PTR) return CKR_ARGUMENTS_BAD;
+
+	// Outside the compatibility profile this module is not a Rutoken and must
+	// not answer a Rutoken-only question.
+	if (!fakeRutokenECP) return CKR_FUNCTION_NOT_SUPPORTED;
+
+	Session* session = (Session*)handleManager->getSession(hSession);
+	if (session == NULL) return CKR_SESSION_HANDLE_INVALID;
+
+	CK_SESSION_INFO sessionInfo;
+	CK_RV rv = session->getInfo(&sessionInfo);
+	if (rv != CKR_OK) return rv;
+
+	// Ask through C_GetTokenInfo so that the name here and the name the same
+	// caller reads there are always the same string, including the placeholder
+	// the profile reports for a token that was never labelled.
+	CK_TOKEN_INFO tokenInfo;
+	rv = C_GetTokenInfo(fakeRutokenECP ? 0 : sessionInfo.slotID, &tokenInfo);
+	if (rv != CKR_OK) return rv;
+
+	// CK_TOKEN_INFO.label is a fixed 32 bytes padded with spaces; the name is
+	// what is left once the padding is gone.
+	size_t labelLen = sizeof(tokenInfo.label);
+	while (labelLen > 0 && tokenInfo.label[labelLen - 1] == ' ') labelLen--;
+
+	if (pLabel == NULL_PTR)
+	{
+		*pulLabelLen = (CK_ULONG) labelLen;
+		return CKR_OK;
+	}
+	if (*pulLabelLen < labelLen)
+	{
+		*pulLabelLen = (CK_ULONG) labelLen;
+		return CKR_BUFFER_TOO_SMALL;
+	}
+
+	memcpy(pLabel, tokenInfo.label, labelLen);
+	*pulLabelLen = (CK_ULONG) labelLen;
 	return CKR_OK;
 }
 
@@ -1911,7 +2061,20 @@ CK_RV SoftHSM::C_InitToken(CK_SLOT_ID slotID, CK_UTF8CHAR_PTR pPin, CK_ULONG ulP
 
 	ByteString soPIN(pPin, ulPinLen);
 
-	return slot->initToken(soPIN, pLabel);
+	// SoftHSM always keeps one spare slot holding an uninitialised token.
+	// Initialising that one is the single state change the library has that a
+	// watcher would call a slot event: a token appears where there was none,
+	// and the next C_GetSlotList grows by a fresh spare. Re-initialising a
+	// token that already existed wipes it but inserts nothing, so it is not
+	// reported.
+	Token* slotToken = slot->getToken();
+	const bool wasInitialised = slotToken != NULL && slotToken->isInitialized();
+
+	const CK_RV rv = slot->initToken(soPIN, pLabel);
+
+	if (rv == CKR_OK && !wasInitialised) postSlotEvent(slotID);
+
+	return rv;
 }
 
 // Initialise the user PIN
@@ -8996,17 +9159,28 @@ CK_RV SoftHSM::C_CancelFunction(CK_SESSION_HANDLE hSession)
 }
 
 // Wait or poll for a slot event on the specified slot
-CK_RV SoftHSM::C_WaitForSlotEvent(CK_FLAGS flags, CK_SLOT_ID_PTR /*pSlot*/, CK_VOID_PTR /*pReserved*/)
+CK_RV SoftHSM::C_WaitForSlotEvent(CK_FLAGS flags, CK_SLOT_ID_PTR pSlot, CK_VOID_PTR pReserved)
 {
-	if (!(flags & CKF_DONT_BLOCK)) return CKR_FUNCTION_NOT_SUPPORTED;
-
 	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;
 
-	// SoftHSM slots don't change after it's initialised. With the
-	// exception of when a slot is initialised and then getSlotList() is
-	// called. However, at this point the caller has been updated with the
-	// new slot list already so no event needs to be triggered.
+	// Must be set to NULL_PTR in this version of PKCS #11
+	if (pReserved != NULL_PTR) return CKR_ARGUMENTS_BAD;
+
+	// The slot an event happened in is the only thing this call reports, so
+	// there has to be somewhere to put it.
+	if (pSlot == NULL_PTR) return CKR_ARGUMENTS_BAD;
+
+#ifdef HAVE_CXX11
+	// Nothing beyond this point may touch this object: a blocking caller
+	// sleeps here across C_Finalize, which destroys it, and being woken by
+	// exactly that is one of the two ways this call returns.
+	return awaitSlotEvent(flags, pSlot);
+#else
+	// Without C++11 there is nothing to wait on; keep the old answer rather
+	// than pretend. The product is built with CMake, which requires C++11.
+	if (!(flags & CKF_DONT_BLOCK)) return CKR_FUNCTION_NOT_SUPPORTED;
 	return CKR_NO_EVENT;
+#endif
 }
 
 #ifdef WITH_ML_KEM

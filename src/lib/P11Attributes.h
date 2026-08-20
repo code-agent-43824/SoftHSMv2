@@ -124,6 +124,14 @@ protected:
 	// Update the value if allowed
 	virtual CK_RV updateAttr(Token *token, bool isPrivate, CK_VOID_PTR pValue, CK_ULONG ulValueLen, int op);
 
+	// True when a stored value of this size predates the attribute being
+	// encrypted and has to be read back as it is. Only the date attributes
+	// were ever written in the clear; see P11AttrStartDate::updateAttr.
+	virtual bool isLegacyPlaintext(size_t /*storedSize*/) const { return false; }
+
+	// Read back what updateAttr stored for a private object
+	bool readStored(Token *token, const ByteString& stored, ByteString& value);
+
 	// Helper functions
 	bool isModifiable();
 	bool isSensitive();
@@ -469,6 +477,9 @@ protected:
 
 	// Update the value if allowed
 	virtual CK_RV updateAttr(Token *token, bool isPrivate, CK_VOID_PTR pValue, CK_ULONG ulValueLen, int op);
+
+	// Values this old were stored unencrypted
+	virtual bool isLegacyPlaintext(size_t storedSize) const { return storedSize == sizeof(CK_DATE); }
 };
 
 /*****************************************
@@ -487,6 +498,9 @@ protected:
 
 	// Update the value if allowed
 	virtual CK_RV updateAttr(Token *token, bool isPrivate, CK_VOID_PTR pValue, CK_ULONG ulValueLen, int op);
+
+	// Values this old were stored unencrypted
+	virtual bool isLegacyPlaintext(size_t storedSize) const { return storedSize == sizeof(CK_DATE); }
 };
 
 /*****************************************

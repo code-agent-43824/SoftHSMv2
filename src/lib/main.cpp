@@ -1792,11 +1792,11 @@ PKCS_API CK_RV C_UnwrapKeyAuthenticated
  treat its absence as proof that the module is not a Rutoken, so the table is
  always exported and always answered - like C_GetFunctionList, it says nothing
  about identity on its own, and unlike a runtime flag it has to work before
- C_Initialize. The one entry point that reports anything is
- C_EX_GetTokenInfoExtended, and it answers only while the compatibility profile
- is enabled. The rest are declared so that the table's layout is right, and
- report CKR_FUNCTION_NOT_SUPPORTED; docs/RUTOKEN-EXTENSIONS.md records what
- each of them does on a real device.
+ C_Initialize. The entry points that report anything are
+ C_EX_GetTokenInfoExtended and C_EX_GetTokenName, and they answer only while
+ the compatibility profile is enabled. The rest are declared so that the
+ table's layout is right, and report CKR_FUNCTION_NOT_SUPPORTED;
+ docs/RUTOKEN-EXTENSIONS.md records what each of them does on a real device.
  *****************************************************************************/
 
 // Return extended information about a token in a slot
@@ -1901,11 +1901,20 @@ PKCS_API CK_RV C_EX_FreeBuffer
 
 PKCS_API CK_RV C_EX_GetTokenName
 (
-	CK_SESSION_HANDLE /*hSession*/, CK_CHAR_PTR /*pLabel*/,
-	CK_ULONG_PTR /*pulLabelLen*/
+	CK_SESSION_HANDLE hSession, CK_CHAR_PTR pLabel,
+	CK_ULONG_PTR pulLabelLen
 )
 {
-	return CKR_FUNCTION_NOT_SUPPORTED;
+	try
+	{
+		return SoftHSM::i()->C_EX_GetTokenName(hSession, pLabel, pulLabelLen);
+	}
+	catch (...)
+	{
+		FatalException();
+	}
+
+	return CKR_FUNCTION_FAILED;
 }
 
 PKCS_API CK_RV C_EX_SetLocalPIN

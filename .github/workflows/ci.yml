@@ -84,3 +84,19 @@ jobs:
             "$HOME/softhsm/softhsm.conf"
           P11_PROFILE_EXPECTED_LABEL='Rutoken ECP' \
             ./portable-token-e2e rutoken-profile "$module"
+      # Behaviour that is plain PKCS #11 rather than Rutoken, checked with the
+      # profile off because that is where it also has to hold: slot events, and
+      # attributes of a private object being both readable and stored
+      # encrypted. P11_TEST_STORE_DIR lets the client confirm the second half
+      # by looking at the token files, which the API cannot show.
+      - name: "Verify core PKCS #11 behaviour"
+        run: |
+          export HOME="$GITHUB_WORKSPACE/core-behaviour-home"
+          mkdir -p "$HOME"
+          module="$GITHUB_WORKSPACE/portable-product/libsofthsm2.so"
+          ./portable-token-e2e probe "$module"
+          grep -F 'FAKE_RUTOKEN_ECP = false' "$HOME/softhsm/softhsm.conf"
+          P11_TEST_SO_PIN=12345678 \
+          P11_TEST_USER_PIN=12345678 \
+          P11_TEST_STORE_DIR="$HOME/softhsm/tokens" \
+            ./portable-token-e2e core-behaviour "$module"

@@ -69,6 +69,30 @@ CK_RV P11Attribute::updateAttr(Token *token, bool isPrivate, CK_VOID_PTR pValue,
 	return CKR_OK;
 }
 
+// Read back what updateAttr stored for a private object, which is normally
+// ciphertext. One legacy shape has to be tolerated: CKA_START_DATE and
+// CKA_END_DATE were written in the clear by every build before this one,
+// because their updateAttr overrides bypassed the encrypting base method. Such
+// a value cannot be decrypted, and a token carrying one used to fail every
+// C_GetAttributeValue that touched it. Length tells the two apart with nothing
+// to guess: encryption emits a 16-byte IV plus at least one 16-byte AES block,
+// so no ciphertext is ever as short as a CK_DATE.
+bool P11Attribute::readStored(Token* token, const ByteString& stored, ByteString& value)
+{
+	if (isLegacyPlaintext(stored.size()))
+	{
+		value = stored;
+		return true;
+	}
+
+	if (!token->decrypt(stored, value))
+	{
+		ERROR_MSG("Internal error: failed to decrypt private attribute value");
+		return false;
+	}
+	return true;
+}
+
 bool P11Attribute::isModifiable()
 {
 	// Get the CKA_MODIFIABLE attribute, when the attribute is
@@ -276,11 +300,8 @@ CK_RV P11Attribute::retrieve(Token *token, bool isPrivate, CK_VOID_PTR pValue, C
 			if (isPrivate && attr.getByteStringValue().size() != 0)
 			{
 				ByteString value;
-				if (!token->decrypt(attr.getByteStringValue(),value))
-				{
-					ERROR_MSG("Internal error: failed to decrypt private attribute value");
+				if (!readStored(token, attr.getByteStringValue(), value))
 					return CKR_GENERAL_ERROR;
-				}
 				attrSize = value.size();
 			}
 			else
@@ -335,11 +356,8 @@ CK_RV P11Attribute::retrieve(Token *token, bool isPrivate, CK_VOID_PTR pValue, C
 			if (isPrivate && attr.getByteStringValue().size() != 0)
 			{
 				ByteString value;
-				if (!token->decrypt(attr.getByteStringValue(),value))
-				{
-					ERROR_MSG("Internal error: failed to decrypt private attribute value");
+				if (!readStored(token, attr.getByteStringValue(), value))
 					return CKR_GENERAL_ERROR;
-				}
 				if (value.size() !=  0) {
 					const unsigned char* attrPtr = value.const_byte_str();
 					memcpy(pValue,attrPtr,attrSize);
@@ -1173,7 +1191,7 @@ bool P11AttrStartDate::setDefault()
 }
 
 // Update the value if allowed
-CK_RV P11AttrStartDate::updateAttr(Token* /*token*/, bool /*isPrivate*/, CK_VOID_PTR pValue, CK_ULONG ulValueLen, int /*op*/)
+CK_RV P11AttrStartDate::updateAttr(Token* token, bool isPrivate, CK_VOID_PTR pValue, CK_ULONG ulValueLen, int op)
 {
 	// Attribute specific checks
 
@@ -1182,10 +1200,11 @@ CK_RV P11AttrStartDate::updateAttr(Token* /*token*/, bool /*isPrivate*/, CK_VOID
 		return CKR_ATTRIBUTE_VALUE_INVALID;
 	}
 
-	// Store data
-	osobject->setAttribute(type, ByteString((unsigned char*)pValue, ulValueLen));
-
-	return CKR_OK;
+	// Store data. This has to go through the base method: on a private object
+	// it encrypts the value, and retrieve() decrypts whatever it finds. Storing
+	// the date directly here - as this override used to - made every later read
+	// of it fail with CKR_GENERAL_ERROR, because eight bytes cannot be decrypted.
+	return P11Attribute::updateAttr(token, isPrivate, pValue, ulValueLen, op);
 }
 
 /*****************************************
@@ -1200,7 +1219,7 @@ bool P11AttrEndDate::setDefault()
 }
 
 // Update the value if allowed
-CK_RV P11AttrEndDate::updateAttr(Token* /*token*/, bool /*isPrivate*/, CK_VOID_PTR pValue, CK_ULONG ulValueLen, int /*op*/)
+CK_RV P11AttrEndDate::updateAttr(Token* token, bool isPrivate, CK_VOID_PTR pValue, CK_ULONG ulValueLen, int op)
 {
 	// Attribute specific checks
 
@@ -1209,10 +1228,9 @@ CK_RV P11AttrEndDate::updateAttr(Token* /*token*/, bool /*isPrivate*/, CK_VOID_P
 		return CKR_ATTRIBUTE_VALUE_INVALID;
 	}
 
-	// Store data
-	osobject->setAttribute(type, ByteString((unsigned char*)pValue, ulValueLen));
-
-	return CKR_OK;
+	// Store data; see P11AttrStartDate::updateAttr for why the base method
+	// has to do it.
+	return P11Attribute::updateAttr(token, isPrivate, pValue, ulValueLen, op);
 }
 
 /*****************************************
