@@ -2194,24 +2194,25 @@ static void verifyRutokenExtension(Module& module, const CK_TOKEN_INFO& token)
     if (extended.ulATRLen > sizeof(extended.ATR))
         fail("C_EX_GetTokenInfoExtended reports an ATR longer than its own field");
 
-    // The two views of the token must agree on the serial number. The device
-    // packs it as right-aligned binary-coded decimal, so reading the field's
-    // nibbles back has to spell the digits C_GetTokenInfo printed.
+    // The two views of the token must agree on the serial number: the extended
+    // field is the device's binary serial, big endian and right aligned, and
+    // the string C_GetTokenInfo prints is that number in hex. Rendering the
+    // bytes back as hex therefore has to reproduce the printed string.
     std::string fromText;
     for (size_t i = 0; i < sizeof(token.serialNumber); ++i)
     {
-        const unsigned char digit = static_cast<unsigned char>(token.serialNumber[i]);
-        if (digit >= '0' && digit <= '9') fromText.push_back(static_cast<char>(digit));
+        const unsigned char c = static_cast<unsigned char>(token.serialNumber[i]);
+        if (std::isxdigit(c)) fromText.push_back(static_cast<char>(std::tolower(c)));
     }
     std::string fromBytes;
     for (size_t i = 0; i < sizeof(extended.serialNumber); ++i)
     {
-        fromBytes.push_back(static_cast<char>('0' + (extended.serialNumber[i] >> 4)));
-        fromBytes.push_back(static_cast<char>('0' + (extended.serialNumber[i] & 0x0F)));
-        if ((extended.serialNumber[i] >> 4) > 9 || (extended.serialNumber[i] & 0x0F) > 9)
-            fail("C_EX_GetTokenInfoExtended serial number is not binary-coded decimal");
+        static const char* const hex = "0123456789abcdef";
+        fromBytes.push_back(hex[extended.serialNumber[i] >> 4]);
+        fromBytes.push_back(hex[extended.serialNumber[i] & 0x0F]);
     }
-    if (fromBytes.substr(fromBytes.size() - fromText.size()) != fromText ||
+    if (fromText.empty() || fromText.size() > fromBytes.size() ||
+        fromBytes.substr(fromBytes.size() - fromText.size()) != fromText ||
         fromBytes.find_first_not_of('0') < fromBytes.size() - fromText.size())
         fail("C_GetTokenInfo and C_EX_GetTokenInfoExtended disagree about the serial number");
 

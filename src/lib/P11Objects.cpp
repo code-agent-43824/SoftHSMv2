@@ -621,6 +621,13 @@ bool P11KeyObj::init(OSObject *inobject)
 	P11Attribute* attrLocal = new P11AttrLocal(osobject,P11Attribute::ck6);
 	P11Attribute* attrKeyGenMechanism = new P11AttrKeyGenMechanism(osobject);
 	P11Attribute* attrAllowedMechanisms = new P11AttrAllowedMechanisms(osobject);
+	// Rutoken-aware software puts these in the key templates it sends; a
+	// module that does not know them has to answer CKR_ATTRIBUTE_TYPE_INVALID
+	// and the key is never generated. See docs/RUTOKEN-EXTENSIONS.md.
+	P11Attribute* attrVendorPinEnter = new P11AttrVendorBool(osobject, CKA_VENDOR_KEY_PIN_ENTER);
+	P11Attribute* attrVendorConfirmOp = new P11AttrVendorBool(osobject, CKA_VENDOR_KEY_CONFIRM_OP);
+	P11Attribute* attrVendorJournal = new P11AttrVendorBool(osobject, CKA_VENDOR_KEY_JOURNAL);
+	P11Attribute* attrVendorConfirmByTouch = new P11AttrVendorBool(osobject, CKA_VENDOR_CONFIRM_BY_TOUCH);
 
 	// Initialize the attributes
 	if
@@ -632,7 +639,11 @@ bool P11KeyObj::init(OSObject *inobject)
 		!attrDerive->init() ||
 		!attrLocal->init() ||
 		!attrKeyGenMechanism->init() ||
-		!attrAllowedMechanisms->init()
+		!attrAllowedMechanisms->init() ||
+		!attrVendorPinEnter->init() ||
+		!attrVendorConfirmOp->init() ||
+		!attrVendorJournal->init() ||
+		!attrVendorConfirmByTouch->init()
 	)
 	{
 		ERROR_MSG("Could not initialize the attribute");
@@ -644,6 +655,10 @@ bool P11KeyObj::init(OSObject *inobject)
 		delete attrLocal;
 		delete attrKeyGenMechanism;
 		delete attrAllowedMechanisms;
+		delete attrVendorPinEnter;
+		delete attrVendorConfirmOp;
+		delete attrVendorJournal;
+		delete attrVendorConfirmByTouch;
 		return false;
 	}
 
@@ -656,6 +671,10 @@ bool P11KeyObj::init(OSObject *inobject)
 	attributes[attrLocal->getType()] = attrLocal;
 	attributes[attrKeyGenMechanism->getType()] = attrKeyGenMechanism;
 	attributes[attrAllowedMechanisms->getType()] = attrAllowedMechanisms;
+	attributes[attrVendorPinEnter->getType()] = attrVendorPinEnter;
+	attributes[attrVendorConfirmOp->getType()] = attrVendorConfirmOp;
+	attributes[attrVendorJournal->getType()] = attrVendorJournal;
+	attributes[attrVendorConfirmByTouch->getType()] = attrVendorConfirmByTouch;
 
 	initialized = true;
 	return true;

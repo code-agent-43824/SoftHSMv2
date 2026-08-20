@@ -2670,3 +2670,24 @@ CK_RV P11AttrDecapsulate::updateAttr(Token* /*token*/, bool /*isPrivate*/, CK_VO
 
 	return CKR_OK;
 }
+
+// Set the default value of the attribute
+bool P11AttrVendorBool::setDefault()
+{
+	OSAttribute attr(false);
+	return osobject->setAttribute(type, attr);
+}
+
+// Update the value if allowed
+CK_RV P11AttrVendorBool::updateAttr(Token* /*token*/, bool /*isPrivate*/, CK_VOID_PTR pValue, CK_ULONG ulValueLen, int /*op*/)
+{
+	if (ulValueLen != sizeof(CK_BBOOL))
+	{
+		return CKR_ATTRIBUTE_VALUE_INVALID;
+	}
+
+	OSAttribute attr(*(CK_BBOOL*)pValue != CK_FALSE);
+	osobject->setAttribute(type, attr);
+
+	return CKR_OK;
+}

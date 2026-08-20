@@ -89,6 +89,7 @@
 #include "P11Objects.h"
 #include "odd.h"
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 
 #if defined(WITH_OPENSSL)
@@ -972,18 +973,22 @@ CK_RV SoftHSM::C_EX_GetTokenInfoExtended(CK_SLOT_ID slotID, CK_TOKEN_INFO_EXTEND
 						  CKF_USER_PIN_FINAL_TRY, CKF_USER_PIN_COUNT_LOW,
 						  FAKE_RUTOKEN_MAX_USER_RETRY);
 
-	// The reference device packs its printed serial as binary-coded decimal,
-	// right aligned: "47738461" comes back as 00 00 00 00 47 73 84 61, not as
-	// the binary value of that number. Carry the digits C_GetTokenInfo already
-	// produced through the same encoding so the two views agree.
+	// serialNumber is the device's binary serial, big endian and right
+	// aligned; the eight characters C_GetTokenInfo prints are that number in
+	// hex. Rutoken Plugin reads this field as a big-endian integer and prints
+	// it in decimal, which is how the encoding was pinned down: for the
+	// reference device, printed "47738461" against bytes 47 73 84 61. Decode
+	// the printed form as hex so the two views cannot disagree - on an
+	// all-digit serial that is the same result a BCD reading would give, and
+	// unlike BCD it still holds if a serial ever carries the letters a-f.
 	char digits[sizeof(tokenInfo.serialNumber) + 1];
 	size_t digitCount = 0;
 	for (size_t i = 0; i < sizeof(tokenInfo.serialNumber); ++i)
 	{
 		const char digit = static_cast<char>(tokenInfo.serialNumber[i]);
-		if (digit >= '0' && digit <= '9') digits[digitCount++] = digit;
+		if (isxdigit((unsigned char) digit)) digits[digitCount++] = digit;
 	}
-	// Two digits share a byte, so the field holds at most twice as many.
+	// Two hex digits share a byte, so the field holds at most twice as many.
 	if (digitCount > sizeof(pInfo->serialNumber) * 2)
 		digitCount = sizeof(pInfo->serialNumber) * 2;
 	for (size_t i = 0; i < digitCount; ++i)
@@ -992,7 +997,9 @@ CK_RV SoftHSM::C_EX_GetTokenInfoExtended(CK_SLOT_ID slotID, CK_TOKEN_INFO_EXTEND
 		// right aligned: the last digit takes the low nibble of the last byte.
 		const size_t nibble = digitCount - 1 - i;
 		const size_t byte = sizeof(pInfo->serialNumber) - 1 - nibble / 2;
-		const CK_BYTE value = static_cast<CK_BYTE>(digits[i] - '0');
+		const char digit = digits[i];
+		const CK_BYTE value = static_cast<CK_BYTE>(
+			digit <= '9' ? digit - '0' : (digit | 0x20) - 'a' + 10);
 		pInfo->serialNumber[byte] |= (nibble % 2) ? static_cast<CK_BYTE>(value << 4) : value;
 	}
 
@@ -4261,6 +4268,33 @@ CK_RV SoftHSM::C_DecryptFinal(CK_SESSION_HANDLE hSession, CK_BYTE_PTR pData, CK_
 }
 
 // Initialise digesting using the specified mechanism in the specified session
+#ifdef WITH_GOST_3411_2012
+namespace
+{
+	// DER object identifier of the GOST R 34.11-2012/256 parameter set,
+	// 1.2.643.7.1.1.2.2. Applications written against Aktiv's library pass the
+	// OID of the digest they are asking for as the mechanism parameter. When
+	// Streebog-512 is implemented its parameter set is 1.2.643.7.1.1.2.3,
+	// which differs only in the last byte, 0x03.
+	const CK_BYTE GOSTR3411_2012_256_PARAMSET_OID[] = {
+		0x06, 0x08, 0x2A, 0x85, 0x03, 0x07, 0x01, 0x01, 0x02, 0x02
+	};
+
+	// A GOST 2012 mechanism may be given no parameter at all, or exactly the
+	// OID of its own parameter set. Anything else is a different parameter set
+	// than the one we would compute, and saying so beats hashing with the
+	// wrong one.
+	bool gostParamsetAccepted(CK_MECHANISM_PTR pMechanism, const CK_BYTE* oid, size_t oidLen)
+	{
+		if (pMechanism->pParameter == NULL_PTR && pMechanism->ulParameterLen == 0)
+			return true;
+		if (pMechanism->pParameter == NULL_PTR || pMechanism->ulParameterLen != oidLen)
+			return false;
+		return memcmp(pMechanism->pParameter, oid, oidLen) == 0;
+	}
+}
+#endif
+
 CK_RV SoftHSM::C_DigestInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMechanism)
 {
 	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;
@@ -4304,7 +4338,12 @@ CK_RV SoftHSM::C_DigestInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMechan
 #endif
 #ifdef WITH_GOST_3411_2012
 		case CKM_GOSTR3411_2012_256:
-			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
+			// Aktiv's own library takes the parameter-set OID here and every
+			// Rutoken-aware application passes it, so refusing it broke every
+			// GOST digest such an application asked for. Accept the one OID
+			// that names this mechanism's parameter set, and nothing else.
+			if (!gostParamsetAccepted(pMechanism, GOSTR3411_2012_256_PARAMSET_OID,
+						  sizeof(GOSTR3411_2012_256_PARAMSET_OID)))
 				return CKR_MECHANISM_PARAM_INVALID;
 			algo = HashAlgo::GOST2012_256;
 			break;
@@ -12791,6 +12830,7 @@ CK_RV SoftHSM::generateGOST2012
 
 	ByteString param3410;
 	ByteString param3411;
+	bool public3411Supplied = false;
 	for (CK_ULONG i = 0; i < ulPublicKeyAttributeCount; ++i)
 	{
 		switch (pPublicKeyTemplate[i].type)
@@ -12802,6 +12842,7 @@ CK_RV SoftHSM::generateGOST2012
 			case CKA_GOSTR3411_PARAMS:
 				param3411 = ByteString((unsigned char*)pPublicKeyTemplate[i].pValue,
 				                       pPublicKeyTemplate[i].ulValueLen);
+				public3411Supplied = true;
 				break;
 			case CKA_VALUE:
 				return CKR_ATTRIBUTE_READ_ONLY;
@@ -12830,14 +12871,21 @@ CK_RV SoftHSM::generateGOST2012
 		}
 	}
 
-	if (param3410.size() == 0 || param3411.size() == 0)
-		return CKR_TEMPLATE_INCOMPLETE;
-
 	const ByteString tc26CurveA("06092a8503070102010101");
 	const ByteString tc26CurveB("06092a8503070102010102");
 	const ByteString cryptoProCurveA("06072a850302022301");
 	const ByteString cryptoProExchangeA("06072a850302022400");
 	const ByteString streebog256("06082a85030701010202");
+
+	// Aktiv's library supplies the digest parameter set itself, so software
+	// written for a Rutoken names only the curve. Requiring both attributes
+	// made every such key generation fail with CKR_TEMPLATE_INCOMPLETE.
+	// Only one digest parameter set is accepted below anyway, so defaulting to
+	// it cannot pick a set the caller did not want.
+	if (param3411.size() == 0) param3411 = streebog256;
+
+	if (param3410.size() == 0)
+		return CKR_TEMPLATE_INCOMPLETE;
 	if (param3410 != tc26CurveA && param3410 != tc26CurveB &&
 	    param3410 != cryptoProCurveA && param3410 != cryptoProExchangeA)
 		return CKR_ATTRIBUTE_VALUE_INVALID;
@@ -12876,6 +12924,22 @@ CK_RV SoftHSM::generateGOST2012
 			default:
 				publicKeyAttribs[publicKeyAttribsCount++] = pPublicKeyTemplate[i];
 				break;
+		}
+	}
+	// The private key is given both parameter sets explicitly further down, but
+	// the public key object is built from the caller's template alone - so a
+	// defaulted digest parameter set has to be handed to it here, or the object
+	// is created without an attribute its class requires.
+	if (rv == CKR_OK && !public3411Supplied)
+	{
+		if (publicKeyAttribsCount >= maxAttribs)
+			rv = CKR_TEMPLATE_INCONSISTENT;
+		else
+		{
+			CK_ATTRIBUTE defaulted = { CKA_GOSTR3411_PARAMS,
+						   (CK_VOID_PTR) param3411.const_byte_str(),
+						   (CK_ULONG) param3411.size() };
+			publicKeyAttribs[publicKeyAttribsCount++] = defaulted;
 		}
 	}
 	if (rv == CKR_OK)

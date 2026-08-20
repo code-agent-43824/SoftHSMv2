@@ -34,6 +34,7 @@
 #define _SOFTHSM_V2_P11ATTRIBUTES_H
 
 #include "cryptoki.h"
+#include "rutoken.h"
 #include "OSObject.h"
 #include "Token.h"
 
@@ -1325,6 +1326,30 @@ class P11AttrDecapsulate : public P11Attribute
 public:
 	// Constructor
 	P11AttrDecapsulate(OSObject* inobject) : P11Attribute(inobject) { type = CKA_DECAPSULATE; size = sizeof(CK_BBOOL); checks = ck8|ck9; }
+
+protected:
+	// Set the default value of the attribute
+	virtual bool setDefault();
+
+	// Update the value if allowed
+	virtual CK_RV updateAttr(Token *token, bool isPrivate, CK_VOID_PTR pValue, CK_ULONG ulValueLen, int op);
+};
+
+/*****************************************
+ * Rutoken per-key vendor attributes
+ *
+ * Rutoken-aware software puts these in the templates it sends, and PKCS #11
+ * says a module must reject an attribute it does not know. Accepting them as
+ * opaque booleans is what lets such a template through; they carry no meaning
+ * for a software token, and are handed back unchanged by C_GetAttributeValue.
+ *****************************************/
+
+class P11AttrVendorBool : public P11Attribute
+{
+public:
+	// Constructor
+	P11AttrVendorBool(OSObject* inobject, CK_ATTRIBUTE_TYPE inType)
+		: P11Attribute(inobject) { type = inType; size = sizeof(CK_BBOOL); checks = ck8; }
 
 protected:
 	// Set the default value of the attribute

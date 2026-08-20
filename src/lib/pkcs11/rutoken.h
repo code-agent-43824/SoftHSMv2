@@ -137,6 +137,47 @@ typedef CK_TOKEN_INFO_EXTENDED CK_PTR CK_TOKEN_INFO_EXTENDED_PTR;
 #define CKR_INAPPROPRIATE_PIN		(CKR_VENDOR_DEFINED + 10UL)
 #define CKR_PIN_IN_HISTORY		(CKR_VENDOR_DEFINED + 11UL)
 
+/* Vendor hardware-feature object. Rutoken-aware software looks for an object
+   of class CKO_HW_FEATURE whose CKA_HW_FEATURE_TYPE is CKH_VENDOR_TOKEN_INFO
+   and reads the capability attributes below from it. Every one of them is read
+   with a buffer already sized by the caller, so the lengths are part of the
+   contract: eight bytes for the CK_ULONG-valued ones, one for the booleans. */
+#define CKH_VENDOR_TOKEN_INFO			(CKH_VENDOR_DEFINED | 0x00000001UL)
+
+#define CKA_VENDOR_SECURE_MESSAGING_AVAILABLE	(CKA_VENDOR_DEFINED | 0x00003000UL)
+#define CKA_VENDOR_CURRENT_SECURE_MESSAGING_MODE (CKA_VENDOR_DEFINED | 0x00003001UL)
+#define CKA_VENDOR_CURRENT_TOKEN_INTERFACE	(CKA_VENDOR_DEFINED | 0x00003003UL)
+#define CKA_VENDOR_SUPPORTED_TOKEN_INTERFACE	(CKA_VENDOR_DEFINED | 0x00003004UL)
+#define CKA_VENDOR_EXTERNAL_AUTHENTICATION	(CKA_VENDOR_DEFINED | 0x00003005UL)
+#define CKA_VENDOR_BIOMETRIC_AUTHENTICATION	(CKA_VENDOR_DEFINED | 0x00003006UL)
+#define CKA_VENDOR_SUPPORT_CUSTOM_PIN		(CKA_VENDOR_DEFINED | 0x00003007UL)
+#define CKA_VENDOR_CUSTOM_ADMIN_PIN		(CKA_VENDOR_DEFINED | 0x00003008UL)
+#define CKA_VENDOR_CUSTOM_USER_PIN		(CKA_VENDOR_DEFINED | 0x00003009UL)
+#define CKA_VENDOR_SUPPORT_FKC2			(CKA_VENDOR_DEFINED | 0x0000300BUL)
+/* Read by Rutoken Plugin together with the block above; absent from the
+   published Aktiv headers 2.19 and 2.21, so the name is ours. */
+#define CKA_VENDOR_UNDOCUMENTED_800D		(CKA_VENDOR_DEFINED | 0x0000800DUL)
+
+/* Per-key vendor attributes. Rutoken Plugin puts CKA_VENDOR_KEY_JOURNAL in
+   every C_GenerateKeyPair template, so a module that rejects unknown
+   attributes cannot generate a key for it. */
+#define CKA_VENDOR_KEY_PIN_ENTER		(CKA_VENDOR_DEFINED | 0x00002000UL)
+#define CKA_VENDOR_KEY_CONFIRM_OP		(CKA_VENDOR_DEFINED | 0x00002001UL)
+#define CKA_VENDOR_KEY_JOURNAL			(CKA_VENDOR_DEFINED | 0x00002002UL)
+#define CKA_VENDOR_CONFIRM_BY_TOUCH		(CKA_VENDOR_DEFINED | 0x00002003UL)
+
+/* Read from a certificate by isLoginBioRequired(). */
+#define CKA_VENDOR_FINGERPRINT_CONVOLUTIONS_ID	(CKA_VENDOR_DEFINED | 0x00003304UL)
+
+/* Token interface, the value of CKA_VENDOR_*_TOKEN_INTERFACE. */
+#define TOKEN_INTERFACE_USB			0x01UL
+#define TOKEN_INTERFACE_NFC			0x02UL
+#define TOKEN_INTERFACE_BLUETOOTH		0x04UL
+#define TOKEN_INTERFACE_ISO			0x08UL
+
+/* CKA_VENDOR_CURRENT_SECURE_MESSAGING_MODE when the token has no SM. */
+#define SECURE_MESSAGING_MODE_UNSUPPORTED	0xFFUL
+
 /* Full-format parameters for C_EX_InitToken. */
 typedef struct CK_RUTOKEN_INIT_PARAM {
 	CK_ULONG    ulSizeofThisStructure;

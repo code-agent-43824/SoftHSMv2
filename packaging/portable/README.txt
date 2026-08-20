@@ -82,11 +82,19 @@ required.
 
 GOST R 34.11-2012/256 is available through the TC26
 CKM_GOSTR3411_2012_256 mechanism for one-shot and multipart PKCS #11 digest
-operations. GOST R 34.10-2012/256 key pairs can be generated with
-CKM_GOSTR3410_KEY_PAIR_GEN and explicit CKA_GOSTR3410_PARAMS and
-CKA_GOSTR3411_PARAMS attributes. Those keys can sign a precomputed 32-byte
-digest with CKM_GOSTR3410, or hash and sign one-shot or multipart input with
-the TC26 CKM_GOSTR3410_WITH_GOSTR3411_2012_256 mechanism. GOST verification,
+operations. That mechanism accepts the DER object identifier of its parameter
+set, 1.2.643.7.1.1.2.2, as the mechanism parameter, because Rutoken-aware
+software always sends it; no parameter at all is equally accepted, and any
+other parameter is refused with CKR_MECHANISM_PARAM_INVALID. GOST R
+34.10-2012/256 key pairs can be generated with CKM_GOSTR3410_KEY_PAIR_GEN and
+an explicit CKA_GOSTR3410_PARAMS attribute; CKA_GOSTR3411_PARAMS may be given
+but defaults to 1.2.643.7.1.1.2.2 when it is not, which is the only value the
+mechanism accepts anyway. The Rutoken per-key vendor attributes 0x80002000 to
+0x80002003 are accepted in key templates and stored as booleans.
+
+Those keys can sign a precomputed 32-byte digest with CKM_GOSTR3410, or hash
+and sign one-shot or multipart input with the TC26
+CKM_GOSTR3410_WITH_GOSTR3411_2012_256 mechanism. GOST verification,
 MAC, key agreement, CMS construction, and other GOST mechanisms are not enabled.
 
 RSA and GOST public/private key objects can be imported separately with the
