@@ -59,7 +59,28 @@ jobs:
             "$HOME/softhsm/softhsm.conf"
           grep -F 'FAKE_RUTOKEN_ECP = true' "$HOME/softhsm/softhsm.conf"
           # A store whose token has never been labelled must report the
-          # placeholder the device uses. The labelled branch needs an
-          # initialized token and stays with the release workflow.
+          # placeholder the device uses.
           P11_PROFILE_EXPECTED_LABEL='Rutoken ECP <no label>' \
+            ./portable-token-e2e rutoken-profile "$module"
+      # The other branch of the label rule, and everything the gate can only
+      # reach through a session - the hardware-feature object among it, since
+      # SoftHSM refuses C_OpenSession on a token that was never initialized.
+      # Half a second of work, and without it those checks run at release time
+      # only. PINs are throwaway values for a store this job creates and drops.
+      - name: Verify the profile on an initialized token
+        run: |
+          export HOME="$GITHUB_WORKSPACE/profile-gate-labelled-home"
+          mkdir -p "$HOME"
+          module="$GITHUB_WORKSPACE/portable-product/libsofthsm2.so"
+          ./portable-token-e2e probe "$module"
+          # Initialization runs with the profile off: the facade presents one
+          # slot holding the token, and there is no token to hold yet.
+          P11_TEST_INITIALIZE_TOKEN=YES \
+          P11_TEST_SO_PIN=12345678 \
+          P11_TEST_USER_PIN=12345678 \
+          P11_TEST_TOKEN_LABEL='Rutoken ECP' \
+            ./portable-token-e2e prepare "$module" "$GITHUB_WORKSPACE/profile-gate-work"
+          perl -0pi -e 's/FAKE_RUTOKEN_ECP = false/FAKE_RUTOKEN_ECP = true/' \
+            "$HOME/softhsm/softhsm.conf"
+          P11_PROFILE_EXPECTED_LABEL='Rutoken ECP' \
             ./portable-token-e2e rutoken-profile "$module"

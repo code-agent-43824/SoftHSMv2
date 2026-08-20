@@ -139,9 +139,11 @@ typedef CK_TOKEN_INFO_EXTENDED CK_PTR CK_TOKEN_INFO_EXTENDED_PTR;
 
 /* Vendor hardware-feature object. Rutoken-aware software looks for an object
    of class CKO_HW_FEATURE whose CKA_HW_FEATURE_TYPE is CKH_VENDOR_TOKEN_INFO
-   and reads the capability attributes below from it. Every one of them is read
-   with a buffer already sized by the caller, so the lengths are part of the
-   contract: eight bytes for the CK_ULONG-valued ones, one for the booleans. */
+   and reads the capability attributes below from it. It asks for all of them
+   in one call with buffers it has already sized - one byte for the booleans,
+   eight for the rest - so an attribute the module does not carry fails the
+   whole call. The device answers a CK_ULONG-valued attribute with
+   sizeof(CK_ULONG), which is four of those eight bytes on Windows. */
 #define CKH_VENDOR_TOKEN_INFO			(CKH_VENDOR_DEFINED | 0x00000001UL)
 
 #define CKA_VENDOR_SECURE_MESSAGING_AVAILABLE	(CKA_VENDOR_DEFINED | 0x00003000UL)
@@ -169,11 +171,13 @@ typedef CK_TOKEN_INFO_EXTENDED CK_PTR CK_TOKEN_INFO_EXTENDED_PTR;
 /* Read from a certificate by isLoginBioRequired(). */
 #define CKA_VENDOR_FINGERPRINT_CONVOLUTIONS_ID	(CKA_VENDOR_DEFINED | 0x00003304UL)
 
-/* Token interface, the value of CKA_VENDOR_*_TOKEN_INTERFACE. */
+/* Token interface, the value of CKA_VENDOR_*_TOKEN_INTERFACE. A bit mask: the
+   reference device, plugged into USB, reports 0x01 as its current interface
+   and 0x21 as the set it supports. Only the USB bit is established; what the
+   other bit of 0x21 stands for is unknown, and the published Aktiv headers
+   2.19 and 2.21 do not name these values, so no name is invented for it here.
+   The supported set is carried as the raw device reading. */
 #define TOKEN_INTERFACE_USB			0x01UL
-#define TOKEN_INTERFACE_NFC			0x02UL
-#define TOKEN_INTERFACE_BLUETOOTH		0x04UL
-#define TOKEN_INTERFACE_ISO			0x08UL
 
 /* CKA_VENDOR_CURRENT_SECURE_MESSAGING_MODE when the token has no SM. */
 #define SECURE_MESSAGING_MODE_UNSUPPORTED	0xFFUL

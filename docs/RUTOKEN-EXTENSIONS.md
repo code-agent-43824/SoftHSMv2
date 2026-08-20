@@ -121,7 +121,7 @@ Rutoken SDK **v.2026** (релиз 15.05.2026), `rutoken-sdk-latest.zip`
 | --- | --- |
 | `C_DigestInit` не принимал OID набора параметров | **исправлено**, см. ниже |
 | `C_GenerateKeyPair` требовал `CKA_GOSTR3411_PARAMS` и отвергал `CKA_VENDOR_KEY_JOURNAL` | **исправлено**, см. ниже |
-| нет объекта `CKO_HW_FEATURE` / `CKH_VENDOR_TOKEN_INFO` | ждёт снятия значений с устройства, `docs/PLAN.md` |
+| нет объекта `CKO_HW_FEATURE` / `CKH_VENDOR_TOKEN_INFO` | **исправлено**, см. ниже |
 | у сертификата нет `CKA_VENDOR_FINGERPRINT_CONVOLUTIONS_ID` | не блокер, плагин переживает отказ; отложено владельцем |
 
 ### Параметр набора у ГОСТ-хеша
@@ -160,26 +160,48 @@ Rutoken SDK **v.2026** (релиз 15.05.2026), `rutoken-sdk-latest.zip`
 `FEATURES`, `VENDOR_MODEL_NAME`, `FKN_SUPPORTED`, `BIO_ATTEMPTS_INFO`)
 начинаются с поиска объекта `CKO_HW_FEATURE` с
 `CKA_HW_FEATURE_TYPE = CKH_VENDOR_TOKEN_INFO` и читают с него одиннадцать
-атрибутов **одним вызовом с уже выделенными буферами** — то есть длины
-являются частью контракта:
+атрибутов **одним вызовом с уже выделенными буферами**. Значит, ни один из них
+нельзя не иметь: незнакомый атрибут в шаблоне роняет весь вызов, а с ним и
+метод плагина.
 
-| атрибут | длина буфера |
-| --- | ---: |
-| `CKA_VENDOR_SECURE_MESSAGING_AVAILABLE` `0x80003000` | 1 |
-| `CKA_VENDOR_CURRENT_SECURE_MESSAGING_MODE` `0x80003001` | 8 |
-| `CKA_VENDOR_CURRENT_TOKEN_INTERFACE` `0x80003003` | 8 |
-| `CKA_VENDOR_SUPPORTED_TOKEN_INTERFACE` `0x80003004` | 8 |
-| `CKA_VENDOR_EXTERNAL_AUTHENTICATION` `0x80003005` | 1 |
-| `CKA_VENDOR_BIOMETRIC_AUTHENTICATION` `0x80003006` | 8 |
-| `CKA_VENDOR_SUPPORT_CUSTOM_PIN` `0x80003007` | 1 |
-| `CKA_VENDOR_CUSTOM_ADMIN_PIN` `0x80003008` | 1 |
-| `CKA_VENDOR_CUSTOM_USER_PIN` `0x80003009` | 1 |
-| `CKA_VENDOR_SUPPORT_FKC2` `0x8000300B` | 1 |
-| без имени в заголовках 2.19 и 2.21, `0x8000800D` | 1 |
+Значения сняты с того же эталонного устройства (20.08.2026) утилитой
+`tests/portable/rutoken-reference-dump.c`, Windows x64, `rtPKCS11ECP.dll` —
+там `CK_ULONG` четыре байта:
 
-Объекта у нас нет, и значения этих атрибутов из программного токена не
-выводятся — их надо снять с эталонного устройства. Это умеет
-`tests/portable/rutoken-reference-dump.c`; задача записана в `docs/PLAN.md`.
+| атрибут | длина | значение |
+| --- | ---: | --- |
+| `CKA_VENDOR_SECURE_MESSAGING_AVAILABLE` `0x80003000` | 1 | `CK_FALSE` |
+| `CKA_VENDOR_CURRENT_SECURE_MESSAGING_MODE` `0x80003001` | 4 | `0xFF` — SM нет |
+| `CKA_VENDOR_CURRENT_TOKEN_INTERFACE` `0x80003003` | 4 | `0x01` — USB |
+| `CKA_VENDOR_SUPPORTED_TOKEN_INTERFACE` `0x80003004` | 4 | `0x21` |
+| `CKA_VENDOR_EXTERNAL_AUTHENTICATION` `0x80003005` | 1 | `CK_FALSE` |
+| `CKA_VENDOR_BIOMETRIC_AUTHENTICATION` `0x80003006` | 4 | `0` |
+| `CKA_VENDOR_SUPPORT_CUSTOM_PIN` `0x80003007` | 1 | `CK_TRUE` |
+| `CKA_VENDOR_CUSTOM_ADMIN_PIN` `0x80003008` | 1 | `CK_FALSE` |
+| `CKA_VENDOR_CUSTOM_USER_PIN` `0x80003009` | 1 | `CK_FALSE` |
+| `CKA_VENDOR_SUPPORT_FKC2` `0x8000300B` | 1 | `CK_TRUE` |
+| без имени в заголовках 2.19 и 2.21, `0x8000800D` | 1 | `CK_FALSE` |
+
+Профиль отдаёт ровно это. Длины: булевы — один байт, остальные —
+`sizeof(CK_ULONG)`, то есть четыре байта на Windows, как у устройства, и
+восемь на Linux, как отдала бы 64-битная библиотека Aktiv. Плагин, к слову,
+выделяет под каждый не-булев атрибут восемь байт и принимает ответ короче —
+устройство именно так и отвечает.
+
+`0x21` — маска поддерживаемых интерфейсов, скопированная с устройства как
+есть. Бит `0x01` — USB (он же стоит в «текущем» интерфейсе у устройства,
+воткнутого в USB); что означает второй бит, из наших данных не следует, и в
+опубликованных заголовках Aktiv 2.19 и 2.21 эти значения не названы, поэтому
+имени ему мы не придумываем.
+
+Объект синтезируется на лету, пока профиль включён, а не пишется в хранилище:
+он описывает железо, профиль объектов не трогает, и это та же логика, что у
+фасадного слота 0. Дескриптор — метка `0x52544B48`, заведомо выше всего, что
+раздаёт `HandleManager`, считающий с единицы. Объект аппаратной особенности по
+PKCS #11 не является объектом хранения, поэтому у него нет ни `CKA_TOKEN`, ни
+`CKA_PRIVATE`, и читается он без входа по PIN — плагин читает его именно так.
+Найти его можно и пустым шаблоном, как на устройстве; изменить
+(`C_SetAttributeValue`) или удалить (`C_DestroyObject`) — нельзя.
 
 ## Полный список функций
 

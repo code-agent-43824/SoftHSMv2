@@ -2352,6 +2352,124 @@ CK_RV SoftHSM::C_CopyObject(CK_SESSION_HANDLE hSession, CK_OBJECT_HANDLE hObject
 	return CKR_OK;
 }
 
+namespace
+{
+	// The vendor hardware-feature object of a Rutoken ECP. Rutoken-aware
+	// software looks for a CKO_HW_FEATURE whose CKA_HW_FEATURE_TYPE is
+	// CKH_VENDOR_TOKEN_INFO and reads the token's capabilities from it; without
+	// the object five of Rutoken Plugin's methods answer with an internal
+	// error, because they start with exactly this search.
+	//
+	// The object is synthesised while the profile is on rather than written to
+	// the store: it describes hardware, the profile does not touch objects, and
+	// this mirrors how facade slot 0 is presented. Its handle is a sentinel far
+	// above anything HandleManager hands out, which counts up from one.
+	//
+	// PKCS #11 hardware-feature objects are not storage objects, so this one
+	// carries no CKA_TOKEN or CKA_PRIVATE and needs no login to read - which is
+	// also when the plugin reads it.
+	const CK_OBJECT_HANDLE FAKE_RUTOKEN_FEATURE_HANDLE = 0x52544B48; // "RTKH"
+
+	struct FakeRutokenFeatureAttribute
+	{
+		CK_ATTRIBUTE_TYPE type;
+		bool isBool;	// otherwise a CK_ULONG, which is 4 bytes on Windows
+		CK_ULONG value;
+	};
+
+	// Read off the reference device with tests/portable/rutoken-reference-dump.c;
+	// see docs/RUTOKEN-EXTENSIONS.md.
+	const FakeRutokenFeatureAttribute FAKE_RUTOKEN_FEATURE[] = {
+		{ CKA_CLASS,					false, CKO_HW_FEATURE },
+		{ CKA_HW_FEATURE_TYPE,				false, CKH_VENDOR_TOKEN_INFO },
+		{ CKA_VENDOR_SECURE_MESSAGING_AVAILABLE,	true,  CK_FALSE },
+		{ CKA_VENDOR_CURRENT_SECURE_MESSAGING_MODE,	false, SECURE_MESSAGING_MODE_UNSUPPORTED },
+		{ CKA_VENDOR_CURRENT_TOKEN_INTERFACE,		false, TOKEN_INTERFACE_USB },
+		// The device's raw supported-interface mask. USB is bit 0x01; what
+		// the other bit means is not established, so it is copied as read.
+		{ CKA_VENDOR_SUPPORTED_TOKEN_INTERFACE,		false, 0x21 },
+		{ CKA_VENDOR_EXTERNAL_AUTHENTICATION,		true,  CK_FALSE },
+		{ CKA_VENDOR_BIOMETRIC_AUTHENTICATION,		false, 0 },
+		{ CKA_VENDOR_SUPPORT_CUSTOM_PIN,		true,  CK_TRUE },
+		{ CKA_VENDOR_CUSTOM_ADMIN_PIN,			true,  CK_FALSE },
+		{ CKA_VENDOR_CUSTOM_USER_PIN,			true,  CK_FALSE },
+		{ CKA_VENDOR_SUPPORT_FKC2,			true,  CK_TRUE },
+		{ CKA_VENDOR_UNDOCUMENTED_800D,			true,  CK_FALSE }
+	};
+
+	const FakeRutokenFeatureAttribute* findFakeRutokenFeatureAttribute(CK_ATTRIBUTE_TYPE type)
+	{
+		const size_t count = sizeof(FAKE_RUTOKEN_FEATURE) / sizeof(FAKE_RUTOKEN_FEATURE[0]);
+		for (size_t i = 0; i < count; ++i)
+			if (FAKE_RUTOKEN_FEATURE[i].type == type) return &FAKE_RUTOKEN_FEATURE[i];
+		return NULL;
+	}
+
+	// An object matches a search template when it has every attribute the
+	// template names, with the value the template gives. An empty template
+	// matches everything, so the object also turns up in a bare enumeration -
+	// as it does on the device.
+	bool fakeRutokenFeatureMatches(CK_ATTRIBUTE_PTR pTemplate, CK_ULONG ulCount)
+	{
+		for (CK_ULONG i = 0; i < ulCount; ++i)
+		{
+			const FakeRutokenFeatureAttribute* attr =
+				findFakeRutokenFeatureAttribute(pTemplate[i].type);
+			if (attr == NULL) return false;
+
+			const CK_BBOOL asBool = attr->value != 0 ? CK_TRUE : CK_FALSE;
+			const CK_ULONG asLong = attr->value;
+			const void* mine = attr->isBool ? (const void*) &asBool : (const void*) &asLong;
+			const CK_ULONG mineLen = attr->isBool ? sizeof(asBool) : sizeof(asLong);
+
+			if (pTemplate[i].pValue == NULL_PTR ||
+			    pTemplate[i].ulValueLen != mineLen ||
+			    memcmp(pTemplate[i].pValue, mine, mineLen) != 0)
+				return false;
+		}
+		return true;
+	}
+
+	// Fill a template from the object, with the conventions C_GetAttributeValue
+	// uses everywhere: a null buffer asks for the size, a short buffer and an
+	// attribute we do not have both come back as a length of -1.
+	CK_RV fakeRutokenFeatureLoad(CK_ATTRIBUTE_PTR pTemplate, CK_ULONG ulCount)
+	{
+		CK_RV rv = CKR_OK;
+		for (CK_ULONG i = 0; i < ulCount; ++i)
+		{
+			const FakeRutokenFeatureAttribute* attr =
+				findFakeRutokenFeatureAttribute(pTemplate[i].type);
+			if (attr == NULL)
+			{
+				pTemplate[i].ulValueLen = (CK_ULONG) -1;
+				rv = CKR_ATTRIBUTE_TYPE_INVALID;
+				continue;
+			}
+
+			const CK_BBOOL asBool = attr->value != 0 ? CK_TRUE : CK_FALSE;
+			const CK_ULONG asLong = attr->value;
+			const void* mine = attr->isBool ? (const void*) &asBool : (const void*) &asLong;
+			const CK_ULONG mineLen = attr->isBool ? sizeof(asBool) : sizeof(asLong);
+
+			if (pTemplate[i].pValue == NULL_PTR)
+			{
+				pTemplate[i].ulValueLen = mineLen;
+				continue;
+			}
+			if (pTemplate[i].ulValueLen < mineLen)
+			{
+				pTemplate[i].ulValueLen = (CK_ULONG) -1;
+				rv = CKR_BUFFER_TOO_SMALL;
+				continue;
+			}
+			memcpy(pTemplate[i].pValue, mine, mineLen);
+			pTemplate[i].ulValueLen = mineLen;
+		}
+		return rv;
+	}
+}
+
 // Destroy the specified object
 CK_RV SoftHSM::C_DestroyObject(CK_SESSION_HANDLE hSession, CK_OBJECT_HANDLE hObject)
 {
@@ -2360,6 +2478,11 @@ CK_RV SoftHSM::C_DestroyObject(CK_SESSION_HANDLE hSession, CK_OBJECT_HANDLE hObj
 	// Get the session
 	Session* session = (Session*)handleManager->getSession(hSession);
 	if (session == NULL) return CKR_SESSION_HANDLE_INVALID;
+
+	// The profile's hardware-feature object describes the device, not stored
+	// data; it cannot be removed.
+	if (fakeRutokenECP && hObject == FAKE_RUTOKEN_FEATURE_HANDLE)
+		return CKR_ACTION_PROHIBITED;
 
 	// Get the token
 	Token* token = session->getToken();
@@ -2437,6 +2560,11 @@ CK_RV SoftHSM::C_GetAttributeValue(CK_SESSION_HANDLE hSession, CK_OBJECT_HANDLE 
 	Token* token = session->getToken();
 	if (token == NULL) return CKR_GENERAL_ERROR;
 
+	// The profile's hardware-feature object is synthesised, not stored, so it
+	// is answered before the handle is looked up.
+	if (fakeRutokenECP && hObject == FAKE_RUTOKEN_FEATURE_HANDLE)
+		return fakeRutokenFeatureLoad(pTemplate, ulCount);
+
 	// Check the object handle.
 	OSObject *object = (OSObject *)handleManager->getObject(hObject);
 	if (object == NULL_PTR || !object->isValid()) return CKR_OBJECT_HANDLE_INVALID;
@@ -2478,6 +2606,10 @@ CK_RV SoftHSM::C_SetAttributeValue(CK_SESSION_HANDLE hSession, CK_OBJECT_HANDLE 
 	// Get the session
 	Session* session = (Session*)handleManager->getSession(hSession);
 	if (session == NULL) return CKR_SESSION_HANDLE_INVALID;
+
+	// The profile's hardware-feature object is read-only.
+	if (fakeRutokenECP && hObject == FAKE_RUTOKEN_FEATURE_HANDLE)
+		return CKR_ATTRIBUTE_READ_ONLY;
 
 	// Get the token
 	Token* token = session->getToken();
@@ -2678,6 +2810,11 @@ CK_RV SoftHSM::C_FindObjectsInit(CK_SESSION_HANDLE hSession, CK_ATTRIBUTE_PTR pT
 			handles.insert(hObject);
 		}
 	}
+
+	// The profile's hardware-feature object lives outside the store, so it is
+	// added to the result by hand when the template asks for something it has.
+	if (fakeRutokenECP && fakeRutokenFeatureMatches(pTemplate, ulCount))
+		handles.insert(FAKE_RUTOKEN_FEATURE_HANDLE);
 
 	// Storing the object handles for the find will protect the library
 	// whenever a stale object handle is used to access the library.

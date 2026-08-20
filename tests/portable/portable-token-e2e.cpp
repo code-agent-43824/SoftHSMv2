@@ -2148,6 +2148,130 @@ static void verifyReadyToken(const fs::path& modulePath)
     trace("READY", "fresh module load logged in without C_InitToken/C_InitPIN/C_SetPIN and found persistent GOST/RSA/certificate objects");
 }
 
+// The vendor hardware-feature object. Five of Rutoken Plugin's methods begin by
+// searching for it, and read eleven capability attributes from it in one call
+// with buffers already sized - so both the search and the exact lengths matter.
+static void verifyRutokenHardwareFeature(Module& module)
+{
+    struct Expected { CK_ATTRIBUTE_TYPE type; bool isBool; CK_ULONG value; const char* name; };
+    static const Expected expected[] = {
+        {CKA_VENDOR_SECURE_MESSAGING_AVAILABLE,     true,  CK_FALSE, "SECURE_MESSAGING_AVAILABLE"},
+        {CKA_VENDOR_CURRENT_SECURE_MESSAGING_MODE,  false, SECURE_MESSAGING_MODE_UNSUPPORTED,
+                                                           "CURRENT_SECURE_MESSAGING_MODE"},
+        {CKA_VENDOR_CURRENT_TOKEN_INTERFACE,        false, TOKEN_INTERFACE_USB,
+                                                           "CURRENT_TOKEN_INTERFACE"},
+        {CKA_VENDOR_SUPPORTED_TOKEN_INTERFACE,      false, 0x21, "SUPPORTED_TOKEN_INTERFACE"},
+        {CKA_VENDOR_EXTERNAL_AUTHENTICATION,        true,  CK_FALSE, "EXTERNAL_AUTHENTICATION"},
+        {CKA_VENDOR_BIOMETRIC_AUTHENTICATION,       false, 0, "BIOMETRIC_AUTHENTICATION"},
+        {CKA_VENDOR_SUPPORT_CUSTOM_PIN,             true,  CK_TRUE, "SUPPORT_CUSTOM_PIN"},
+        {CKA_VENDOR_CUSTOM_ADMIN_PIN,               true,  CK_FALSE, "CUSTOM_ADMIN_PIN"},
+        {CKA_VENDOR_CUSTOM_USER_PIN,                true,  CK_FALSE, "CUSTOM_USER_PIN"},
+        {CKA_VENDOR_SUPPORT_FKC2,                   true,  CK_TRUE, "SUPPORT_FKC2"},
+        {CKA_VENDOR_UNDOCUMENTED_800D,              true,  CK_FALSE, "0x8000800D"}
+    };
+    const size_t count = sizeof(expected) / sizeof(expected[0]);
+
+    CK_OBJECT_CLASS featureClass = CKO_HW_FEATURE;
+    CK_HW_FEATURE_TYPE featureType = CKH_VENDOR_TOKEN_INFO;
+    CK_ATTRIBUTE search[2] = {
+        {CKA_CLASS, &featureClass, sizeof(featureClass)},
+        {CKA_HW_FEATURE_TYPE, &featureType, sizeof(featureType)}
+    };
+
+    CK_SESSION_HANDLE session = CK_INVALID_HANDLE;
+    // The plugin reads this before logging in, so a public session must do.
+    callOk("C_OpenSession", "slotID=0, flags=CKF_SERIAL_SESSION",
+           [&] { return module->C_OpenSession(0, CKF_SERIAL_SESSION, nullptr, nullptr, &session); });
+
+    std::vector<CK_OBJECT_HANDLE> found(4);
+    CK_ULONG foundCount = 0;
+    callOk("C_FindObjectsInit", "pTemplate=CKO_HW_FEATURE/CKH_VENDOR_TOKEN_INFO",
+           [&] { return module->C_FindObjectsInit(session, search, 2); });
+    callOk("C_FindObjects", "ulMaxObjectCount=4",
+           [&] { return module->C_FindObjects(session, found.data(),
+                                              static_cast<CK_ULONG>(found.size()), &foundCount); });
+    callOk("C_FindObjectsFinal", "hSession=session",
+           [&] { return module->C_FindObjectsFinal(session); });
+    if (foundCount != 1)
+        fail("the profile must expose exactly one CKH_VENDOR_TOKEN_INFO object, found " +
+             std::to_string(foundCount));
+    const CK_OBJECT_HANDLE feature = found[0];
+
+    // One call, buffers pre-sized, exactly as the plugin asks.
+    std::vector<CK_ATTRIBUTE> query(count);
+    std::vector<std::array<CK_BYTE, 8>> buffers(count);
+    for (size_t i = 0; i < count; ++i)
+    {
+        buffers[i].fill(0);
+        query[i].type = expected[i].type;
+        query[i].pValue = buffers[i].data();
+        query[i].ulValueLen = expected[i].isBool ? sizeof(CK_BBOOL) : sizeof(CK_ULONG);
+    }
+    callOk("C_GetAttributeValue", "the eleven capability attributes at once",
+           [&] { return module->C_GetAttributeValue(session, feature, query.data(),
+                                                    static_cast<CK_ULONG>(count)); });
+    for (size_t i = 0; i < count; ++i)
+    {
+        const CK_ULONG want = expected[i].isBool ? sizeof(CK_BBOOL) : sizeof(CK_ULONG);
+        if (query[i].ulValueLen != want)
+            fail(std::string("hardware feature ") + expected[i].name + " has length " +
+                 std::to_string(query[i].ulValueLen) + " where " + std::to_string(want) +
+                 " is expected");
+        CK_ULONG got = 0;
+        if (expected[i].isBool) got = buffers[i][0];
+        else memcpy(&got, buffers[i].data(), sizeof(CK_ULONG));
+        if (got != expected[i].value)
+            fail(std::string("hardware feature ") + expected[i].name + " is " +
+                 hexNumber(got) + " where " + hexNumber(expected[i].value) + " is expected");
+    }
+
+    // Rutoken Plugin hands eight bytes for every CK_ULONG-valued attribute,
+    // which is more than a Windows CK_ULONG needs. The device answers with the
+    // real length and leaves the rest of the buffer alone; so must we, or the
+    // plugin reads a value that is right only by accident.
+    for (size_t i = 0; i < count; ++i)
+    {
+        if (expected[i].isBool) continue;
+        std::array<CK_BYTE, 8> wide;
+        wide.fill(0xAA);
+        CK_ATTRIBUTE roomy = {expected[i].type, wide.data(),
+                              static_cast<CK_ULONG>(wide.size())};
+        callOk("C_GetAttributeValue", std::string(expected[i].name) + ", buffer of 8",
+               [&] { return module->C_GetAttributeValue(session, feature, &roomy, 1); });
+        if (roomy.ulValueLen != sizeof(CK_ULONG))
+            fail(std::string("hardware feature ") + expected[i].name +
+                 " answered a roomy buffer with length " + std::to_string(roomy.ulValueLen));
+        CK_ULONG got = 0;
+        memcpy(&got, wide.data(), sizeof(CK_ULONG));
+        if (got != expected[i].value)
+            fail(std::string("hardware feature ") + expected[i].name +
+                 " is " + hexNumber(got) + " in a roomy buffer");
+        for (size_t b = sizeof(CK_ULONG); b < wide.size(); ++b)
+            if (wide[b] != 0xAA)
+                fail(std::string("hardware feature ") + expected[i].name +
+                     " wrote past the length it reported");
+    }
+
+    // An attribute the object does not carry must be refused, not invented.
+    CK_BYTE spare = 0;
+    CK_ATTRIBUTE absent = {CKA_LABEL, &spare, sizeof(spare)};
+    check(invoke("C_GetAttributeValue", "hardware feature, CKA_LABEL",
+                 [&] { return module->C_GetAttributeValue(session, feature, &absent, 1); }),
+          CKR_ATTRIBUTE_TYPE_INVALID, "C_GetAttributeValue(attribute the object lacks)");
+
+    // It describes the device; it is not stored data and cannot be changed.
+    CK_BBOOL yes = CK_TRUE;
+    CK_ATTRIBUTE change = {CKA_VENDOR_SUPPORT_FKC2, &yes, sizeof(yes)};
+    check(invoke("C_SetAttributeValue", "hardware feature, CKA_VENDOR_SUPPORT_FKC2",
+                 [&] { return module->C_SetAttributeValue(session, feature, &change, 1); }),
+          CKR_ATTRIBUTE_READ_ONLY, "C_SetAttributeValue(hardware feature)");
+    check(invoke("C_DestroyObject", "hardware feature",
+                 [&] { return module->C_DestroyObject(session, feature); }),
+          CKR_ACTION_PROHIBITED, "C_DestroyObject(hardware feature)");
+
+    closeSession(module, session);
+}
+
 // The Rutoken extension: applications decide the module is a Rutoken by finding
 // C_EX_GetFunctionListExtended, so the symbol, the table and the one entry point
 // that reports anything all have to hold up.
@@ -2466,6 +2590,10 @@ static void verifyRutokenProfile(const fs::path& modulePath)
 
     if ((token.flags & CKF_TOKEN_INITIALIZED) != 0)
     {
+        // Needs a session, and SoftHSM opens none on a token that was never
+        // initialized - so this part only runs where a token exists.
+        verifyRutokenHardwareFeature(module);
+
         CK_SESSION_HANDLE session = CK_INVALID_HANDLE;
         callOk("C_OpenSession", "slotID=0, flags=CKF_SERIAL_SESSION|CKF_RW_SESSION",
                [&] { return module->C_OpenSession(0, CKF_SERIAL_SESSION | CKF_RW_SESSION,
