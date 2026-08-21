@@ -366,10 +366,12 @@ static void dumpTokenName(CK_FUNCTION_LIST_PTR p11, CK_FUNCTION_LIST_EXTENDED_PT
 	}
 	if (rv == CKR_OK && length > 1)
 	{
-		CK_ULONG small = length - 1;
-		rv = ex->C_EX_GetTokenName(session, name, &small);
+		/* Not "small": MSVC's windows.h reaches rpcndr.h, which defines that
+		   as a macro for char, and this stops being a declaration. */
+		CK_ULONG tooShort = length - 1;
+		rv = ex->C_EX_GetTokenName(session, name, &tooShort);
 		printf("%-36s 0x%lx, len %lu\n", "one byte short", (unsigned long) rv,
-		       (unsigned long) small);
+		       (unsigned long) tooShort);
 	}
 
 	p11->C_CloseSession(session);

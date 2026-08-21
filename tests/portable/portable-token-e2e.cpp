@@ -2652,11 +2652,13 @@ static void verifyRutokenExtension(Module& module, const CK_TOKEN_INFO& token)
 
         if (length > 0)
         {
-            CK_ULONG small = length - 1;
+            // Not "small": rpcndr.h, which windows.h drags in, defines that as
+            // a macro for char, and the declaration stops being one.
+            CK_ULONG tooShort = length - 1;
             check(invoke("C_EX_GetTokenName", "pLabel=&buffer one byte short",
-                         [&] { return ex->C_EX_GetTokenName(session, name.data(), &small); }),
+                         [&] { return ex->C_EX_GetTokenName(session, name.data(), &tooShort); }),
                   CKR_BUFFER_TOO_SMALL, "C_EX_GetTokenName(buffer one byte short)");
-            if (small != length)
+            if (tooShort != length)
                 fail("C_EX_GetTokenName does not report the size a short buffer needed");
         }
 
