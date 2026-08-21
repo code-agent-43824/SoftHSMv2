@@ -155,10 +155,29 @@ typedef CK_TOKEN_INFO_EXTENDED CK_PTR CK_TOKEN_INFO_EXTENDED_PTR;
 #define CKA_VENDOR_SUPPORT_CUSTOM_PIN		(CKA_VENDOR_DEFINED | 0x00003007UL)
 #define CKA_VENDOR_CUSTOM_ADMIN_PIN		(CKA_VENDOR_DEFINED | 0x00003008UL)
 #define CKA_VENDOR_CUSTOM_USER_PIN		(CKA_VENDOR_DEFINED | 0x00003009UL)
+#define CKA_VENDOR_SUPPORTED_SECURE_MESSAGING_MODES (CKA_VENDOR_DEFINED | 0x00003002UL)
+#define CKA_VENDOR_SUPPORT_INTERNAL_TRUSTED_CERTS (CKA_VENDOR_DEFINED | 0x0000300AUL)
 #define CKA_VENDOR_SUPPORT_FKC2			(CKA_VENDOR_DEFINED | 0x0000300BUL)
+
+/* The rest of the range the device carries. The published Aktiv headers 2.19
+   and 2.21 name none of them, so neither do we: a sweep of the whole range on
+   the reference device found them present, and they are reproduced by address
+   and value rather than by meaning. 0x80003010 is the one Rutoken Control
+   Center asks for by the name CKA_VENDOR_MODEL_NAME; the device does not have
+   it, and neither do we - see docs/RUTOKEN-EXTENSIONS.md. */
+#define CKA_VENDOR_UNDOCUMENTED_300C		(CKA_VENDOR_DEFINED | 0x0000300CUL)
+#define CKA_VENDOR_UNDOCUMENTED_300D		(CKA_VENDOR_DEFINED | 0x0000300DUL)
+#define CKA_VENDOR_UNDOCUMENTED_300E		(CKA_VENDOR_DEFINED | 0x0000300EUL)
+#define CKA_VENDOR_UNDOCUMENTED_300F		(CKA_VENDOR_DEFINED | 0x0000300FUL)
+#define CKA_VENDOR_UNDOCUMENTED_3011		(CKA_VENDOR_DEFINED | 0x00003011UL)
+#define CKA_VENDOR_UNDOCUMENTED_3012		(CKA_VENDOR_DEFINED | 0x00003012UL)
+
 /* Read by Rutoken Plugin together with the block above; absent from the
    published Aktiv headers 2.19 and 2.21, so the name is ours. */
 #define CKA_VENDOR_UNDOCUMENTED_800D		(CKA_VENDOR_DEFINED | 0x0000800DUL)
+/* Read by Rutoken Control Center. Also unnamed, and unlike its neighbour it is
+   CK_ULONG-valued on the device. */
+#define CKA_VENDOR_UNDOCUMENTED_800E		(CKA_VENDOR_DEFINED | 0x0000800EUL)
 
 /* Per-key vendor attributes. Rutoken Plugin puts CKA_VENDOR_KEY_JOURNAL in
    every C_GenerateKeyPair template, so a module that rejects unknown

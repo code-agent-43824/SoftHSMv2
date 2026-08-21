@@ -2411,6 +2411,8 @@ static void verifyRutokenHardwareFeature(Module& module)
         {CKA_VENDOR_SECURE_MESSAGING_AVAILABLE,     true,  CK_FALSE, "SECURE_MESSAGING_AVAILABLE"},
         {CKA_VENDOR_CURRENT_SECURE_MESSAGING_MODE,  false, SECURE_MESSAGING_MODE_UNSUPPORTED,
                                                            "CURRENT_SECURE_MESSAGING_MODE"},
+        {CKA_VENDOR_SUPPORTED_SECURE_MESSAGING_MODES, false, SECURE_MESSAGING_MODE_UNSUPPORTED,
+                                                           "SUPPORTED_SECURE_MESSAGING_MODES"},
         {CKA_VENDOR_CURRENT_TOKEN_INTERFACE,        false, TOKEN_INTERFACE_USB,
                                                            "CURRENT_TOKEN_INTERFACE"},
         {CKA_VENDOR_SUPPORTED_TOKEN_INTERFACE,      false, 0x21, "SUPPORTED_TOKEN_INTERFACE"},
@@ -2419,8 +2421,17 @@ static void verifyRutokenHardwareFeature(Module& module)
         {CKA_VENDOR_SUPPORT_CUSTOM_PIN,             true,  CK_TRUE, "SUPPORT_CUSTOM_PIN"},
         {CKA_VENDOR_CUSTOM_ADMIN_PIN,               true,  CK_FALSE, "CUSTOM_ADMIN_PIN"},
         {CKA_VENDOR_CUSTOM_USER_PIN,                true,  CK_FALSE, "CUSTOM_USER_PIN"},
+        {CKA_VENDOR_SUPPORT_INTERNAL_TRUSTED_CERTS, true,  CK_TRUE,
+                                                           "SUPPORT_INTERNAL_TRUSTED_CERTS"},
         {CKA_VENDOR_SUPPORT_FKC2,                   true,  CK_TRUE, "SUPPORT_FKC2"},
-        {CKA_VENDOR_UNDOCUMENTED_800D,              true,  CK_FALSE, "0x8000800D"}
+        {CKA_VENDOR_UNDOCUMENTED_300C,              true,  CK_FALSE, "0x8000300C"},
+        {CKA_VENDOR_UNDOCUMENTED_300D,              true,  CK_TRUE,  "0x8000300D"},
+        {CKA_VENDOR_UNDOCUMENTED_300E,              true,  CK_FALSE, "0x8000300E"},
+        {CKA_VENDOR_UNDOCUMENTED_300F,              true,  CK_FALSE, "0x8000300F"},
+        {CKA_VENDOR_UNDOCUMENTED_3011,              true,  CK_FALSE, "0x80003011"},
+        {CKA_VENDOR_UNDOCUMENTED_3012,              true,  CK_TRUE,  "0x80003012"},
+        {CKA_VENDOR_UNDOCUMENTED_800D,              true,  CK_FALSE, "0x8000800D"},
+        {CKA_VENDOR_UNDOCUMENTED_800E,              false, 0, "0x8000800E"}
     };
     const size_t count = sizeof(expected) / sizeof(expected[0]);
 
@@ -2511,6 +2522,17 @@ static void verifyRutokenHardwareFeature(Module& module)
     check(invoke("C_GetAttributeValue", "hardware feature, CKA_LABEL",
                  [&] { return module->C_GetAttributeValue(session, feature, &absent, 1); }),
           CKR_ATTRIBUTE_TYPE_INVALID, "C_GetAttributeValue(attribute the object lacks)");
+
+    // 0x80003010 is the interesting refusal. Rutoken Control Center asks for
+    // it by name and treats the refusal as an error, which reads like a gap on
+    // our side - but a sweep of the whole vendor range on the reference device
+    // found the device refusing it too. Answering would be the deviation, so
+    // the refusal is pinned here rather than left to be helpfully "fixed".
+    CK_BYTE room[64];
+    CK_ATTRIBUTE modelName = {0x80003010UL, room, sizeof(room)};
+    check(invoke("C_GetAttributeValue", "hardware feature, 0x80003010 - absent on the device too",
+                 [&] { return module->C_GetAttributeValue(session, feature, &modelName, 1); }),
+          CKR_ATTRIBUTE_TYPE_INVALID, "C_GetAttributeValue(0x80003010)");
 
     // It describes the device; it is not stored data and cannot be changed.
     CK_BBOOL yes = CK_TRUE;

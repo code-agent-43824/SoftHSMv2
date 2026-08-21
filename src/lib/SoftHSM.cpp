@@ -2547,6 +2547,7 @@ namespace
 		{ CKA_HW_FEATURE_TYPE,				false, CKH_VENDOR_TOKEN_INFO },
 		{ CKA_VENDOR_SECURE_MESSAGING_AVAILABLE,	true,  CK_FALSE },
 		{ CKA_VENDOR_CURRENT_SECURE_MESSAGING_MODE,	false, SECURE_MESSAGING_MODE_UNSUPPORTED },
+		{ CKA_VENDOR_SUPPORTED_SECURE_MESSAGING_MODES,	false, SECURE_MESSAGING_MODE_UNSUPPORTED },
 		{ CKA_VENDOR_CURRENT_TOKEN_INTERFACE,		false, TOKEN_INTERFACE_USB },
 		// The device's raw supported-interface mask. USB is bit 0x01; what
 		// the other bit means is not established, so it is copied as read.
@@ -2556,8 +2557,18 @@ namespace
 		{ CKA_VENDOR_SUPPORT_CUSTOM_PIN,		true,  CK_TRUE },
 		{ CKA_VENDOR_CUSTOM_ADMIN_PIN,			true,  CK_FALSE },
 		{ CKA_VENDOR_CUSTOM_USER_PIN,			true,  CK_FALSE },
+		{ CKA_VENDOR_SUPPORT_INTERNAL_TRUSTED_CERTS,	true,  CK_TRUE },
 		{ CKA_VENDOR_SUPPORT_FKC2,			true,  CK_TRUE },
-		{ CKA_VENDOR_UNDOCUMENTED_800D,			true,  CK_FALSE }
+		{ CKA_VENDOR_UNDOCUMENTED_300C,			true,  CK_FALSE },
+		{ CKA_VENDOR_UNDOCUMENTED_300D,			true,  CK_TRUE },
+		{ CKA_VENDOR_UNDOCUMENTED_300E,			true,  CK_FALSE },
+		{ CKA_VENDOR_UNDOCUMENTED_300F,			true,  CK_FALSE },
+		// 0x80003010 is deliberately absent: the device does not carry it
+		// either, however much Rutoken Control Center wants it.
+		{ CKA_VENDOR_UNDOCUMENTED_3011,			true,  CK_FALSE },
+		{ CKA_VENDOR_UNDOCUMENTED_3012,			true,  CK_TRUE },
+		{ CKA_VENDOR_UNDOCUMENTED_800D,			true,  CK_FALSE },
+		{ CKA_VENDOR_UNDOCUMENTED_800E,			false, 0 }
 	};
 
 	const FakeRutokenFeatureAttribute* findFakeRutokenFeatureAttribute(CK_ATTRIBUTE_TYPE type)

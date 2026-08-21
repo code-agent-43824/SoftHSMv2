@@ -67,11 +67,14 @@ and behavior.
 
 While the profile is enabled the module also answers a search for a
 CKO_HW_FEATURE object whose CKA_HW_FEATURE_TYPE is the vendor value
-CKH_VENDOR_TOKEN_INFO, and reports from it the eleven vendor capability
-attributes 0x80003000 to 0x8000300B and 0x8000800D with the reference device's
-own values. Rutoken-aware software reads the device model and its capabilities
-from that object and asks for all eleven attributes in a single call, so a
-module without it cannot answer at all. The object describes hardware rather
+CKH_VENDOR_TOKEN_INFO, and reports from it the twenty vendor capability
+attributes the reference device carries, with that device's own values and
+lengths. Rutoken-aware software reads the device model and its capabilities
+from that object and asks for many of the attributes in a single call, where
+one it does not get fails the whole call, so a module without the object
+cannot answer at all. Addresses the device itself does not carry are refused
+here too, 0x80003010 among them: reporting one would be a departure from the
+device rather than better compatibility. The object describes hardware rather
 than stored data: it needs no login to read, it is not written to the token
 store, and it can be neither modified nor destroyed.
 
