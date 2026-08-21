@@ -420,6 +420,19 @@ private:
 		CK_BBOOL isOnToken,
 		CK_BBOOL isPrivate
 	);
+#ifdef WITH_GOST_3410_2012_256
+	CK_RV deriveGOSTKEG
+	(
+		CK_SESSION_HANDLE hSession,
+		CK_MECHANISM_PTR pMechanism,
+		CK_OBJECT_HANDLE hBaseKey,
+		CK_ATTRIBUTE_PTR pTemplate,
+		CK_ULONG ulCount,
+		CK_OBJECT_HANDLE_PTR phKey,
+		CK_BBOOL isOnToken,
+		CK_BBOOL isPrivate
+	);
+#endif
 #ifdef WITH_ML_DSA
 	CK_RV generateMLDSA
 	(

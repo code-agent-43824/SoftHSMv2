@@ -65,6 +65,13 @@ certified hardware and cannot emulate USB insertion, firmware defects, timing,
 or every vendor extension. Set the option to false for normal SoftHSM identity
 and behavior.
 
+One vendor mechanism from that list is implemented independently of the
+facade: CKM_GOST_KEG derives a 64-byte CKK_MAGMA_TWIN_KEY from a GOST
+R 34.10-2012/256 private key, the peer's 64-byte public point and a 32-byte
+synchronization value. It accepts the CK_ECDH1_DERIVE_PARAMS call shape used
+by Rutoken Plugin. Key unwrap and symmetric encrypt/decrypt operations are not
+implemented yet.
+
 While the profile is enabled the module also answers a search for a
 CKO_HW_FEATURE object whose CKA_HW_FEATURE_TYPE is the vendor value
 CKH_VENDOR_TOKEN_INFO, and reports from it the twenty vendor capability

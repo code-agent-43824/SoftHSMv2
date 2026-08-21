@@ -601,6 +601,7 @@ static const char* attributeName(CK_ATTRIBUTE_TYPE type)
         case CKA_PRIVATE: return "CKA_PRIVATE";
         case CKA_LABEL: return "CKA_LABEL";
         case CKA_VALUE: return "CKA_VALUE";
+        case CKA_VALUE_LEN: return "CKA_VALUE_LEN";
         case CKA_CERTIFICATE_TYPE: return "CKA_CERTIFICATE_TYPE";
         case CKA_CERTIFICATE_CATEGORY: return "CKA_CERTIFICATE_CATEGORY";
         case CKA_ISSUER: return "CKA_ISSUER";
@@ -610,6 +611,7 @@ static const char* attributeName(CK_ATTRIBUTE_TYPE type)
         case CKA_SENSITIVE: return "CKA_SENSITIVE";
         case CKA_ENCRYPT: return "CKA_ENCRYPT";
         case CKA_DECRYPT: return "CKA_DECRYPT";
+        case CKA_DERIVE: return "CKA_DERIVE";
         case CKA_SIGN: return "CKA_SIGN";
         case CKA_VERIFY: return "CKA_VERIFY";
         case CKA_MODULUS: return "CKA_MODULUS";
@@ -649,6 +651,7 @@ static std::string keyTypeName(CK_KEY_TYPE value)
 {
     if (value == CKK_RSA) return "CKK_RSA";
     if (value == CKK_GOSTR3410) return "CKK_GOSTR3410";
+    if (value == CKK_MAGMA_TWIN_KEY) return "CKK_MAGMA_TWIN_KEY";
     return "CKK_<unknown>(" + hexNumber(value) + ")";
 }
 
@@ -726,6 +729,7 @@ static const char* mechanismName(CK_MECHANISM_TYPE mechanism)
         case CKM_GOSTR3410: return "CKM_GOSTR3410";
         case CKM_GOSTR3410_WITH_GOSTR3411_2012_256: return "CKM_GOSTR3410_WITH_GOSTR3411_2012_256";
         case CKM_GOSTR3411_2012_256: return "CKM_GOSTR3411_2012_256";
+        case CKM_GOST_KEG: return "CKM_GOST_KEG";
         default: return "CKM_<unknown>";
     }
 }
@@ -1568,6 +1572,101 @@ static void verifyGOSTCreateObjectRoundTrip(Module& module, CK_SESSION_HANDLE se
     trace("IMPORT", "GOST exportable generation, C_GetAttributeValue, two-object C_CreateObject import, re-export and signing verified");
 }
 
+static void verifyGOSTKEG(Module& module, CK_SESSION_HANDLE session)
+{
+    // Independent KEG vector for id-tc26-gost-3410-2012-256-paramSetA. The
+    // imported private scalar uses SoftHSM's big-endian storage convention;
+    // the peer point is the PKCS #11 little-endian X || Y representation.
+    Bytes privateValue = bytesFromHex(
+        "0debb7875a83206ad1b4167c0a3e35c3c3a75b0aefebcc01d81a18ff9f8e7d9f");
+    Bytes publicValue = bytesFromHex(
+        "c0ec907466beb2eb5ea1bbd2f6015b710c775b88efca1f558cc81038617f8888"
+        "8884f2471bba3e2468564213f04e71700151747941f6a3032085321e9b3aa602");
+    Bytes ukm = bytesFromHex(
+        "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
+    const Bytes expected = bytesFromHex(
+        "bc2b44f590b48adcea709a0485f7054462a7b3bc738d7cbbf972bd309d671900"
+        "39eb73d0237a338ffa142d810f844206fcd36d6296df6f6f9149749b2db1e62b");
+    Bytes curve = bytesFromHex("06092a8503070102010101");
+    Bytes digestParam = bytesFromHex("06082a85030701010202");
+    CK_OBJECT_CLASS privateClass = CKO_PRIVATE_KEY;
+    CK_KEY_TYPE gostType = CKK_GOSTR3410;
+    CK_BBOOL yes = CK_TRUE;
+    CK_BBOOL no = CK_FALSE;
+    CK_ATTRIBUTE privateTemplate[] = {
+        {CKA_CLASS, &privateClass, sizeof(privateClass)},
+        {CKA_KEY_TYPE, &gostType, sizeof(gostType)},
+        {CKA_TOKEN, &no, sizeof(no)},
+        {CKA_PRIVATE, &yes, sizeof(yes)},
+        {CKA_SENSITIVE, &no, sizeof(no)},
+        {CKA_EXTRACTABLE, &yes, sizeof(yes)},
+        {CKA_DERIVE, &yes, sizeof(yes)},
+        {CKA_VALUE, privateValue.data(), static_cast<CK_ULONG>(privateValue.size())},
+        {CKA_GOSTR3410_PARAMS, curve.data(), static_cast<CK_ULONG>(curve.size())},
+        {CKA_GOSTR3411_PARAMS, digestParam.data(), static_cast<CK_ULONG>(digestParam.size())}
+    };
+    const CK_OBJECT_HANDLE baseKey = createObject(
+        module, session, "GOST KEG private-key vector", privateTemplate,
+        sizeof(privateTemplate) / sizeof(privateTemplate[0]));
+
+    CK_ECDH1_DERIVE_PARAMS params{CKD_NULL, static_cast<CK_ULONG>(ukm.size()), ukm.data(),
+                                  static_cast<CK_ULONG>(publicValue.size()), publicValue.data()};
+    CK_MECHANISM mechanism{CKM_GOST_KEG, &params, sizeof(params)};
+    CK_OBJECT_CLASS secretClass = CKO_SECRET_KEY;
+    CK_KEY_TYPE twinType = CKK_MAGMA_TWIN_KEY;
+    CK_ULONG valueLen = 64;
+    CK_ATTRIBUTE outputTemplate[] = {
+        {CKA_CLASS, &secretClass, sizeof(secretClass)},
+        {CKA_KEY_TYPE, &twinType, sizeof(twinType)},
+        {CKA_TOKEN, &no, sizeof(no)},
+        {CKA_PRIVATE, &no, sizeof(no)},
+        {CKA_SENSITIVE, &no, sizeof(no)},
+        {CKA_EXTRACTABLE, &yes, sizeof(yes)},
+        {CKA_VALUE_LEN, &valueLen, sizeof(valueLen)}
+    };
+    CK_OBJECT_HANDLE twinKey = CK_INVALID_HANDLE;
+    traceTemplate("GOST KEG known-answer output template", outputTemplate,
+                  sizeof(outputTemplate) / sizeof(outputTemplate[0]));
+    callOk("C_DeriveKey", "hSession=" + std::to_string(session) +
+           ", pMechanism={mechanism=CKM_GOST_KEG, params=CK_ECDH1_DERIVE_PARAMS}"
+           ", hBaseKey=" + std::to_string(baseKey) +
+           ", pTemplate=GOST KEG known-answer output template, ulCount=7, phKey=&twinKey",
+           [&] { return module->C_DeriveKey(session, &mechanism, baseKey, outputTemplate,
+                                             sizeof(outputTemplate) / sizeof(outputTemplate[0]), &twinKey); });
+    if (attribute(module, session, twinKey, CKA_VALUE) != expected)
+        fail("CKM_GOST_KEG output does not match the independent known-answer vector");
+    if (ulongAttribute(module, session, twinKey, CKA_KEY_TYPE) != CKK_MAGMA_TWIN_KEY ||
+        ulongAttribute(module, session, twinKey, CKA_VALUE_LEN) != 64)
+        fail("CKM_GOST_KEG created an object with unexpected key type or size");
+    requireBooleanAttribute(module, session, twinKey, CKA_LOCAL, CK_FALSE);
+    destroyObject(module, session, twinKey);
+
+    CK_ATTRIBUTE pluginTemplate[] = {
+        {CKA_CLASS, &secretClass, sizeof(secretClass)},
+        {CKA_KEY_TYPE, &twinType, sizeof(twinType)},
+        {CKA_TOKEN, &no, sizeof(no)}
+    };
+    twinKey = CK_INVALID_HANDLE;
+    callOk("C_DeriveKey", "plugin-shaped CKM_GOST_KEG call; output template has class, key type and token only",
+           [&] { return module->C_DeriveKey(session, &mechanism, baseKey, pluginTemplate,
+                                             sizeof(pluginTemplate) / sizeof(pluginTemplate[0]), &twinKey); });
+    if (ulongAttribute(module, session, twinKey, CKA_KEY_TYPE) != CKK_MAGMA_TWIN_KEY ||
+        ulongAttribute(module, session, twinKey, CKA_VALUE_LEN) != 64)
+        fail("plugin-shaped CKM_GOST_KEG call created an invalid twin key");
+    destroyObject(module, session, twinKey);
+
+    params.kdf = CKD_SHA1_KDF;
+    twinKey = CK_INVALID_HANDLE;
+    check(invoke("C_DeriveKey", "CKM_GOST_KEG with unsupported kdf",
+                 [&] { return module->C_DeriveKey(session, &mechanism, baseKey, pluginTemplate,
+                                                   sizeof(pluginTemplate) / sizeof(pluginTemplate[0]), &twinKey); }),
+          CKR_MECHANISM_PARAM_INVALID, "C_DeriveKey(CKM_GOST_KEG unsupported kdf)");
+    if (twinKey != CK_INVALID_HANDLE) fail("failed CKM_GOST_KEG call returned a key handle");
+
+    destroyObject(module, session, baseKey);
+    trace("REFERENCE", "CKM_GOST_KEG matched the independent 64-byte Magma twin-key vector and plugin call shape");
+}
+
 static void verifyRSACreateObjectRoundTrip(Module& module, CK_SESSION_HANDLE session)
 {
     CK_OBJECT_CLASS publicClass = CKO_PUBLIC_KEY;
@@ -1937,6 +2036,7 @@ static void prepare(const fs::path& modulePath, const fs::path& work)
     if (requireGOSTImportExport)
     {
         verifyGOSTCreateObjectRoundTrip(module, session);
+        verifyGOSTKEG(module, session);
     }
     else
     {
@@ -2873,7 +2973,7 @@ static void verifyRutokenProfile(const fs::path& modulePath)
          CKF_HW | CKF_DERIVE},
         {0xD432102AUL, 0, 0,
          CKF_HW | CKF_DERIVE},
-        {0xD4321039UL, 0, 0,
+        {CKM_GOST_KEG, 0, 0,
          CKF_HW | CKF_DERIVE},
         {CKM_ECDH1_DERIVE, 255, 512,
          CKF_HW | CKF_DERIVE | CKF_EC_F_P | CKF_EC_NAMEDCURVE | CKF_EC_UNCOMPRESS},

@@ -64,6 +64,7 @@
 #include "GOSTPublicKey.h"
 #include "GOSTPrivateKey.h"
 #ifdef WITH_GOST_3410_2012_256
+#include "BotanGOST2012KEG.h"
 #include "BotanGOST2012KeyGenerator.h"
 #include "BotanGOST2012Signer.h"
 #endif
@@ -298,6 +299,9 @@ static CK_RV newP11Object(CK_OBJECT_CLASS objClass, CK_KEY_TYPE keyType, CK_CERT
 			break;
 		case CKO_SECRET_KEY:
 			if ((keyType == CKK_GENERIC_SECRET) ||
+#ifdef WITH_GOST_3410_2012_256
+			    (keyType == CKK_MAGMA_TWIN_KEY) ||
+#endif
 			    (keyType == CKK_MD5_HMAC) ||
 			    (keyType == CKK_SHA_1_HMAC) ||
 			    (keyType == CKK_SHA224_HMAC) ||
@@ -1274,6 +1278,9 @@ void SoftHSM::prepareSupportedMechanisms(std::map<std::string, CK_MECHANISM_TYPE
 	t["CKM_GOSTR3410"] = CKM_GOSTR3410;
 	t["CKM_GOSTR3410_WITH_GOSTR3411_2012_256"] = CKM_GOSTR3410_WITH_GOSTR3411_2012_256;
 #endif
+#ifdef WITH_GOST_3410_2012_256
+	t["CKM_GOST_KEG"] = CKM_GOST_KEG;
+#endif
 #ifdef WITH_GOST_3411_2012
 	t["CKM_GOSTR3411_2012_256"] = CKM_GOSTR3411_2012_256;
 #endif
@@ -1431,7 +1438,7 @@ namespace
 		{ 0xD4321028UL, 0, 0, CKF_HW | CKF_DERIVE },
 		{ CKM_CONCATENATE_BASE_AND_KEY, 0, 0, CKF_HW | CKF_DERIVE },
 		{ 0xD432102AUL, 0, 0, CKF_HW | CKF_DERIVE },
-		{ 0xD4321039UL, 0, 0, CKF_HW | CKF_DERIVE },
+		{ CKM_GOST_KEG, 0, 0, CKF_HW | CKF_DERIVE },
 		{ CKM_ECDH1_DERIVE, 255, 512, CKF_HW | CKF_DERIVE | FAKE_RUTOKEN_EC },
 		{ 0xD432102BUL, 0, 0, CKF_HW | CKF_WRAP | CKF_UNWRAP },
 		{ 0xD432102CUL, 0, 0, CKF_HW | CKF_WRAP | CKF_UNWRAP },
@@ -1970,6 +1977,13 @@ CK_RV SoftHSM::C_GetMechanismInfo(CK_SLOT_ID slotID, CK_MECHANISM_TYPE type, CK_
 			pInfo->ulMinKeySize = 256;
 			pInfo->ulMaxKeySize = 256;
 			pInfo->flags = CKF_SIGN;
+			break;
+#endif
+#ifdef WITH_GOST_3410_2012_256
+		case CKM_GOST_KEG:
+			pInfo->ulMinKeySize = 0;
+			pInfo->ulMaxKeySize = 0;
+			pInfo->flags = CKF_DERIVE;
 			break;
 #endif
 #ifdef WITH_GOST_3411_2012
@@ -8926,10 +8940,13 @@ CK_RV SoftHSM::C_DeriveKey
 	Session* session = (Session*)handleManager->getSession(hSession);
 	if (session == NULL) return CKR_SESSION_HANDLE_INVALID;
 
-	// Check the mechanism, only accept DH and ECDH derive
+	// Check the mechanism, only accept implemented derive operations.
 	switch (pMechanism->mechanism)
 	{
 		case CKM_DH_PKCS_DERIVE:
+#ifdef WITH_GOST_3410_2012_256
+		case CKM_GOST_KEG:
+#endif
 #if defined(WITH_ECC) || defined(WITH_EDDSA)
 		case CKM_ECDH1_DERIVE:
 #endif
@@ -9008,7 +9025,11 @@ CK_RV SoftHSM::C_DeriveKey
 	    keyType != CKK_DES &&
 	    keyType != CKK_DES2 &&
 	    keyType != CKK_DES3 &&
-	    keyType != CKK_AES)
+	    keyType != CKK_AES
+#ifdef WITH_GOST_3410_2012_256
+	    && keyType != CKK_MAGMA_TWIN_KEY
+#endif
+	   )
 		return CKR_TEMPLATE_INCONSISTENT;
 
 	// Check authorization
@@ -9034,6 +9055,19 @@ CK_RV SoftHSM::C_DeriveKey
 
 		return this->deriveDH(hSession, pMechanism, hBaseKey, pTemplate, ulCount, phKey, keyType, isOnToken, isPrivate);
 	}
+
+#ifdef WITH_GOST_3410_2012_256
+	if (pMechanism->mechanism == CKM_GOST_KEG)
+	{
+		if (keyType != CKK_MAGMA_TWIN_KEY)
+			return CKR_TEMPLATE_INCONSISTENT;
+		if (key->getUnsignedLongValue(CKA_CLASS, CKO_VENDOR_DEFINED) != CKO_PRIVATE_KEY ||
+		    key->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED) != CKK_GOSTR3410)
+			return CKR_KEY_TYPE_INCONSISTENT;
+		return this->deriveGOSTKEG(hSession, pMechanism, hBaseKey, pTemplate,
+		                           ulCount, phKey, isOnToken, isPrivate);
+	}
+#endif
 
 #if defined(WITH_ECC) || defined(WITH_EDDSA)
 	// Derive ECDH secret
@@ -13379,6 +13413,145 @@ CK_RV SoftHSM::generateGOST2012
 			if (object) object->destroyObject();
 			*phPublicKey = CK_INVALID_HANDLE;
 		}
+	}
+	return rv;
+}
+#endif
+
+#ifdef WITH_GOST_3410_2012_256
+// Derive a Magma twin key with Rutoken's KEG construction.
+CK_RV SoftHSM::deriveGOSTKEG
+(CK_SESSION_HANDLE hSession,
+	CK_MECHANISM_PTR pMechanism,
+	CK_OBJECT_HANDLE hBaseKey,
+	CK_ATTRIBUTE_PTR pTemplate,
+	CK_ULONG ulCount,
+	CK_OBJECT_HANDLE_PTR phKey,
+	CK_BBOOL isOnToken,
+	CK_BBOOL isPrivate)
+{
+	*phKey = CK_INVALID_HANDLE;
+	if (pMechanism->pParameter == NULL_PTR ||
+	    pMechanism->ulParameterLen != sizeof(CK_ECDH1_DERIVE_PARAMS))
+		return CKR_MECHANISM_PARAM_INVALID;
+
+	CK_ECDH1_DERIVE_PARAMS_PTR params =
+		CK_ECDH1_DERIVE_PARAMS_PTR(pMechanism->pParameter);
+	if (params->kdf != CKD_NULL ||
+	    params->ulSharedDataLen != 32 || params->pSharedData == NULL_PTR ||
+	    params->ulPublicDataLen != 64 || params->pPublicData == NULL_PTR)
+		return CKR_MECHANISM_PARAM_INVALID;
+
+	for (CK_ULONG i = 0; i < ulCount; ++i)
+	{
+		if (pTemplate[i].type == CKA_VALUE)
+			return CKR_ATTRIBUTE_READ_ONLY;
+		if (pTemplate[i].type == CKA_VALUE_LEN)
+		{
+			if (pTemplate[i].pValue == NULL_PTR ||
+			    pTemplate[i].ulValueLen != sizeof(CK_ULONG))
+				return CKR_ATTRIBUTE_VALUE_INVALID;
+			CK_ULONG requestedValueLen = 0;
+			std::memcpy(&requestedValueLen, pTemplate[i].pValue,
+			            sizeof(requestedValueLen));
+			if (requestedValueLen != 64)
+				return CKR_ATTRIBUTE_VALUE_INVALID;
+		}
+	}
+
+	Session* session = (Session*)handleManager->getSession(hSession);
+	if (session == NULL) return CKR_SESSION_HANDLE_INVALID;
+	Token* token = session->getToken();
+	if (token == NULL) return CKR_GENERAL_ERROR;
+	OSObject* baseKey = (OSObject*)handleManager->getObject(hBaseKey);
+	if (baseKey == NULL || !baseKey->isValid()) return CKR_KEY_HANDLE_INVALID;
+
+	BotanGOST2012PrivateKey privateKey;
+	CK_RV rv = getGOSTPrivateKey(&privateKey, token, baseKey);
+	if (rv != CKR_OK) return rv;
+	ByteString publicValue(params->pPublicData, params->ulPublicDataLen);
+	ByteString ukmSource(params->pSharedData, params->ulSharedDataLen);
+	ByteString twinKey;
+	if (!BotanGOST2012KEG::derive(privateKey.getEC(), privateKey.getD(),
+	                              publicValue, ukmSource, twinKey))
+	{
+		privateKey.setD(ByteString());
+		return CKR_MECHANISM_PARAM_INVALID;
+	}
+	privateKey.setD(ByteString());
+
+	const CK_ULONG maxAttribs = 32;
+	CK_OBJECT_CLASS objClass = CKO_SECRET_KEY;
+	CK_KEY_TYPE keyType = CKK_MAGMA_TWIN_KEY;
+	CK_ULONG valueLen = 64;
+	CK_ATTRIBUTE secretAttribs[maxAttribs] = {
+		{ CKA_CLASS, &objClass, sizeof(objClass) },
+		{ CKA_TOKEN, &isOnToken, sizeof(isOnToken) },
+		{ CKA_PRIVATE, &isPrivate, sizeof(isPrivate) },
+		{ CKA_KEY_TYPE, &keyType, sizeof(keyType) },
+		{ CKA_VALUE_LEN, &valueLen, sizeof(valueLen) },
+	};
+	CK_ULONG secretAttribsCount = 5;
+	if (ulCount > maxAttribs - secretAttribsCount)
+		rv = CKR_TEMPLATE_INCONSISTENT;
+	for (CK_ULONG i = 0; i < ulCount && rv == CKR_OK; ++i)
+	{
+		switch (pTemplate[i].type)
+		{
+			case CKA_CLASS:
+			case CKA_TOKEN:
+			case CKA_PRIVATE:
+			case CKA_KEY_TYPE:
+			case CKA_VALUE_LEN:
+				continue;
+			default:
+				secretAttribs[secretAttribsCount++] = pTemplate[i];
+		}
+	}
+
+	if (rv == CKR_OK)
+		rv = this->CreateObject(hSession, secretAttribs, secretAttribsCount,
+		                        phKey, OBJECT_OP_DERIVE);
+	if (rv == CKR_OK)
+	{
+		OSObject* object = (OSObject*)handleManager->getObject(*phKey);
+		if (object == NULL_PTR || !object->isValid() || !object->startTransaction())
+			rv = CKR_FUNCTION_FAILED;
+		else
+		{
+			bool ok = object->setAttribute(CKA_LOCAL, false);
+			const bool alwaysSensitive =
+				baseKey->getBooleanValue(CKA_ALWAYS_SENSITIVE, false) &&
+				object->getBooleanValue(CKA_SENSITIVE, false);
+			const bool neverExtractable =
+				baseKey->getBooleanValue(CKA_NEVER_EXTRACTABLE, true) &&
+				!object->getBooleanValue(CKA_EXTRACTABLE, false);
+			ok = ok && object->setAttribute(CKA_ALWAYS_SENSITIVE, alwaysSensitive);
+			ok = ok && object->setAttribute(CKA_NEVER_EXTRACTABLE, neverExtractable);
+
+			ByteString storedValue;
+			if (isPrivate)
+				ok = ok && token->encrypt(twinKey, storedValue);
+			else
+				storedValue = twinKey;
+			ok = ok && object->setAttribute(CKA_VALUE, storedValue);
+			storedValue.wipe();
+			ok = ok && object->setAttribute(CKA_VALUE_LEN, valueLen);
+			if (ok)
+				ok = object->commitTransaction();
+			else
+				object->abortTransaction();
+			if (!ok) rv = CKR_FUNCTION_FAILED;
+		}
+	}
+	twinKey.wipe();
+
+	if (rv != CKR_OK && *phKey != CK_INVALID_HANDLE)
+	{
+		OSObject* object = (OSObject*)handleManager->getObject(*phKey);
+		handleManager->destroyObject(*phKey);
+		if (object) object->destroyObject();
+		*phKey = CK_INVALID_HANDLE;
 	}
 	return rv;
 }
