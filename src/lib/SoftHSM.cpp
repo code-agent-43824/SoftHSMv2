@@ -9031,6 +9031,10 @@ CK_RV SoftHSM::C_DeriveKey
 #endif
 	   )
 		return CKR_TEMPLATE_INCONSISTENT;
+#ifdef WITH_GOST_3410_2012_256
+	if (keyType == CKK_MAGMA_TWIN_KEY && pMechanism->mechanism != CKM_GOST_KEG)
+		return CKR_TEMPLATE_INCONSISTENT;
+#endif
 
 	// Check authorization
 	rv = haveWrite(session->getState(), isOnToken, isPrivate);
