@@ -1653,6 +1653,14 @@ static void verifyGOSTKEG(Module& module, CK_SESSION_HANDLE session)
     if (ulongAttribute(module, session, twinKey, CKA_KEY_TYPE) != CKK_MAGMA_TWIN_KEY ||
         ulongAttribute(module, session, twinKey, CKA_VALUE_LEN) != 64)
         fail("plugin-shaped CKM_GOST_KEG call created an invalid twin key");
+    // Creating the key is not the point - the caller derives it in order to
+    // read it, and this template says nothing about sensitivity, so the value
+    // has to come back on the module's defaults alone. Checking only the type
+    // and the length here let the owner's finding through: the key was built
+    // correctly and was still unreadable.
+    if (attribute(module, session, twinKey, CKA_VALUE) != expected)
+        fail("a plugin-shaped CKM_GOST_KEG key does not read back as the same "
+             "64 bytes the explicit template produced");
     destroyObject(module, session, twinKey);
 
     params.kdf = CKD_SHA1_KDF;
@@ -2471,6 +2479,71 @@ static CK_SLOT_ID verifySlotEvents(Module& module)
     return spare;
 }
 
+// A key whose template says nothing about sensitivity must come back readable.
+// Software that derives a session key names only its class, type and lifetime
+// and then reads the value straight out, so a module that defaults to
+// unreadable hands it CKR_ATTRIBUTE_SENSITIVE and the operation dies there.
+// The pair of checks matters as much as the default: asking for a
+// non-extractable key must still produce one, or the default has stopped being
+// a default and become the only behaviour.
+static void verifySilentTemplateKeyIsReadable(Module& module, CK_SESSION_HANDLE session)
+{
+    CK_OBJECT_CLASS secretClass = CKO_SECRET_KEY;
+    CK_KEY_TYPE keyType = CKK_AES;
+    CK_BBOOL no = CK_FALSE;
+    CK_ULONG valueLen = 32;
+    CK_MECHANISM mechanism{CKM_AES_KEY_GEN, nullptr, 0};
+
+    CK_ATTRIBUTE silent[] = {
+        {CKA_CLASS, &secretClass, sizeof(secretClass)},
+        {CKA_KEY_TYPE, &keyType, sizeof(keyType)},
+        {CKA_TOKEN, &no, sizeof(no)},
+        {CKA_VALUE_LEN, &valueLen, sizeof(valueLen)}
+    };
+    CK_OBJECT_HANDLE key = CK_INVALID_HANDLE;
+    traceTemplate("session key template that says nothing about sensitivity",
+                  silent, 4);
+    callOk("C_GenerateKey", "pTemplate=silent about CKA_SENSITIVE/CKA_EXTRACTABLE",
+           [&] { return module->C_GenerateKey(session, &mechanism, silent, 4, &key); });
+
+    requireBooleanAttribute(module, session, key, CKA_SENSITIVE, CK_FALSE);
+    requireBooleanAttribute(module, session, key, CKA_EXTRACTABLE, CK_TRUE);
+    requireBooleanAttribute(module, session, key, CKA_NEVER_EXTRACTABLE, CK_FALSE);
+
+    std::vector<CK_BYTE> value(valueLen + 16, 0);
+    CK_ATTRIBUTE read = {CKA_VALUE, value.data(), static_cast<CK_ULONG>(value.size())};
+    callOk("C_GetAttributeValue", "CKA_VALUE of the silently generated key",
+           [&] { return module->C_GetAttributeValue(session, key, &read, 1); });
+    if (read.ulValueLen != valueLen)
+        fail("a key generated from a silent template returned " +
+             std::to_string(read.ulValueLen) + " bytes where " +
+             std::to_string(valueLen) + " were generated");
+
+    // The default is a default, not a policy: a template that asks for an
+    // unreadable key still gets one, and it cannot be talked back out of it.
+    CK_ATTRIBUTE guarded[] = {
+        {CKA_CLASS, &secretClass, sizeof(secretClass)},
+        {CKA_KEY_TYPE, &keyType, sizeof(keyType)},
+        {CKA_TOKEN, &no, sizeof(no)},
+        {CKA_VALUE_LEN, &valueLen, sizeof(valueLen)},
+        {CKA_EXTRACTABLE, &no, sizeof(no)}
+    };
+    CK_OBJECT_HANDLE sealed = CK_INVALID_HANDLE;
+    callOk("C_GenerateKey", "pTemplate=CKA_EXTRACTABLE=CK_FALSE",
+           [&] { return module->C_GenerateKey(session, &mechanism, guarded, 5, &sealed); });
+    requireBooleanAttribute(module, session, sealed, CKA_EXTRACTABLE, CK_FALSE);
+    CK_ATTRIBUTE denied = {CKA_VALUE, value.data(), static_cast<CK_ULONG>(value.size())};
+    check(invoke("C_GetAttributeValue", "CKA_VALUE of a key asked to be unextractable",
+                 [&] { return module->C_GetAttributeValue(session, sealed, &denied, 1); }),
+          CKR_ATTRIBUTE_SENSITIVE, "C_GetAttributeValue(CKA_EXTRACTABLE=CK_FALSE key)");
+
+    CK_BBOOL yes = CK_TRUE;
+    CK_ATTRIBUTE reopen = {CKA_EXTRACTABLE, &yes, sizeof(yes)};
+    check(invoke("C_SetAttributeValue", "turn CKA_EXTRACTABLE back on",
+                 [&] { return module->C_SetAttributeValue(session, sealed, &reopen, 1); }),
+          CKR_ATTRIBUTE_READ_ONLY, "C_SetAttributeValue(CKA_EXTRACTABLE false to true)");
+}
+
 // Behaviour that has nothing to do with the Rutoken profile and has to hold
 // with it switched off. Run against a token this mode initializes itself.
 static void verifyCoreBehaviour(const fs::path& modulePath)
@@ -2496,6 +2569,7 @@ static void verifyCoreBehaviour(const fs::path& modulePath)
     login(module, session, CKU_USER, userPin);
 
     verifyPrivateObjectDates(module, session);
+    verifySilentTemplateKeyIsReadable(module, session);
 
     closeSession(module, session);
     std::cout << "core PKCS #11 behaviour verified\n";

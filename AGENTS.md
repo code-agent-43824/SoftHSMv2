@@ -321,6 +321,19 @@ and requires the OpenSSL backend. GOST 2012 is gated by
   a virtual reader answering APDUs, which is a separate product. The library is
   for other programs. Work its start-up cycle prompted was still done, because
   other software asks the same things.
+- **A key template that says nothing produces a readable key.**
+  `CKA_EXTRACTABLE` defaults to true and `CKA_SENSITIVE` to false, for every
+  key and in both profiles. *Reason:* the owner's decision of 21 August 2026.
+  Software written for a Rutoken derives a session key from a template naming
+  only class, type and lifetime and reads the value straight back; upstream's
+  `CKA_EXTRACTABLE = false` made that fail. The owner chose this scope over the
+  two narrower ones after being told the cost: a private key from a silent
+  template now surrenders its material, which a physical token would not do.
+  This is a deliberate departure from the device, and the only one — it governs
+  what the module *stores*, not what it *reports* about itself. A template that
+  asks for a sensitive or non-extractable key still gets one, and cannot be
+  talked back out of it; `verifySilentTemplateKeyIsReadable` in the
+  `core-behaviour` gate holds both halves.
 - **The device is the reference even when it refuses.** An attribute the
   reference Rutoken does not carry is not carried here either, however plainly
   an application asks for it — `0x80003010`, `0x80000009` and `0x80003304` are

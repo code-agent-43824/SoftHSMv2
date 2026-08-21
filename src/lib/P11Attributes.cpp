@@ -1802,7 +1802,20 @@ CK_RV P11AttrSensitive::updateAttr(Token* /*token*/, bool /*isPrivate*/, CK_VOID
 // Set default value
 bool P11AttrExtractable::setDefault()
 {
-	OSAttribute attr(false);
+	// Default to true, so a key whose template says nothing about this can be
+	// read back. Upstream defaulted to false, which - together with the
+	// CKA_SENSITIVE check in P11Attribute::retrieve - made the value of such a
+	// key unreadable. Software written for a Rutoken relies on the opposite:
+	// it derives a session key with a template naming only CKA_CLASS,
+	// CKA_KEY_TYPE and CKA_TOKEN, then reads the value straight back.
+	//
+	// This is the owner's decision of 21 August 2026, taken for the fork as a
+	// whole rather than the compatibility profile, and knowingly wider than
+	// the derived keys that prompted it: a private key generated from a silent
+	// template is now readable too, which a physical Rutoken would not allow.
+	// Anything that wants the old behaviour asks for it - CKA_EXTRACTABLE is
+	// accepted in a creation template, and once false it cannot go back.
+	OSAttribute attr(true);
 	return osobject->setAttribute(type, attr);
 }
 

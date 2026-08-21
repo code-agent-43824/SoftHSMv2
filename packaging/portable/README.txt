@@ -144,10 +144,28 @@ MAC, key agreement, CMS construction, and other GOST mechanisms are not enabled.
 
 RSA and GOST public/private key objects can be imported separately with the
 standard C_CreateObject function. Private RSA components and the GOST private
-scalar can be returned by C_GetAttributeValue only for keys created with
-CKA_SENSITIVE=CK_FALSE and CKA_EXTRACTABLE=CK_TRUE. Non-extractable or
-sensitive private key material remains unavailable. Public key components are
-readable as required by the PKCS #11 object model.
+scalar can be returned by C_GetAttributeValue for keys that are not sensitive
+and are extractable. Public key components are readable as required by the
+PKCS #11 object model.
+
+Read this next paragraph before storing anything you care about.
+
+A key whose template says nothing about CKA_SENSITIVE or CKA_EXTRACTABLE is
+readable: this build defaults CKA_SENSITIVE to false and CKA_EXTRACTABLE to
+true, so its private material can be read back with C_GetAttributeValue and it
+can be wrapped. Upstream SoftHSM defaults CKA_EXTRACTABLE to false, and a
+physical token would not surrender private key material at all. The default was
+changed deliberately, because software written for a Rutoken derives a session
+key with a template naming only its class, type and lifetime and then reads the
+value straight back, and the earlier default made that fail. It applies to
+every key, private keys included, and whether or not the Rutoken compatibility
+profile is enabled.
+
+A template that asks for CKA_SENSITIVE=CK_TRUE or CKA_EXTRACTABLE=CK_FALSE
+still gets exactly that, and neither can be turned back afterwards, so any
+caller that needs unreadable keys can have them by saying so. Only silence has
+changed meaning. If you need silence to keep meaning "unreadable", this build
+is not for you.
 
 A separately downloadable `softhsm-testkit-<platform>.zip` on the same release
 page contains this module and configuration together with the exact precompiled

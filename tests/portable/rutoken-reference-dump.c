@@ -23,6 +23,10 @@
  *   Windows (Developer Command Prompt):
  *     cl /I src\lib\pkcs11 tests\portable\rutoken-reference-dump.c
  *     rutoken-reference-dump.exe C:\Windows\System32\rtPKCS11ECP.dll
+ *
+ * A user PIN may follow the library path. It is optional, and only used to log
+ * in and read what attribute defaults the device gives the keys already on it;
+ * the tool still writes nothing.
  */
 
 #include <stdio.h>
@@ -157,12 +161,14 @@ static void printValue(const CK_BYTE* value, CK_ULONG length)
 	if (printable) printf("  '%.*s'", (int) length, (const char*) value);
 }
 
-/* The whole vendor attribute range of the hardware-feature object, swept one
-   attribute at a time with a size query first. Rutoken Control Center reads
-   0x80003010 and 0x8000800E, which the named ones do not cover; asking
-   for all of them separately means a missing one cannot hide the rest, which
-   is what happens when they go in a single call. */
-static const struct { CK_ATTRIBUTE_TYPE type; const char* name; } kFeatureSweep[] = {
+/* Names for the addresses that have one. The sweep itself does not use this
+   list to decide what to ask - see sweepHardwareFeature, which walks two whole
+   ranges. That separation is deliberate: the first version of this tool swept
+   0x80003000..0x80003012 in full but listed only the two 0x8000800x addresses
+   already known, and so never asked about 0x8000800C or 0x8000800F, which
+   software turned out to read. A hand-written list of what to ask can only
+   find what someone already suspected. */
+static const struct { CK_ATTRIBUTE_TYPE type; const char* name; } kFeatureNames[] = {
 	{ 0x80003000UL, "SECURE_MESSAGING_AVAILABLE" },
 	{ 0x80003001UL, "CURRENT_SECURE_MESSAGING_MODE" },
 	{ 0x80003002UL, "SUPPORTED_SECURE_MESSAGING_MODES" },
@@ -175,73 +181,97 @@ static const struct { CK_ATTRIBUTE_TYPE type; const char* name; } kFeatureSweep[
 	{ 0x80003009UL, "CUSTOM_USER_PIN" },
 	{ 0x8000300AUL, "SUPPORT_INTERNAL_TRUSTED_CERTS" },
 	{ 0x8000300BUL, "SUPPORT_FKC2" },
-	{ 0x8000300CUL, "(unnamed)" },
-	{ 0x8000300DUL, "(unnamed)" },
-	{ 0x8000300EUL, "(unnamed)" },
-	{ 0x8000300FUL, "(unnamed)" },
-	{ 0x80003010UL, "MODEL_NAME" },
-	{ 0x80003011UL, "(unnamed)" },
-	{ 0x80003012UL, "(unnamed)" },
-	{ 0x8000800DUL, "(unnamed)" },
-	{ 0x8000800EUL, "(unnamed, read by Control Center)" }
+	{ 0x80003010UL, "MODEL_NAME (Control Center)" },
+	{ 0x80003304UL, "FINGERPRINT_CONVOLUTIONS_ID" },
+	{ 0x8000800EUL, "(unnamed, Control Center)" }
 };
 
-static void sweepOne(CK_FUNCTION_LIST_PTR p11, CK_SESSION_HANDLE session,
-		     CK_OBJECT_HANDLE object, CK_ATTRIBUTE_TYPE type, const char* name)
+/* NULL when the address has no name we know. */
+static const char* featureName(CK_ATTRIBUTE_TYPE type)
+{
+	size_t i;
+	for (i = 0; i < sizeof(kFeatureNames) / sizeof(kFeatureNames[0]); ++i)
+		if (kFeatureNames[i].type == type) return kFeatureNames[i].name;
+	return NULL;
+}
+
+/* One address. Returns nonzero when the attribute is present. An absent
+   address is only reported when it has a name or the caller asks for all of
+   them, so sweeping two ranges of thirty-two stays readable. */
+static int sweepOne(CK_FUNCTION_LIST_PTR p11, CK_SESSION_HANDLE session,
+		    CK_OBJECT_HANDLE object, CK_ATTRIBUTE_TYPE type,
+		    const char* name, int reportAbsent)
 {
 	CK_BYTE value[512];
 	CK_ATTRIBUTE query;
+	CK_RV sizeRv;
 	CK_RV rv;
 
-	printf("  0x%08lx %-34s ", (unsigned long) type, name);
+	if (name == NULL) name = "(unnamed)";
 
 	query.type = type;
 	query.pValue = NULL_PTR;
 	query.ulValueLen = 0;
-	rv = p11->C_GetAttributeValue(session, object, &query, 1);
-	if (rv != CKR_OK || query.ulValueLen == (CK_ULONG) -1)
+	sizeRv = p11->C_GetAttributeValue(session, object, &query, 1);
+
+	if (sizeRv == CKR_OK && query.ulValueLen != (CK_ULONG) -1)
 	{
-		/* A library that dislikes the size-query form still owes an answer to
-		   a buffer that is big enough, so ask once more before believing the
-		   attribute is absent. */
-		const CK_RV sizeRv = rv;
+		if (query.ulValueLen > sizeof(value))
+		{
+			printf("  0x%08lx %-34s len %lu, too long to print\n",
+			       (unsigned long) type, name, (unsigned long) query.ulValueLen);
+			return 1;
+		}
 		memset(value, 0, sizeof(value));
 		query.pValue = value;
-		query.ulValueLen = sizeof(value);
 		rv = p11->C_GetAttributeValue(session, object, &query, 1);
-		if (rv != CKR_OK || query.ulValueLen == (CK_ULONG) -1)
+		printf("  0x%08lx %-34s ", (unsigned long) type, name);
+		if (rv != CKR_OK)
 		{
-			printf("absent (size query 0x%lx, direct read 0x%lx)\n",
-			       (unsigned long) sizeRv, (unsigned long) rv);
-			return;
+			printf("len %lu, read 0x%lx\n",
+			       (unsigned long) query.ulValueLen, (unsigned long) rv);
+			return 1;
 		}
 		printf("len %lu, ", (unsigned long) query.ulValueLen);
 		printValue(value, query.ulValueLen);
-		printf("   (size query refused with 0x%lx)\n", (unsigned long) sizeRv);
-		return;
-	}
-	if (query.ulValueLen > sizeof(value))
-	{
-		printf("len %lu, too long to print\n", (unsigned long) query.ulValueLen);
-		return;
+		printf("\n");
+		return 1;
 	}
 
+	/* A library that dislikes the size-query form still owes an answer to a
+	   buffer that is big enough, so ask once more before believing it absent. */
 	memset(value, 0, sizeof(value));
 	query.pValue = value;
+	query.ulValueLen = sizeof(value);
 	rv = p11->C_GetAttributeValue(session, object, &query, 1);
-	if (rv != CKR_OK)
+	if (rv == CKR_OK && query.ulValueLen != (CK_ULONG) -1)
 	{
-		printf("len %lu, read 0x%lx\n", (unsigned long) query.ulValueLen, (unsigned long) rv);
-		return;
+		printf("  0x%08lx %-34s len %lu, ", (unsigned long) type, name,
+		       (unsigned long) query.ulValueLen);
+		printValue(value, query.ulValueLen);
+		printf("   (size query refused with 0x%lx)\n", (unsigned long) sizeRv);
+		return 1;
 	}
-	printf("len %lu, ", (unsigned long) query.ulValueLen);
-	printValue(value, query.ulValueLen);
-	printf("\n");
+
+	if (reportAbsent)
+		printf("  0x%08lx %-34s absent (size query 0x%lx, direct read 0x%lx)\n",
+		       (unsigned long) type, name, (unsigned long) sizeRv, (unsigned long) rv);
+	return 0;
 }
 
 static void sweepHardwareFeature(CK_FUNCTION_LIST_PTR p11, CK_SLOT_ID slot)
 {
-	const CK_ULONG count = sizeof(kFeatureSweep) / sizeof(kFeatureSweep[0]);
+	/* Two whole ranges, not a list of suspects. 0x80003000 holds the
+	   documented capability block; 0x80008000 holds the undocumented
+	   neighbours of 0x8000800D, and the first version of this tool missed
+	   0x8000800C and 0x8000800F by asking only for what it already knew. */
+	static const struct { CK_ATTRIBUTE_TYPE first, last; } ranges[] = {
+		{ 0x80003000UL, 0x8000301FUL },
+		{ 0x80008000UL, 0x8000801FUL }
+	};
+	const size_t rangeCount = sizeof(ranges) / sizeof(ranges[0]);
+	size_t r;
+	CK_ATTRIBUTE_TYPE type;
 	CK_OBJECT_CLASS featureClass = CKO_HW_FEATURE;
 	CK_HW_FEATURE_TYPE featureType = CKH_VENDOR_TOKEN_INFO;
 	CK_ATTRIBUTE search[2];
@@ -249,7 +279,6 @@ static void sweepHardwareFeature(CK_FUNCTION_LIST_PTR p11, CK_SLOT_ID slot)
 	CK_OBJECT_HANDLE objects[8];
 	CK_ULONG found = 0;
 	CK_RV rv;
-	CK_ULONG i;
 
 	search[0].type = CKA_CLASS;
 	search[0].pValue = &featureClass;
@@ -279,8 +308,25 @@ static void sweepHardwareFeature(CK_FUNCTION_LIST_PTR p11, CK_SLOT_ID slot)
 		return;
 	}
 
-	for (i = 0; i < count; ++i)
-		sweepOne(p11, session, objects[0], kFeatureSweep[i].type, kFeatureSweep[i].name);
+	for (r = 0; r < rangeCount; ++r)
+	{
+		CK_ULONG present = 0;
+		CK_ULONG asked = 0;
+
+		printf("  -- 0x%08lx..0x%08lx --\n",
+		       (unsigned long) ranges[r].first, (unsigned long) ranges[r].last);
+		for (type = ranges[r].first; type <= ranges[r].last; ++type)
+		{
+			const char* name = featureName(type);
+			/* A named address is reported even when absent: that it is
+			   missing is itself the answer some software is waiting for. */
+			present += (CK_ULONG) sweepOne(p11, session, objects[0], type, name,
+						       name != NULL);
+			++asked;
+		}
+		printf("  %lu of %lu present; the rest are absent\n",
+		       (unsigned long) present, (unsigned long) asked);
+	}
 
 	p11->C_CloseSession(session);
 }
@@ -322,9 +368,9 @@ static void dumpCertificateVendorAttributes(CK_FUNCTION_LIST_PTR p11, CK_SLOT_ID
 		return;
 	}
 
-	sweepOne(p11, session, objects[0], CKA_VALUE, "CKA_VALUE (length only matters)");
-	sweepOne(p11, session, objects[0], 0x80000009UL, "AKTIV_CSP_CONTAINER_ID");
-	sweepOne(p11, session, objects[0], 0x80003304UL, "FINGERPRINT_CONVOLUTIONS_ID");
+	sweepOne(p11, session, objects[0], CKA_VALUE, "CKA_VALUE (length only matters)", 1);
+	sweepOne(p11, session, objects[0], 0x80000009UL, "AKTIV_CSP_CONTAINER_ID", 1);
+	sweepOne(p11, session, objects[0], 0x80003304UL, "FINGERPRINT_CONVOLUTIONS_ID", 1);
 
 	p11->C_CloseSession(session);
 }
@@ -332,6 +378,128 @@ static void dumpCertificateVendorAttributes(CK_FUNCTION_LIST_PTR p11, CK_SLOT_ID
 /* C_EX_GetTokenName. What is unknown here is whether the device reports the
    token's own name or the same placeholder C_GetTokenInfo shows for a token
    that was never labelled, and whether the length counts a terminator. */
+/* What the device makes of a key when the caller does not say.
+   Rutoken Plugin generates keys with a template that names CKA_ID,
+   CKA_SUBJECT, the vendor journal flag, CKA_TOKEN, the two dates, CKA_DERIVE
+   and CKA_CLASS - and says nothing about CKA_SENSITIVE or CKA_EXTRACTABLE. So
+   whatever those attributes hold on a key already on this token IS the
+   device's default, measured rather than inferred. That is the question our
+   own defaults have to be answered against, because a derived VKO key is
+   created from a template just as silent.
+   Private keys need a login, so this section only runs when a PIN is given. */
+static void dumpKeyDefaults(CK_FUNCTION_LIST_PTR p11, CK_SLOT_ID slot,
+			    const char* pin)
+{
+	static const struct { CK_ATTRIBUTE_TYPE type; const char* name; } wanted[] = {
+		{ CKA_CLASS,		"CKA_CLASS" },
+		{ CKA_KEY_TYPE,		"CKA_KEY_TYPE" },
+		{ CKA_SENSITIVE,	"CKA_SENSITIVE" },
+		{ CKA_EXTRACTABLE,	"CKA_EXTRACTABLE" },
+		{ CKA_ALWAYS_SENSITIVE,	"CKA_ALWAYS_SENSITIVE" },
+		{ CKA_NEVER_EXTRACTABLE,"CKA_NEVER_EXTRACTABLE" },
+		{ CKA_DERIVE,		"CKA_DERIVE" },
+		{ CKA_PRIVATE,		"CKA_PRIVATE" },
+		{ CKA_MODIFIABLE,	"CKA_MODIFIABLE" }
+	};
+	const CK_ULONG wantedCount = sizeof(wanted) / sizeof(wanted[0]);
+	CK_SESSION_HANDLE session;
+	CK_OBJECT_HANDLE objects[32];
+	CK_ULONG found = 0;
+	CK_RV rv;
+	CK_ULONG i, k;
+
+	printf("\n== key attribute defaults on this device ==\n");
+	if (pin == NULL)
+	{
+		printf("no PIN given, so private keys cannot be listed;\n"
+		       "run again as: %s <library> <user PIN>\n", "rutoken-reference-dump");
+		return;
+	}
+
+	rv = p11->C_OpenSession(slot, CKF_SERIAL_SESSION, NULL_PTR, NULL_PTR, &session);
+	if (rv != CKR_OK)
+	{
+		printf("C_OpenSession returned 0x%lx\n", (unsigned long) rv);
+		return;
+	}
+	rv = p11->C_Login(session, CKU_USER, (CK_UTF8CHAR_PTR) pin,
+			  (CK_ULONG) strlen(pin));
+	if (rv != CKR_OK)
+	{
+		printf("C_Login returned 0x%lx; nothing is read and nothing is changed\n",
+		       (unsigned long) rv);
+		p11->C_CloseSession(session);
+		return;
+	}
+
+	/* Every object, so secret keys show up beside private ones. */
+	rv = p11->C_FindObjectsInit(session, NULL_PTR, 0);
+	if (rv == CKR_OK)
+	{
+		rv = p11->C_FindObjects(session, objects,
+					sizeof(objects) / sizeof(objects[0]), &found);
+		p11->C_FindObjectsFinal(session);
+	}
+	printf("%-36s %lu\n", "objects visible after login", (unsigned long) found);
+
+	for (i = 0; i < found; ++i)
+	{
+		CK_OBJECT_CLASS objectClass = 0;
+		CK_ATTRIBUTE classQuery;
+
+		classQuery.type = CKA_CLASS;
+		classQuery.pValue = &objectClass;
+		classQuery.ulValueLen = sizeof(objectClass);
+		if (p11->C_GetAttributeValue(session, objects[i], &classQuery, 1) != CKR_OK)
+			continue;
+		if (objectClass != CKO_PRIVATE_KEY && objectClass != CKO_SECRET_KEY &&
+		    objectClass != CKO_PUBLIC_KEY)
+			continue;
+
+		printf("  object %lu (%s)\n", (unsigned long) i,
+		       objectClass == CKO_PRIVATE_KEY ? "private key" :
+		       objectClass == CKO_SECRET_KEY ? "secret key" : "public key");
+		for (k = 0; k < wantedCount; ++k)
+		{
+			CK_BYTE value[64];
+			CK_ATTRIBUTE query;
+
+			memset(value, 0, sizeof(value));
+			query.type = wanted[k].type;
+			query.pValue = value;
+			query.ulValueLen = sizeof(value);
+			rv = p11->C_GetAttributeValue(session, objects[i], &query, 1);
+			printf("    %-24s ", wanted[k].name);
+			if (rv != CKR_OK || query.ulValueLen == (CK_ULONG) -1)
+			{
+				printf("absent or refused (0x%lx)\n", (unsigned long) rv);
+				continue;
+			}
+			printf("len %lu, ", (unsigned long) query.ulValueLen);
+			printValue(value, query.ulValueLen);
+			printf("\n");
+		}
+
+		/* The real question behind all of it: can the value be read? */
+		if (objectClass != CKO_PUBLIC_KEY)
+		{
+			CK_ATTRIBUTE valueQuery;
+			valueQuery.type = CKA_VALUE;
+			valueQuery.pValue = NULL_PTR;
+			valueQuery.ulValueLen = 0;
+			rv = p11->C_GetAttributeValue(session, objects[i], &valueQuery, 1);
+			printf("    %-24s 0x%lx%s\n", "CKA_VALUE readable?",
+			       (unsigned long) rv,
+			       rv == CKR_OK ? " (yes)" :
+			       rv == CKR_ATTRIBUTE_SENSITIVE ? " (no, CKR_ATTRIBUTE_SENSITIVE)" :
+			       rv == CKR_ATTRIBUTE_TYPE_INVALID ? " (no such attribute)" : "");
+		}
+	}
+
+	p11->C_Logout(session);
+	p11->C_CloseSession(session);
+}
+
 static void dumpTokenName(CK_FUNCTION_LIST_PTR p11, CK_FUNCTION_LIST_EXTENDED_PTR ex,
 			  CK_SLOT_ID slot)
 {
@@ -392,9 +560,12 @@ int main(int argc, char** argv)
 	CK_RV rv;
 	CK_ULONG i;
 
-	if (argc != 2)
+	if (argc != 2 && argc != 3)
 	{
-		fprintf(stderr, "usage: %s <path to the Rutoken PKCS #11 library>\n", argv[0]);
+		fprintf(stderr, "usage: %s <path to the Rutoken PKCS #11 library> [user PIN]\n"
+				"  The PIN is optional and only used to list keys and read the\n"
+				"  attribute defaults the device gives them. Nothing is written.\n",
+			argv[0]);
 		return 2;
 	}
 
@@ -520,6 +691,7 @@ int main(int argc, char** argv)
 	dumpHardwareFeature(p11, slots[0]);
 	sweepHardwareFeature(p11, slots[0]);
 	dumpCertificateVendorAttributes(p11, slots[0]);
+	dumpKeyDefaults(p11, slots[0], argc == 3 ? argv[2] : NULL);
 	dumpTokenName(p11, ex, slots[0]);
 
 	p11->C_Finalize(NULL_PTR);
