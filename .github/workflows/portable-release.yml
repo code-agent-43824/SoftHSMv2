@@ -657,6 +657,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
       - name: Select release tag
         id: release
         env:
