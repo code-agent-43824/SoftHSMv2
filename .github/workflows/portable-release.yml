@@ -675,7 +675,7 @@ jobs:
           fi
 
           git fetch --force --tags origin
-          latest_tag=$(git tag --list 'v2.7.0-portable.*' --sort=-version:refname | head -n 1)
+          latest_tag=$(git tag --list 'v2.7.0-portable.*' --sort=-version:refname | sed -n '1p')
           if [ -n "$latest_tag" ]; then
             latest_commit=$(git rev-list -n 1 "$latest_tag")
             git merge-base --is-ancestor "$latest_commit" "$RELEASE_COMMIT"
