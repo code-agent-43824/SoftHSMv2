@@ -2402,7 +2402,7 @@ static void verifyCoreBehaviour(const fs::path& modulePath)
 }
 
 // The vendor hardware-feature object. Five of Rutoken Plugin's methods begin by
-// searching for it, and read eleven capability attributes from it in one call
+// searching for it, and read its capability attributes from it in one call
 // with buffers already sized - so both the search and the exact lengths matter.
 static void verifyRutokenHardwareFeature(Module& module)
 {
@@ -2471,7 +2471,8 @@ static void verifyRutokenHardwareFeature(Module& module)
         query[i].pValue = buffers[i].data();
         query[i].ulValueLen = expected[i].isBool ? sizeof(CK_BBOOL) : sizeof(CK_ULONG);
     }
-    callOk("C_GetAttributeValue", "the eleven capability attributes at once",
+    callOk("C_GetAttributeValue",
+           "all " + std::to_string(count) + " capability attributes at once",
            [&] { return module->C_GetAttributeValue(session, feature, query.data(),
                                                     static_cast<CK_ULONG>(count)); });
     for (size_t i = 0; i < count; ++i)

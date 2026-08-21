@@ -159,7 +159,7 @@ static void printValue(const CK_BYTE* value, CK_ULONG length)
 
 /* The whole vendor attribute range of the hardware-feature object, swept one
    attribute at a time with a size query first. Rutoken Control Center reads
-   0x80003010 and 0x8000800E, which the eleven known ones do not cover; asking
+   0x80003010 and 0x8000800E, which the named ones do not cover; asking
    for all of them separately means a missing one cannot hide the rest, which
    is what happens when they go in a single call. */
 static const struct { CK_ATTRIBUTE_TYPE type; const char* name; } kFeatureSweep[] = {
