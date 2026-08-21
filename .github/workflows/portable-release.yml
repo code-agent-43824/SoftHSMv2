@@ -6,11 +6,9 @@ on:
       release_tag:
         description: Release tag to create or update
         required: true
-        default: v2.7.0-portable.23
   # Build and verify the whole product on every change to the trunk, once the
-  # quick CI on that commit has passed. Only a manual dispatch publishes a
-  # release; an automatic run stops after the six verification jobs and leaves
-  # the archives as run artifacts.
+  # quick CI on that commit has passed. Significant changes publish after all
+  # six package verifiers pass; documentation-only changes stop there.
   workflow_run:
     workflows: [CI]
     types: [completed]
@@ -644,9 +642,7 @@ jobs:
 
   release:
     name: Publish all verified portable packages
-    # Automatic runs build and verify; they do not publish. Release tags are
-    # numbered by hand and never reused, so a tag is only cut on dispatch.
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     needs:
       - verify-linux-x64
       - verify-linux-arm64
@@ -661,11 +657,54 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - name: Select release tag
+        id: release
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REQUESTED_TAG: ${{ inputs.release_tag }}
+          RELEASE_COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then
+            if [[ ! "$REQUESTED_TAG" =~ ^v2\.7\.0-portable\.[0-9]+$ ]]; then
+              echo "release_tag must match v2.7.0-portable.N" >&2
+              exit 1
+            fi
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "tag=$REQUESTED_TAG" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git fetch --force --tags origin
+          latest_tag=$(git tag --list 'v2.7.0-portable.*' --sort=-version:refname | head -n 1)
+          if [ -n "$latest_tag" ]; then
+            latest_commit=$(git rev-list -n 1 "$latest_tag")
+            git merge-base --is-ancestor "$latest_commit" "$RELEASE_COMMIT"
+            changed=$(git diff --name-only "$latest_commit" "$RELEASE_COMMIT")
+          else
+            changed=$(git ls-tree -r --name-only "$RELEASE_COMMIT")
+          fi
+          printf '%s\n' "$changed"
+
+          documentation='^(docs/|HANDOFF\.md$|AGENTS\.md$|CLAUDE\.md$|GEMINI\.md$|\.github/copilot-instructions\.md$|README\.md$|NEWS$|CMAKE-NOTES\.md$|CMAKE-WIN-NOTES\.md$|OSX-NOTES\.md$|WIN32-NOTES\.md$|FIPS-NOTES\.md$)'
+          if ! printf '%s\n' "$changed" | grep -Ev "$documentation" >/dev/null; then
+            echo "No product changes since $latest_tag; publication skipped."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          latest_number=$(git tag --list 'v2.7.0-portable.*' |
+            sed -n 's/^v2\.7\.0-portable\.\([0-9][0-9]*\)$/\1/p' |
+            sort -n | tail -n 1)
+          test -n "$latest_number"
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+          echo "tag=v2.7.0-portable.$((latest_number + 1))" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@v8
+        if: steps.release.outputs.publish == 'true'
         with:
           pattern: softhsm-*
           path: release-input
       - name: Create release archives and checksums
+        if: steps.release.outputs.publish == 'true'
         run: |
           mkdir release-assets
           count=0
@@ -677,6 +716,7 @@ jobs:
           test "$count" -eq 12
           (cd release-assets && sha256sum *.zip > SHA256SUMS)
       - name: Verify release archive layout
+        if: steps.release.outputs.publish == 'true'
         run: |
           test "$(find release-assets -maxdepth 1 -type f -name '*.zip' | wc -l)" -eq 12
           for archive in release-assets/*.zip; do
@@ -700,12 +740,18 @@ jobs:
             esac
           done
       - name: Publish GitHub Release
+        if: steps.release.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
+          AUTOMATIC: ${{ github.event_name == 'workflow_run' }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
           RELEASE_COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: |
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            if [ "$AUTOMATIC" = true ]; then
+              echo "Automatically selected tag already exists: $RELEASE_TAG" >&2
+              exit 1
+            fi
             gh release upload "$RELEASE_TAG" release-assets/* --clobber
           else
             gh release create "$RELEASE_TAG" release-assets/* \

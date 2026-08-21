@@ -349,7 +349,7 @@ and requires the OpenSSL backend. GOST 2012 is gated by
 upstream version and is not bumped by fork work.
 
 Releases are tagged `v2.7.0-portable.N`; `N` increments by one per release and
-is not reused. The current tag is `v2.7.0-portable.23`.
+is not reused. The current tag is `v2.7.0-portable.25`.
 
 ## Deployment
 
@@ -358,15 +358,17 @@ produced only by the `Portable release` workflow. It builds six platform
 archives, verifies each on a fresh runner of the same architecture as an
 outside consumer would, and publishes only if all six pass.
 
-That workflow runs in two modes, and only one of them publishes:
+That workflow runs in two modes:
 
 - **Automatically**, after `CI` succeeds on `main` (`workflow_run`). It builds
-  and verifies all six platforms and stops there; the archives stay as run
-  artifacts. This is the owner's requirement that the product be built in full
-  after any change to the trunk. A newer automatic run supersedes an older one.
-- **On `workflow_dispatch` with `release_tag`**, which additionally publishes.
-  Release tags are numbered by hand and never reused, so cutting one stays a
-  deliberate act.
+  and verifies all six platforms. If anything except project documentation has
+  changed since the latest portable release, it then increments `N` and
+  publishes the verified archives. Documentation-only changes still get the
+  full build but no new tag. This is the owner's decision of 21 August 2026:
+  significant changes must become public without a manual follow-up. A newer
+  automatic run supersedes an older one.
+- **On `workflow_dispatch` with an explicit `release_tag`**, which remains an
+  emergency path for creating or replacing a deliberately named release.
 
 Under `workflow_run` the checkout must name
 `github.event.workflow_run.head_sha`: `github.sha` there is the default
@@ -374,7 +376,7 @@ branch's tip, which is not necessarily the commit CI approved.
 
 - **Never create or push a release tag from a session.** The workflow creates
   the tag; the proxy refuses tag pushes by policy (§12).
-- Any agent may run the workflow, since it needs no manual work on a server.
+- Any agent may run the manual workflow, since it needs no work on a server.
 - **After a release, read the run's logs and download one published archive**
   before reporting success. A green run badge is not proof (§4).
 
