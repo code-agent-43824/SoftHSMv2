@@ -314,6 +314,21 @@ and requires the OpenSSL backend. GOST 2012 is gated by
   build.** *Reason:* a deliberate choice; the OpenSSL backend has no usable
   GOST 2012 and the alternative was a GOST engine dependency that portable
   builds cannot statically carry.
+- **Rutoken Control Center is out of scope, and PC/SC is not a direction.**
+  *Reason:* the owner's decision of 21 August 2026. The application connects to
+  a PC/SC reader by name and its import table has no `SCardListReaders`, so no
+  amount of PKCS #11 fidelity makes its device card appear; satisfying it needs
+  a virtual reader answering APDUs, which is a separate product. The library is
+  for other programs. Work its start-up cycle prompted was still done, because
+  other software asks the same things.
+- **The device is the reference even when it refuses.** An attribute the
+  reference Rutoken does not carry is not carried here either, however plainly
+  an application asks for it — `0x80003010`, `0x80000009` and `0x80003304` are
+  refused for exactly this reason, and the refusal of the first is pinned in
+  the gate. *Reason:* answering where the device refuses is a departure from
+  the device, not better compatibility. "The application got further" is a
+  weaker test than "this is what the device does", and the two have already
+  disagreed once.
 
 ## Departures from the rules above
 
