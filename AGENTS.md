@@ -349,7 +349,7 @@ and requires the OpenSSL backend. GOST 2012 is gated by
 upstream version and is not bumped by fork work.
 
 Releases are tagged `v2.7.0-portable.N`; `N` increments by one per release and
-is not reused. The current tag is `v2.7.0-portable.25`.
+is not reused. The current tag is `v2.7.0-portable.26`.
 
 ## Deployment
 
