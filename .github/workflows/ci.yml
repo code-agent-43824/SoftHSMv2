@@ -43,6 +43,7 @@ jobs:
             exit 1
           fi
       - name: Verify autonomous utilities and forced PKCS8 export
+        shell: bash
         run: |
           set -euo pipefail
           export HOME="$GITHUB_WORKSPACE/utility-gate-home"
