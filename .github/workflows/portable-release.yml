@@ -224,6 +224,7 @@ jobs:
             "$RUNNER_TEMP/default-test.log"
           test -s "$RUNNER_TEMP/packaged-testkit/test-output/pkcs11-tool-I.log"
           test -s "$RUNNER_TEMP/packaged-testkit/test-output/pkcs11-tool-T.log"
+          test -s "$RUNNER_TEMP/packaged-testkit/test-output/softhsm-utilities.log"
           grep -F '[SCENARIO] BEGIN GOST:' "$RUNNER_TEMP/default-test.log"
           grep -F '[SCENARIO] END GOST:' "$RUNNER_TEMP/default-test.log"
           grep -F '[IMPORT] GOST exportable generation' "$RUNNER_TEMP/default-test.log"
@@ -728,15 +729,27 @@ jobs:
             case "$(basename "$archive")" in
               softhsm-testkit-windows-*.zip)
                 zipinfo -1 "$archive" | grep -Fx 'bin/pkcs11-tool.exe' >/dev/null
+                zipinfo -1 "$archive" | grep -Fx 'bin/softhsm2-util.exe' >/dev/null
+                zipinfo -1 "$archive" | grep -Fx 'bin/softhsm2-export.exe' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'LICENSE-OpenSC.txt' >/dev/null
                 ;;
               softhsm-testkit-*.zip)
                 zipinfo -1 "$archive" | grep -Fx 'bin/pkcs11-tool' >/dev/null
+                zipinfo -1 "$archive" | grep -Fx 'bin/softhsm2-util' >/dev/null
+                zipinfo -1 "$archive" | grep -Fx 'bin/softhsm2-export' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'LICENSE-OpenSC.txt' >/dev/null
                 if zipinfo -1 "$archive" | grep -Fx 'bin/opensc-lib/pkcs11-tool' >/dev/null; then
                   echo "duplicate pkcs11-tool found in $archive" >&2
                   exit 1
                 fi
+                ;;
+              softhsm-portable-windows-*.zip)
+                zipinfo -1 "$archive" | grep -Fx 'softhsm2-util.exe' >/dev/null
+                zipinfo -1 "$archive" | grep -Fx 'softhsm2-export.exe' >/dev/null
+                ;;
+              softhsm-portable-*.zip)
+                zipinfo -1 "$archive" | grep -Fx 'softhsm2-util' >/dev/null
+                zipinfo -1 "$archive" | grep -Fx 'softhsm2-export' >/dev/null
                 ;;
             esac
           done

@@ -65,6 +65,7 @@ include_directories(${INCLUDE_DIRS})
 # Static Library Config
 ###############################################################################
 add_library(${PROJECT_NAME}-static STATIC ${SOURCES})
+target_compile_definitions(${PROJECT_NAME}-static PRIVATE SOFTHSM2_ENABLE_DEBUG_EXPORT=1)
 target_link_libraries(${PROJECT_NAME}-static ${STATIC_FILES} ${CMAKE_DL_LIBS})
 set_target_properties(${PROJECT_NAME}-static
                       PROPERTIES OUTPUT_NAME ${PROJECT_NAME}-static

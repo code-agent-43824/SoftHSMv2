@@ -73,28 +73,47 @@ for arch in arm64 x86_64; do
     -DBOTAN_GOST_INCLUDE_DIR="$work_dir/botan-build-$arch/build/include" \
     -DBOTAN_GOST_LIBRARY="$work_dir/botan-build-$arch/libbotan-2.a" \
     -DOPENSSL_ROOT_DIR="$work_dir/openssl-install-$arch"
-  cmake --build "$build_dir" --target softhsm2 --parallel "$(sysctl -n hw.logicalcpu)"
+  cmake --build "$build_dir" --target softhsm2 softhsm2-util softhsm2-export \
+    --parallel "$(sysctl -n hw.logicalcpu)"
 done
 
 arm_module=$(find "$work_dir/softhsm-build-arm64" -name libsofthsm2.dylib -type f -print -quit)
 x64_module=$(find "$work_dir/softhsm-build-x86_64" -name libsofthsm2.dylib -type f -print -quit)
+arm_util=$(find "$work_dir/softhsm-build-arm64" -name softhsm2-util -type f -print -quit)
+x64_util=$(find "$work_dir/softhsm-build-x86_64" -name softhsm2-util -type f -print -quit)
+arm_export=$(find "$work_dir/softhsm-build-arm64" -name softhsm2-export -type f -print -quit)
+x64_export=$(find "$work_dir/softhsm-build-x86_64" -name softhsm2-export -type f -print -quit)
 test -n "$arm_module"
 test -n "$x64_module"
+test -n "$arm_util"
+test -n "$x64_util"
+test -n "$arm_export"
+test -n "$x64_export"
 mkdir -p "$stage_dir"
 lipo -create "$arm_module" "$x64_module" -output "$stage_dir/libsofthsm2.dylib"
+lipo -create "$arm_util" "$x64_util" -output "$stage_dir/softhsm2-util"
+lipo -create "$arm_export" "$x64_export" -output "$stage_dir/softhsm2-export"
 strip -x "$stage_dir/libsofthsm2.dylib"
-codesign --force --sign - "$stage_dir/libsofthsm2.dylib"
+strip -x "$stage_dir/softhsm2-util" "$stage_dir/softhsm2-export"
+for binary in libsofthsm2.dylib softhsm2-util softhsm2-export; do
+  codesign --force --sign - "$stage_dir/$binary"
+done
 cp "$root_dir/packaging/portable/README.txt" "$stage_dir/README.txt"
 cp "$root_dir/LICENSE" "$stage_dir/LICENSE-SoftHSM.txt"
 cp "$openssl_source/LICENSE.txt" "$stage_dir/LICENSE-OpenSSL.txt"
 cp "$botan_source/license.txt" "$stage_dir/LICENSE-Botan.txt"
 
 lipo "$stage_dir/libsofthsm2.dylib" -verify_arch arm64 x86_64
-if otool -L "$stage_dir/libsofthsm2.dylib" | grep -Eq 'lib(ssl|crypto)'; then
-  echo "portable module has an unexpected non-system runtime dependency" >&2
-  otool -L "$stage_dir/libsofthsm2.dylib" >&2
-  exit 1
-fi
+for binary in libsofthsm2.dylib softhsm2-util softhsm2-export; do
+  lipo "$stage_dir/$binary" -verify_arch arm64 x86_64
+  if otool -L "$stage_dir/$binary" | grep -Eq 'lib(ssl|crypto|botan)'; then
+    echo "portable $binary has an unexpected non-system runtime dependency" >&2
+    otool -L "$stage_dir/$binary" >&2
+    exit 1
+  fi
+done
+"$stage_dir/softhsm2-util" --version
+"$stage_dir/softhsm2-export" --version
 
 rm -f "$output_dir/$archive_name"
 (cd "$stage_dir" && /usr/bin/zip -X -9 -j "$output_dir/$archive_name" ./*)

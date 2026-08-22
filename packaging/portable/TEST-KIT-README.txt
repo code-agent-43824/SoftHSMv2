@@ -10,6 +10,7 @@ The kit contains:
 - a precompiled dependency-light C++ PKCS #11 client;
 - a pinned, statically linked OpenSSL CLI used as the independent reference;
 - a prebuilt OpenSC pkcs11-tool plus its non-system runtime dependencies;
+- the portable softhsm2-util and softhsm2-export debug tools;
 - shell or PowerShell launchers;
 - the C++ source and PKCS #11 headers for audit/rebuilding;
 - the exact environment/tool versions in ENVIRONMENT.txt;
@@ -37,6 +38,11 @@ The trace runs GOST and RSA as explicitly separated scenarios. Persistent GOST
 and RSA pairs use different labels and IDs, and every persistent-key search
 also specifies the key type. CKA_KEY_GEN_MECHANISM is not queried because the
 functional result is established by key attributes, persistence, and signing.
+For the bundled module only, the launcher then runs softhsm2-util without a
+--module argument, force-exports the persistent sensitive/non-extractable RSA
+key, imports a P-256 EC fixture with softhsm2-util, force-exports it, validates
+both PKCS#8 files with the bundled OpenSSL, and compares their public keys to
+independent references. GOST export is intentionally outside this test.
 
 Linux or macOS:
   bash run-test.sh

@@ -12,6 +12,32 @@ softhsm2.dll elsewhere on the machine would be loaded instead of this one.
   Windows: softhsm2.dll
   macOS:   libsofthsm2.dylib
 
+The archive also contains two command-line tools:
+
+  softhsm2-util     token initialization, inspection, and import;
+  softhsm2-export   forced RSA/ECDSA private-key export as PKCS#8 PEM or DER.
+
+On Windows both names have the .exe suffix. In a product archive the tools
+find the module beside themselves automatically. In a test kit they find it in
+the parent directory. softhsm2-util still accepts --module to select another
+PKCS #11 library explicitly. All three portable programs use the same fixed
+per-user configuration described below.
+
+softhsm2-export is deliberately a debug escape hatch for this software token.
+After login it exports a matching RSA or EC private key even when the object
+has CKA_SENSITIVE=true, CKA_EXTRACTABLE=false, or CKA_NEVER_EXTRACTABLE=true.
+It does not modify those attributes and does not weaken C_GetAttributeValue or
+C_WrapKey. Select exactly one key with --slot/--serial/--token, --id, --type,
+and optionally --label. For example:
+
+  softhsm2-export --token portable-ci-token --id 01 --type rsa \
+    --output private-key.pem
+
+The output is unencrypted PKCS#8 PEM by default; use --format der for DER.
+The PIN is prompted once unless --pin is supplied. GOST key export is not
+implemented yet. Treat this utility and every exported file as secret-bearing
+test material, not as an HSM security boundary.
+
 The module uses one standard configuration per operating-system user:
 
   Windows:  %USERPROFILE%\softhsm\softhsm.conf
@@ -175,4 +201,5 @@ complete test. The final independent gate runs the packaged `pkcs11-tool -I`
 and `pkcs11-tool -T`; no separate OpenSC installation is needed. A path to
 another library may be supplied as the only argument.
 The included `testkit.conf` controls initialization, excluded C_* functions,
-PINs, slot, and labels.
+PINs, slot, and labels. It also carries both command-line tools and verifies
+autonomous softhsm2-util discovery plus forced RSA and ECDSA PKCS#8 export.

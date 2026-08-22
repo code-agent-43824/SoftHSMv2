@@ -37,6 +37,7 @@
 
 CK_C_GetFunctionList loadLibrary(char* module, void** moduleHandle,
 				char **pErrMsg);
+const char* defaultLibraryPath();
 void unloadLibrary(void* moduleHandle);
 
 #endif // !_SOFTHSM_V2_BIN_LIBRARY_H

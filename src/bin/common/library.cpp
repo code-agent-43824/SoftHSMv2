@@ -35,9 +35,86 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string>
+#include <vector>
+#if defined(HAVE_LOADLIBRARY)
+#include <windows.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
+#include <unistd.h>
+#else
+#include <unistd.h>
+#endif
 #if defined(HAVE_DLOPEN)
 #include <dlfcn.h>
 #endif
+
+static bool libraryExists(const std::string& path)
+{
+#if defined(HAVE_LOADLIBRARY)
+	DWORD attributes = GetFileAttributesA(path.c_str());
+	return attributes != INVALID_FILE_ATTRIBUTES &&
+		(attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+#else
+	return access(path.c_str(), R_OK) == 0;
+#endif
+}
+
+static std::string executableDirectory()
+{
+	char path[4096];
+#if defined(HAVE_LOADLIBRARY)
+	DWORD length = GetModuleFileNameA(NULL, path, sizeof(path));
+	if (length == 0 || length >= sizeof(path)) return std::string();
+	path[length] = '\0';
+#elif defined(__APPLE__)
+	uint32_t size = sizeof(path);
+	if (_NSGetExecutablePath(path, &size) != 0) return std::string();
+#else
+	ssize_t length = readlink("/proc/self/exe", path, sizeof(path) - 1);
+	if (length <= 0) return std::string();
+	path[length] = '\0';
+#endif
+	std::string result(path);
+	size_t slash = result.find_last_of("/\\");
+	return slash == std::string::npos ? std::string() : result.substr(0, slash);
+}
+
+const char* defaultLibraryPath()
+{
+#if defined(SOFTHSM2_PORTABLE_TOOL)
+	static std::string resolved;
+	if (!resolved.empty()) return resolved.c_str();
+
+#if defined(HAVE_LOADLIBRARY)
+	const char* moduleName = "softhsm2.dll";
+	const char separator = '\\';
+#elif defined(__APPLE__)
+	const char* moduleName = "libsofthsm2.dylib";
+	const char separator = '/';
+#else
+	const char* moduleName = "libsofthsm2.so";
+	const char separator = '/';
+#endif
+	std::string directory = executableDirectory();
+	if (!directory.empty())
+	{
+		std::vector<std::string> candidates;
+		candidates.push_back(directory + separator + moduleName);
+		candidates.push_back(directory + separator + ".." + separator + moduleName);
+		for (std::vector<std::string>::const_iterator it = candidates.begin();
+			it != candidates.end(); ++it)
+		{
+			if (libraryExists(*it))
+			{
+				resolved = *it;
+				return resolved.c_str();
+			}
+		}
+	}
+#endif
+	return DEFAULT_PKCS11_LIB;
+}
 
 // Load the PKCS#11 library
 CK_C_GetFunctionList loadLibrary(char* module, void** moduleHandle,
@@ -51,14 +128,7 @@ CK_C_GetFunctionList loadLibrary(char* module, void** moduleHandle,
 	static char errMsg[100];
 
 	// Load PKCS #11 library
-	if (module)
-	{
-		hDLL = LoadLibraryA(module);
-	}
-	else
-	{
-		hDLL = LoadLibraryA(DEFAULT_PKCS11_LIB);
-	}
+	hDLL = LoadLibraryA(module ? module : defaultLibraryPath());
 
 	if (hDLL == NULL)
 	{
@@ -91,14 +161,7 @@ CK_C_GetFunctionList loadLibrary(char* module, void** moduleHandle,
 	void* pDynLib = NULL;
 
 	// Load PKCS #11 library
-	if (module)
-	{
-		pDynLib = dlopen(module, RTLD_NOW | RTLD_LOCAL);
-	}
-	else
-	{
-		pDynLib = dlopen(DEFAULT_PKCS11_LIB, RTLD_NOW | RTLD_LOCAL);
-	}
+	pDynLib = dlopen(module ? module : defaultLibraryPath(), RTLD_NOW | RTLD_LOCAL);
 
 	*pErrMsg = dlerror();
 	if (pDynLib == NULL || *pErrMsg != NULL)

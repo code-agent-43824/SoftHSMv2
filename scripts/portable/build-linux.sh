@@ -58,7 +58,10 @@ cmake --build "$build_dir" --parallel "$(getconf _NPROCESSORS_ONLN)"
 
 mkdir -p "$stage_dir"
 cp "$build_dir/src/lib/libsofthsm2.so" "$stage_dir/libsofthsm2.so"
+cp "$build_dir/src/bin/util/softhsm2-util" "$stage_dir/softhsm2-util"
+cp "$build_dir/src/bin/export/softhsm2-export" "$stage_dir/softhsm2-export"
 strip --strip-unneeded "$stage_dir/libsofthsm2.so"
+strip --strip-unneeded "$stage_dir/softhsm2-util" "$stage_dir/softhsm2-export"
 cp "$root_dir/packaging/portable/README.txt" "$stage_dir/README.txt"
 cp "$root_dir/LICENSE" "$stage_dir/LICENSE-SoftHSM.txt"
 cp "$openssl_source/LICENSE.txt" "$stage_dir/LICENSE-OpenSSL.txt"
@@ -69,6 +72,14 @@ if ldd "$stage_dir/libsofthsm2.so" | grep -Eq 'lib(ssl|crypto|stdc\+\+|gcc_s)'; 
   ldd "$stage_dir/libsofthsm2.so" >&2
   exit 1
 fi
+for tool in softhsm2-util softhsm2-export; do
+  if ldd "$stage_dir/$tool" | grep -Eq 'lib(ssl|crypto|stdc\+\+|gcc_s|botan)'; then
+    echo "portable $tool has an unexpected non-system runtime dependency" >&2
+    ldd "$stage_dir/$tool" >&2
+    exit 1
+  fi
+  "$stage_dir/$tool" --version
+done
 unexpected_exports=$(nm -D --defined-only "$stage_dir/libsofthsm2.so" | awk '{print $3}' | grep -Ev '^(C_|SOFTHSM2_PORTABLE$)' || true)
 if [[ -n "$unexpected_exports" ]]; then
   echo "portable module exports internal symbols:" >&2

@@ -252,7 +252,7 @@ int main(int argc, char* argv[])
 			case OPT_SHOW_CONFIG:
 				if (!strcmp(optarg, "default-pkcs11-lib"))
 				{
-					printf("%s\n", DEFAULT_PKCS11_LIB);
+					printf("%s\n", defaultLibraryPath());
 					exit(0);
 				}
 				else
@@ -373,7 +373,7 @@ int main(int argc, char* argv[])
 		CK_RV p11rv = p11->C_Initialize(NULL_PTR);
 		if (p11rv != CKR_OK)
 		{
-			fprintf(stderr, "ERROR: Could not initialize the PKCS#11 library/module: %s\n", module ? module : DEFAULT_PKCS11_LIB);
+			fprintf(stderr, "ERROR: Could not initialize the PKCS#11 library/module: %s\n", module ? module : defaultLibraryPath());
 			fprintf(stderr, "ERROR: Please check log files for additional information.\n");
 			exit(1);
 		}

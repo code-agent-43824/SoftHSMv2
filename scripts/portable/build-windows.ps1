@@ -97,30 +97,41 @@ cmake -S $RootDir -B $BuildDir -A $CMakeArch `
     "-DBOTAN_GOST_LIBRARY=$($BotanLibrary.FullName)" `
     "-DOPENSSL_ROOT_DIR=$OpenSSLPrefix"
 if ($LASTEXITCODE -ne 0) { throw "SoftHSM configure failed" }
-cmake --build $BuildDir --config Release --target softhsm2 --parallel
+cmake --build $BuildDir --config Release --target softhsm2 softhsm2-util softhsm2-export --parallel
 if ($LASTEXITCODE -ne 0) { throw "SoftHSM build failed" }
 
 $ModulePath = Get-ChildItem -Path $BuildDir -Filter softhsm2.dll -Recurse | Select-Object -First 1
 if (-not $ModulePath) { throw "softhsm2.dll was not produced" }
+$UtilPath = Get-ChildItem -Path $BuildDir -Filter softhsm2-util.exe -Recurse | Select-Object -First 1
+if (-not $UtilPath) { throw "softhsm2-util.exe was not produced" }
+$ExportPath = Get-ChildItem -Path $BuildDir -Filter softhsm2-export.exe -Recurse | Select-Object -First 1
+if (-not $ExportPath) { throw "softhsm2-export.exe was not produced" }
 New-Item -ItemType Directory -Force -Path $StageDir | Out-Null
 Copy-Item $ModulePath.FullName (Join-Path $StageDir "softhsm2.dll")
+Copy-Item $UtilPath.FullName (Join-Path $StageDir "softhsm2-util.exe")
+Copy-Item $ExportPath.FullName (Join-Path $StageDir "softhsm2-export.exe")
 Copy-Item (Join-Path $RootDir "packaging/portable/README.txt") (Join-Path $StageDir "README.txt")
 Copy-Item (Join-Path $RootDir "LICENSE") (Join-Path $StageDir "LICENSE-SoftHSM.txt")
 Copy-Item (Join-Path $OpenSSLSource "LICENSE.txt") (Join-Path $StageDir "LICENSE-OpenSSL.txt")
 Copy-Item (Join-Path $BotanSource "license.txt") (Join-Path $StageDir "LICENSE-Botan.txt")
 
-$MachineHeader = & dumpbin /headers (Join-Path $StageDir "softhsm2.dll") |
-    Select-String -Pattern $ExpectedMachinePattern
-if (-not $MachineHeader) {
-    throw "portable module does not have the expected $($env:PORTABLE_ARCH) PE machine type"
+foreach ($BinaryName in @("softhsm2.dll", "softhsm2-util.exe", "softhsm2-export.exe")) {
+    $Binary = Join-Path $StageDir $BinaryName
+    $MachineHeader = & dumpbin /headers $Binary | Select-String -Pattern $ExpectedMachinePattern
+    if (-not $MachineHeader) {
+        throw "$BinaryName does not have the expected $($env:PORTABLE_ARCH) PE machine type"
+    }
+    $UnexpectedDlls = & dumpbin /dependents $Binary |
+        Select-String -Pattern 'libcrypto|libssl|botan|vcruntime|msvcp|ucrtbased' -CaseSensitive:$false
+    if ($UnexpectedDlls) {
+        $UnexpectedDlls | Write-Error
+        throw "$BinaryName has an unexpected runtime dependency"
+    }
 }
-
-$UnexpectedDlls = & dumpbin /dependents (Join-Path $StageDir "softhsm2.dll") |
-    Select-String -Pattern 'libcrypto|libssl|vcruntime|msvcp|ucrtbased' -CaseSensitive:$false
-if ($UnexpectedDlls) {
-    $UnexpectedDlls | Write-Error
-    throw "portable module has an unexpected runtime dependency"
-}
+& (Join-Path $StageDir "softhsm2-util.exe") --version
+if ($LASTEXITCODE -ne 0) { throw "softhsm2-util.exe smoke test failed" }
+& (Join-Path $StageDir "softhsm2-export.exe") --version
+if ($LASTEXITCODE -ne 0) { throw "softhsm2-export.exe smoke test failed" }
 
 $ArchivePath = Join-Path $OutputDir $ArchiveName
 Remove-Item $ArchivePath -ErrorAction SilentlyContinue

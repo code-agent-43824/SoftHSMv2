@@ -8198,6 +8198,77 @@ CK_RV SoftHSM::C_WrapKey
 	return rv;
 }
 
+#ifdef SOFTHSM2_ENABLE_DEBUG_EXPORT
+CK_RV SoftHSM::exportPrivateKey
+(
+	CK_SESSION_HANDLE hSession,
+	CK_OBJECT_HANDLE hKey,
+	ByteString& keyData
+)
+{
+	keyData.wipe();
+	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;
+
+	Session* session = (Session*)handleManager->getSession(hSession);
+	if (session == NULL) return CKR_SESSION_HANDLE_INVALID;
+
+	Token* token = session->getToken();
+	if (token == NULL) return CKR_GENERAL_ERROR;
+
+	OSObject* key = (OSObject*)handleManager->getObject(hKey);
+	if (key == NULL_PTR || !key->isValid()) return CKR_KEY_HANDLE_INVALID;
+	if (key->getUnsignedLongValue(CKA_CLASS, CKO_VENDOR_DEFINED) != CKO_PRIVATE_KEY)
+		return CKR_KEY_TYPE_INCONSISTENT;
+
+	CK_RV rv = haveRead(session->getState(),
+		key->getBooleanValue(CKA_TOKEN, false),
+		key->getBooleanValue(CKA_PRIVATE, true));
+	if (rv != CKR_OK) return rv;
+
+	CK_KEY_TYPE keyType = key->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED);
+	AsymAlgo::Type alg = AsymAlgo::Unknown;
+	if (keyType == CKK_RSA)
+		alg = AsymAlgo::RSA;
+#ifdef WITH_ECC
+	else if (keyType == CKK_EC)
+		alg = AsymAlgo::ECDSA;
+#endif
+	else
+		return CKR_KEY_TYPE_INCONSISTENT;
+
+	AsymmetricAlgorithm* asymCrypto = CryptoFactory::i()->getAsymmetricAlgorithm(alg);
+	if (asymCrypto == NULL) return CKR_GENERAL_ERROR;
+
+	PrivateKey* privateKey = asymCrypto->newPrivateKey();
+	if (privateKey == NULL)
+	{
+		CryptoFactory::i()->recycleAsymmetricAlgorithm(asymCrypto);
+		return CKR_HOST_MEMORY;
+	}
+
+	if (keyType == CKK_RSA)
+		rv = getRSAPrivateKey((RSAPrivateKey*)privateKey, token, key);
+#ifdef WITH_ECC
+	else
+		rv = getECPrivateKey((ECPrivateKey*)privateKey, token, key);
+#endif
+
+	if (rv == CKR_OK)
+		keyData = privateKey->PKCS8Encode();
+
+	asymCrypto->recyclePrivateKey(privateKey);
+	CryptoFactory::i()->recycleAsymmetricAlgorithm(asymCrypto);
+
+	if (rv != CKR_OK)
+	{
+		keyData.wipe();
+		return rv;
+	}
+	if (keyData.size() == 0) return CKR_GENERAL_ERROR;
+	return CKR_OK;
+}
+#endif
+
 // Internal: Unwrap blob using symmetric key
 CK_RV SoftHSM::UnwrapKeySym
 (

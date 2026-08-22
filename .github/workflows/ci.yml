@@ -22,7 +22,7 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential ca-certificates cmake curl file perl pkg-config python3 unzip xz-utils zip
+            build-essential ca-certificates cmake curl file openssl perl pkg-config python3 unzip xz-utils zip
       - uses: actions/checkout@v7
       - name: Build the dependency combination used by portable releases
         env:
@@ -32,12 +32,51 @@ jobs:
         run: |
           unzip -q dist/softhsm-portable-linux-x64.zip -d portable-product
           test -f portable-product/libsofthsm2.so
+          test -x portable-product/softhsm2-util
+          test -x portable-product/softhsm2-export
+          portable-product/softhsm2-util --version
+          portable-product/softhsm2-export --version
           file portable-product/libsofthsm2.so
           ldd portable-product/libsofthsm2.so
           if ldd portable-product/libsofthsm2.so | grep -Eq 'lib(ssl|crypto|botan)'; then
             echo 'portable module unexpectedly depends on external crypto libraries' >&2
             exit 1
           fi
+      - name: Verify autonomous utilities and forced PKCS8 export
+        run: |
+          set -euo pipefail
+          export HOME="$GITHUB_WORKSPACE/utility-gate-home"
+          export SOFTHSM2_CONF="$GITHUB_WORKSPACE/ignored-utility.conf"
+          mkdir -p "$HOME/softhsm/tokens" utility-gate-work
+          util="$GITHUB_WORKSPACE/portable-product/softhsm2-util"
+          exporter="$GITHUB_WORKSPACE/portable-product/softhsm2-export"
+          test "$($util --show-config default-pkcs11-lib)" = \
+            "$GITHUB_WORKSPACE/portable-product/libsofthsm2.so"
+          "$util" --show-slots
+          "$util" --init-token --free --label utility-gate \
+            --so-pin 12345678 --pin 12345678
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \
+            -out utility-gate-work/source-rsa.pem
+          openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 \
+            -out utility-gate-work/source-ec.pem
+          "$util" --import utility-gate-work/source-rsa.pem --token utility-gate \
+            --label forced-rsa --id 01 --pin 12345678
+          "$util" --import utility-gate-work/source-ec.pem --token utility-gate \
+            --label forced-ec --id 02 --pin 12345678
+          "$exporter" --token utility-gate --id 01 --label forced-rsa \
+            --type rsa --pin 12345678 --output utility-gate-work/exported-rsa.pem
+          "$exporter" --token utility-gate --id 02 --label forced-ec \
+            --type ec --pin 12345678 --output utility-gate-work/exported-ec.pem
+          openssl pkey -in utility-gate-work/exported-rsa.pem -check -noout
+          openssl pkey -in utility-gate-work/exported-ec.pem -check -noout
+          for type in rsa ec; do
+            openssl pkey -in "utility-gate-work/source-$type.pem" -pubout -outform DER \
+              -out "utility-gate-work/source-$type-public.der"
+            openssl pkey -in "utility-gate-work/exported-$type.pem" -pubout -outform DER \
+              -out "utility-gate-work/exported-$type-public.der"
+            cmp "utility-gate-work/source-$type-public.der" \
+              "utility-gate-work/exported-$type-public.der"
+          done
       # The Rutoken profile is the point of this fork, and until now nothing
       # exercised it on push: the client below and the whole rutoken-profile
       # gate were compiled and run only by the release workflow, so a break in

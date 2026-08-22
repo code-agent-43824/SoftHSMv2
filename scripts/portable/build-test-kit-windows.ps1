@@ -87,6 +87,13 @@ foreach ($Name in $RequiredProductFiles) {
     }
     Copy-Item -LiteralPath $Source -Destination (Join-Path $StageDir $Name)
 }
+foreach ($ToolName in @("softhsm2-util.exe", "softhsm2-export.exe")) {
+    $Source = Join-Path $ProductDir $ToolName
+    if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) {
+        throw "required product file is missing: $Source"
+    }
+    Copy-Item -LiteralPath $Source -Destination (Join-Path $StageDir "bin/$ToolName")
+}
 $ProductReadme = Join-Path $ProductDir "README.txt"
 if (Test-Path -LiteralPath $ProductReadme -PathType Leaf) {
     Copy-Item -LiteralPath $ProductReadme -Destination (Join-Path $StageDir "PRODUCT-README.txt")
@@ -120,7 +127,8 @@ $Environment = @(
 )
 $Environment | Set-Content -Encoding utf8 (Join-Path $StageDir "ENVIRONMENT.txt")
 
-foreach ($Binary in @($OpenSSLExe, $Client, (Join-Path $StageDir "softhsm2.dll"))) {
+foreach ($Binary in @($OpenSSLExe, $Client, (Join-Path $StageDir "softhsm2.dll"),
+    (Join-Path $StageDir "bin/softhsm2-util.exe"), (Join-Path $StageDir "bin/softhsm2-export.exe"))) {
     $MachineHeader = & dumpbin /headers $Binary |
         Select-String -Pattern $ExpectedMachinePattern
     if (-not $MachineHeader) {

@@ -87,6 +87,8 @@ Set-OptionalEnvironment "P11_TEST_OBJECT_ID_HEX" (Get-EffectiveSetting "P11_TEST
 $Client = (Resolve-Path (Join-Path $KitDir "bin/portable-token-e2e.exe")).Path
 $OpenSSL = (Resolve-Path (Join-Path $KitDir "bin/openssl.exe")).Path
 $Pkcs11Tool = (Resolve-Path (Join-Path $KitDir "bin/pkcs11-tool.exe")).Path
+$SoftHSMUtil = (Resolve-Path (Join-Path $KitDir "bin/softhsm2-util.exe")).Path
+$SoftHSMExport = (Resolve-Path (Join-Path $KitDir "bin/softhsm2-export.exe")).Path
 $Module = if ($args.Count -eq 1) {
     (Resolve-Path -LiteralPath $args[0]).Path
 }
@@ -109,12 +111,78 @@ Write-Host "[TEST-KIT] excluded functions=$(if ($Excluded.Count) { $Excluded -jo
 Write-Host "[TEST-KIT] precompiled client=$Client"
 Write-Host "[TEST-KIT] bundled OpenSSL=$OpenSSL"
 Write-Host "[TEST-KIT] bundled OpenSC pkcs11-tool=$Pkcs11Tool"
+Write-Host "[TEST-KIT] bundled SoftHSM utilities=$SoftHSMUtil, $SoftHSMExport"
 Write-Host "[TEST-KIT] all test evidence remains under=$(Join-Path $KitDir 'test-output')"
 
 & (Join-Path $KitDir "scripts/run-fresh-integration.ps1") $Module $OpenSSL $BundledMode
 if ($LASTEXITCODE -ne 0) { throw "downloadable test kit failed" }
 
 $OutputDir = Join-Path $KitDir "test-output"
+if ($BundledMode -eq "YES") {
+    $EffectiveTokenLabel = if ($env:P11_TEST_TOKEN_LABEL) { $env:P11_TEST_TOKEN_LABEL } else { "portable-ci-token" }
+    $EffectiveKeyLabel = if ($env:P11_TEST_KEY_LABEL) { $env:P11_TEST_KEY_LABEL } else { "portable-ci-rsa" }
+    $EffectiveObjectId = if ($env:P11_TEST_OBJECT_ID_HEX) { $env:P11_TEST_OBJECT_ID_HEX } else { "504f525441424c45" }
+    $EcId = "${EffectiveObjectId}4543"
+    $Selector = if ($env:P11_TEST_SLOT_ID) { @("--slot", $env:P11_TEST_SLOT_ID) } else { @("--token", $EffectiveTokenLabel) }
+    $OpenSCSelector = if ($env:P11_TEST_SLOT_ID) { @("--slot", $env:P11_TEST_SLOT_ID) } else { @("--token-label", $EffectiveTokenLabel) }
+    $UtilityLog = Join-Path $OutputDir "softhsm-utilities.log"
+    $UtilityLines = [System.Collections.Generic.List[string]]::new()
+    function Invoke-Utility([string]$Program, [string[]]$Arguments) {
+        $PreviousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            $Lines = @(& $Program @Arguments 2>&1)
+            $Code = $LASTEXITCODE
+        }
+        finally { $ErrorActionPreference = $PreviousErrorActionPreference }
+        $Lines | ForEach-Object { Write-Host $_; $UtilityLines.Add([string]$_) }
+        if ($Code -ne 0) { throw "$Program failed with exit code $Code" }
+    }
+
+    Invoke-Utility $SoftHSMUtil @("--show-config", "default-pkcs11-lib")
+    Invoke-Utility $SoftHSMUtil @("--show-slots")
+    $RsaExport = Join-Path $OutputDir "exported-rsa.pem"
+    Invoke-Utility $SoftHSMExport @($Selector + @("--id", $EffectiveObjectId, "--label", $EffectiveKeyLabel,
+        "--type", "rsa", "--pin", $UserPin, "--output", $RsaExport))
+    Invoke-Utility $OpenSSL @("pkey", "-in", $RsaExport, "-check", "-noout")
+    $RsaPublic = Join-Path $OutputDir "exported-rsa-public.der"
+    $CertPublicPem = Join-Path $OutputDir "certificate-public.pem"
+    $CertPublicDer = Join-Path $OutputDir "certificate-public.der"
+    Invoke-Utility $OpenSSL @("pkey", "-in", $RsaExport, "-pubout", "-outform", "DER", "-out", $RsaPublic)
+    Invoke-Utility $OpenSSL @("x509", "-in", (Join-Path $OutputDir "issued.pem"), "-pubkey", "-noout", "-out", $CertPublicPem)
+    Invoke-Utility $OpenSSL @("pkey", "-pubin", "-in", $CertPublicPem, "-outform", "DER", "-out", $CertPublicDer)
+    if ((Get-FileHash -Algorithm SHA256 $RsaPublic).Hash -ne (Get-FileHash -Algorithm SHA256 $CertPublicDer).Hash) {
+        throw "exported RSA public key does not match the issued certificate"
+    }
+
+    foreach ($ObjectType in @("privkey", "pubkey")) {
+        $PreviousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            & $Pkcs11Tool --module $Module @OpenSCSelector --login --pin $UserPin `
+                --delete-object --type $ObjectType --id $EcId *> $null
+        }
+        finally { $ErrorActionPreference = $PreviousErrorActionPreference }
+    }
+    $SourceEc = Join-Path $OutputDir "source-ec.pem"
+    $ExportedEc = Join-Path $OutputDir "exported-ec.pem"
+    Invoke-Utility $OpenSSL @("genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:P-256", "-out", $SourceEc)
+    Invoke-Utility $SoftHSMUtil @(@("--import", $SourceEc) + $Selector + @("--label", "portable-export-ec", "--id", $EcId, "--pin", $UserPin))
+    Invoke-Utility $SoftHSMExport @($Selector + @("--id", $EcId, "--label", "portable-export-ec",
+        "--type", "ec", "--pin", $UserPin, "--output", $ExportedEc))
+    Invoke-Utility $OpenSSL @("pkey", "-in", $ExportedEc, "-check", "-noout")
+    $SourceEcPublic = Join-Path $OutputDir "source-ec-public.der"
+    $ExportedEcPublic = Join-Path $OutputDir "exported-ec-public.der"
+    Invoke-Utility $OpenSSL @("pkey", "-in", $SourceEc, "-pubout", "-outform", "DER", "-out", $SourceEcPublic)
+    Invoke-Utility $OpenSSL @("pkey", "-in", $ExportedEc, "-pubout", "-outform", "DER", "-out", $ExportedEcPublic)
+    if ((Get-FileHash -Algorithm SHA256 $SourceEcPublic).Hash -ne (Get-FileHash -Algorithm SHA256 $ExportedEcPublic).Hash) {
+        throw "exported EC public key does not match the imported key"
+    }
+    $UtilityLines.Add("[UTIL] PASS: autonomous util and forced RSA/ECDSA PKCS#8 export")
+    $UtilityLines | Set-Content -Encoding utf8 -LiteralPath $UtilityLog
+    Write-Host "[UTIL] PASS: autonomous util and forced RSA/ECDSA PKCS#8 export"
+}
+
 function Invoke-OpenSCPkcs11Tool([string]$Option, [string]$LogName) {
     $PreviousErrorActionPreference = $ErrorActionPreference
     try {

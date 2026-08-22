@@ -87,13 +87,15 @@ cp "$root_dir/packaging/portable/TEST-KIT-README.txt" "$stage_dir/README.txt"
 cp "$root_dir/packaging/portable/testkit.conf" "$stage_dir/testkit.conf"
 cp "$root_dir/LICENSE" "$stage_dir/LICENSE-TestClient.txt"
 cp "$source_dir/LICENSE.txt" "$stage_dir/LICENSE-OpenSSL.txt"
-for required in "$module_name" LICENSE-SoftHSM.txt LICENSE-Botan.txt; do
+for required in "$module_name" softhsm2-util softhsm2-export LICENSE-SoftHSM.txt LICENSE-Botan.txt; do
   if [[ ! -f "$product_dir/$required" ]]; then
     echo "required product file is missing: $product_dir/$required" >&2
     exit 1
   fi
 done
 cp "$product_dir/$module_name" "$stage_dir/$module_name"
+cp "$product_dir/softhsm2-util" "$stage_dir/bin/softhsm2-util"
+cp "$product_dir/softhsm2-export" "$stage_dir/bin/softhsm2-export"
 cp "$product_dir/LICENSE-SoftHSM.txt" "$stage_dir/LICENSE-SoftHSM.txt"
 cp "$product_dir/LICENSE-Botan.txt" "$stage_dir/LICENSE-Botan.txt"
 if [[ -f "$product_dir/README.txt" ]]; then
@@ -116,7 +118,8 @@ printf 'PLATFORM=%s\nMODULE_NAME=%s\nOPENSSL_VERSION=%s\nOPENSC_VERSION=%s\n' \
 } > "$stage_dir/ENVIRONMENT.txt"
 
 chmod +x "$stage_dir/run-test.sh" "$stage_dir/bin/openssl" "$stage_dir/bin/pkcs11-tool" \
-  "$stage_dir/bin/portable-token-e2e" "$stage_dir/scripts/"*.sh
+  "$stage_dir/bin/portable-token-e2e" "$stage_dir/bin/softhsm2-util" \
+  "$stage_dir/bin/softhsm2-export" "$stage_dir/scripts/"*.sh
 if [[ $(uname -s) == Darwin ]]; then
   if otool -L "$stage_dir/bin/openssl" | grep -Eq 'lib(ssl|crypto)'; then
     echo "test-kit OpenSSL unexpectedly depends on external OpenSSL libraries" >&2
@@ -128,6 +131,8 @@ if [[ $(uname -s) == Darwin ]]; then
     exit 1
   fi
   lipo "$stage_dir/bin/pkcs11-tool" -verify_arch arm64 x86_64
+  lipo "$stage_dir/bin/softhsm2-util" -verify_arch arm64 x86_64
+  lipo "$stage_dir/bin/softhsm2-export" -verify_arch arm64 x86_64
 else
   if ldd "$stage_dir/bin/openssl" | grep -Eq 'lib(ssl|crypto)'; then
     echo "test-kit OpenSSL unexpectedly depends on external OpenSSL libraries" >&2
@@ -141,6 +146,12 @@ else
     echo "test-kit pkcs11-tool has an unresolved dependency" >&2
     exit 1
   fi
+  for tool in softhsm2-util softhsm2-export; do
+    if ldd "$stage_dir/bin/$tool" | grep -Eq 'lib(ssl|crypto|stdc\+\+|gcc_s|botan)'; then
+      echo "test-kit $tool has an unexpected runtime dependency" >&2
+      exit 1
+    fi
+  done
 fi
 
 rm -f "$output_dir/$archive_name"

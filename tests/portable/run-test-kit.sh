@@ -116,7 +116,8 @@ fi
 # ZIP extraction does not restore executable bits consistently across tools.
 # Running this launcher as `bash run-test.sh ...` repairs the bundled tools.
 chmod +x "$kit_dir/bin/portable-token-e2e" "$kit_dir/bin/openssl" \
-  "$kit_dir/bin/pkcs11-tool" \
+  "$kit_dir/bin/pkcs11-tool" "$kit_dir/bin/softhsm2-util" \
+  "$kit_dir/bin/softhsm2-export" \
   "$kit_dir/scripts/"*.sh
 test -x "$kit_dir/bin/portable-token-e2e"
 test -x "$kit_dir/bin/openssl"
@@ -133,10 +134,69 @@ printf '[TEST-KIT] excluded functions=%s\n' "${excluded:-<none>}"
 printf '[TEST-KIT] precompiled client=%s\n' "$P11_TEST_CLIENT"
 printf '[TEST-KIT] bundled OpenSSL=%s\n' "$kit_dir/bin/openssl"
 printf '[TEST-KIT] bundled OpenSC pkcs11-tool=%s\n' "$kit_dir/bin/pkcs11-tool"
+printf '[TEST-KIT] bundled SoftHSM utilities=%s, %s\n' \
+  "$kit_dir/bin/softhsm2-util" "$kit_dir/bin/softhsm2-export"
 printf '[TEST-KIT] all test evidence remains under=%s\n' "$kit_dir/test-output"
 
 "$kit_dir/scripts/run-fresh-integration.sh" "$module" \
   "$kit_dir/bin/openssl" "$bundled_mode"
+
+if [[ "$bundled_mode" == YES ]]; then
+  utility_log="$kit_dir/test-output/softhsm-utilities.log"
+  effective_token_label=${P11_TEST_TOKEN_LABEL:-portable-ci-token}
+  effective_key_label=${P11_TEST_KEY_LABEL:-portable-ci-rsa}
+  effective_object_id=${P11_TEST_OBJECT_ID_HEX:-504f525441424c45}
+  ec_id="${effective_object_id}4543"
+  if [[ -n ${P11_TEST_SLOT_ID:-} ]]; then
+    selector=(--slot "$P11_TEST_SLOT_ID")
+    opensc_selector=(--slot "$P11_TEST_SLOT_ID")
+  else
+    selector=(--token "$effective_token_label")
+    opensc_selector=(--token-label "$effective_token_label")
+  fi
+
+  {
+    printf '[UTIL] resolved module: '
+    "$kit_dir/bin/softhsm2-util" --show-config default-pkcs11-lib
+    "$kit_dir/bin/softhsm2-util" --show-slots
+    "$kit_dir/bin/softhsm2-export" "${selector[@]}" --id "$effective_object_id" \
+      --label "$effective_key_label" --type rsa --pin "$P11_TEST_USER_PIN" \
+      --output "$kit_dir/test-output/exported-rsa.pem"
+    "$kit_dir/bin/openssl" pkey -in "$kit_dir/test-output/exported-rsa.pem" \
+      -check -noout
+    "$kit_dir/bin/openssl" pkey -in "$kit_dir/test-output/exported-rsa.pem" \
+      -pubout -outform DER -out "$kit_dir/test-output/exported-rsa-public.der"
+    "$kit_dir/bin/openssl" x509 -in "$kit_dir/test-output/issued.pem" -pubkey -noout \
+      -out "$kit_dir/test-output/certificate-public.pem"
+    "$kit_dir/bin/openssl" pkey -pubin \
+      -in "$kit_dir/test-output/certificate-public.pem" -outform DER \
+      -out "$kit_dir/test-output/certificate-public.der"
+    cmp "$kit_dir/test-output/exported-rsa-public.der" \
+      "$kit_dir/test-output/certificate-public.der"
+
+    "$kit_dir/bin/pkcs11-tool" --module "$module" "${opensc_selector[@]}" \
+      --login --pin "$P11_TEST_USER_PIN" --delete-object --type privkey --id "$ec_id" \
+      >/dev/null 2>&1 || true
+    "$kit_dir/bin/pkcs11-tool" --module "$module" "${opensc_selector[@]}" \
+      --login --pin "$P11_TEST_USER_PIN" --delete-object --type pubkey --id "$ec_id" \
+      >/dev/null 2>&1 || true
+    "$kit_dir/bin/openssl" genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 \
+      -out "$kit_dir/test-output/source-ec.pem"
+    "$kit_dir/bin/softhsm2-util" --import "$kit_dir/test-output/source-ec.pem" \
+      "${selector[@]}" --label portable-export-ec --id "$ec_id" --pin "$P11_TEST_USER_PIN"
+    "$kit_dir/bin/softhsm2-export" "${selector[@]}" --id "$ec_id" \
+      --label portable-export-ec --type ec --pin "$P11_TEST_USER_PIN" \
+      --output "$kit_dir/test-output/exported-ec.pem"
+    "$kit_dir/bin/openssl" pkey -in "$kit_dir/test-output/exported-ec.pem" -check -noout
+    "$kit_dir/bin/openssl" pkey -in "$kit_dir/test-output/source-ec.pem" \
+      -pubout -outform DER -out "$kit_dir/test-output/source-ec-public.der"
+    "$kit_dir/bin/openssl" pkey -in "$kit_dir/test-output/exported-ec.pem" \
+      -pubout -outform DER -out "$kit_dir/test-output/exported-ec-public.der"
+    cmp "$kit_dir/test-output/source-ec-public.der" \
+      "$kit_dir/test-output/exported-ec-public.der"
+    printf '[UTIL] PASS: autonomous util and forced RSA/ECDSA PKCS#8 export\n'
+  } 2>&1 | tee "$utility_log"
+fi
 
 printf '[OPENSC] checking C_Initialize and library information with pkcs11-tool -I\n'
 "$kit_dir/bin/pkcs11-tool" --module "$module" -I 2>&1 | \

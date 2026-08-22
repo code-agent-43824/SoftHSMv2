@@ -174,6 +174,12 @@ public:
 	CK_RV C_CancelFunction(CK_SESSION_HANDLE hSession);
 	CK_RV C_WaitForSlotEvent(CK_FLAGS flags, CK_SLOT_ID_PTR pSlot, CK_VOID_PTR pReserved);
 
+#ifdef SOFTHSM2_ENABLE_DEBUG_EXPORT
+	// Internal debug helper used only by the statically linked softhsm2-export.
+	CK_RV exportPrivateKey(CK_SESSION_HANDLE hSession, CK_OBJECT_HANDLE hKey,
+		ByteString& keyData);
+#endif
+
 	CK_RV C_EncapsulateKey
 	(
 		CK_SESSION_HANDLE    hSession,        /* the session's handle */
