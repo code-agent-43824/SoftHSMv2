@@ -1,6 +1,6 @@
 MAINTAINERCLEANFILES = $(srcdir)/Makefile.in
 
-AM_CPPFLAGS = -DSOFTHSM2_ENABLE_DEBUG_EXPORT=1 \
+AM_CPPFLAGS = -DSOFTHSM2_ENABLE_DEBUG_EXPORT=1 -DCRYPTOKI_STATIC=1 \
 	-I$(srcdir)/../common \
 	-I$(srcdir)/../../lib \
 	-I$(srcdir)/../../lib/common \
