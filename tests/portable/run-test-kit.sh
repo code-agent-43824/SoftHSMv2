@@ -146,6 +146,7 @@ if [[ "$bundled_mode" == YES ]]; then
   effective_token_label=${P11_TEST_TOKEN_LABEL:-portable-ci-token}
   effective_key_label=${P11_TEST_KEY_LABEL:-portable-ci-rsa}
   effective_object_id=${P11_TEST_OBJECT_ID_HEX:-504f525441424c45}
+  colon_object_id=$(printf '%s' "$effective_object_id" | sed 's/../&:/g; s/:$//')
   ec_id="${effective_object_id}4543"
   if [[ -n ${P11_TEST_SLOT_ID:-} ]]; then
     selector=(--slot "$P11_TEST_SLOT_ID")
@@ -159,7 +160,7 @@ if [[ "$bundled_mode" == YES ]]; then
     printf '[UTIL] resolved module: '
     "$kit_dir/bin/softhsm2-util" --show-config default-pkcs11-lib
     "$kit_dir/bin/softhsm2-util" --show-slots
-    "$kit_dir/bin/softhsm2-export" "${selector[@]}" --id "$effective_object_id" \
+    "$kit_dir/bin/softhsm2-export" "${selector[@]}" --id "$colon_object_id" \
       --label "$effective_key_label" --type rsa --pin "$P11_TEST_USER_PIN" \
       --output "$kit_dir/test-output/exported-rsa.pem"
     "$kit_dir/bin/openssl" pkey -in "$kit_dir/test-output/exported-rsa.pem" \

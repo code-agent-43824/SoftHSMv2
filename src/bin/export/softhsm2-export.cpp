@@ -31,6 +31,7 @@ static void usage()
 	printf("       --id <hex> --type <rsa|ec> --output <path> [options]\n");
 	printf("Options:\n");
 	printf("  --label <text>    Also match the private-key label.\n");
+	printf("  --id <hex>        Key ID; compact or colon-separated hexadecimal bytes.\n");
 	printf("  --pin <PIN>       User PIN; prompt once when omitted.\n");
 	printf("  --format <pem|der> Output format; PEM is the default.\n");
 	printf("  -v, --version     Show version.\n");
@@ -39,8 +40,11 @@ static void usage()
 
 static bool decodeHex(const char* input, std::vector<CK_BYTE>& output)
 {
-	if (input == NULL || *input == '\0' || strlen(input) % 2 != 0) return false;
-	for (size_t i = 0; input[i] != '\0'; i += 2)
+	if (input == NULL || *input == '\0') return false;
+	const size_t length = strlen(input);
+	const bool separated = strchr(input, ':') != NULL;
+	if ((!separated && length % 2 != 0) || (separated && length % 3 != 2)) return false;
+	for (size_t i = 0; i < length; i += separated ? 3 : 2)
 	{
 		unsigned int value = 0;
 		if (sscanf(input + i, "%2x", &value) != 1) return false;
@@ -51,6 +55,7 @@ static bool decodeHex(const char* input, std::vector<CK_BYTE>& output)
 			(input[i + 1] >= 'a' && input[i + 1] <= 'f') ||
 			(input[i + 1] >= 'A' && input[i + 1] <= 'F')))
 			return false;
+		if (separated && i + 2 < length && input[i + 2] != ':') return false;
 		output.push_back((CK_BYTE)value);
 	}
 	return true;
@@ -162,7 +167,7 @@ int main(int argc, char* argv[])
 	std::vector<CK_BYTE> id;
 	if (!decodeHex(objectID, id))
 	{
-		fprintf(stderr, "ERROR: --id must contain an even number of hexadecimal characters.\n");
+		fprintf(stderr, "ERROR: --id must contain hexadecimal bytes, optionally separated by colons.\n");
 		return 1;
 	}
 

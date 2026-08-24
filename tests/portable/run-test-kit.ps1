@@ -122,6 +122,7 @@ if ($BundledMode -eq "YES") {
     $EffectiveTokenLabel = if ($env:P11_TEST_TOKEN_LABEL) { $env:P11_TEST_TOKEN_LABEL } else { "portable-ci-token" }
     $EffectiveKeyLabel = if ($env:P11_TEST_KEY_LABEL) { $env:P11_TEST_KEY_LABEL } else { "portable-ci-rsa" }
     $EffectiveObjectId = if ($env:P11_TEST_OBJECT_ID_HEX) { $env:P11_TEST_OBJECT_ID_HEX } else { "504f525441424c45" }
+    $ColonObjectId = $EffectiveObjectId -replace '(.{2})(?=.)', '$1:'
     $EcId = "${EffectiveObjectId}4543"
     $Selector = if ($env:P11_TEST_SLOT_ID) { @("--slot", $env:P11_TEST_SLOT_ID) } else { @("--token", $EffectiveTokenLabel) }
     $OpenSCSelector = if ($env:P11_TEST_SLOT_ID) { @("--slot", $env:P11_TEST_SLOT_ID) } else { @("--token-label", $EffectiveTokenLabel) }
@@ -142,7 +143,7 @@ if ($BundledMode -eq "YES") {
     Invoke-Utility $SoftHSMUtil @("--show-config", "default-pkcs11-lib")
     Invoke-Utility $SoftHSMUtil @("--show-slots")
     $RsaExport = Join-Path $OutputDir "exported-rsa.pem"
-    Invoke-Utility $SoftHSMExport @($Selector + @("--id", $EffectiveObjectId, "--label", $EffectiveKeyLabel,
+    Invoke-Utility $SoftHSMExport @($Selector + @("--id", $ColonObjectId, "--label", $EffectiveKeyLabel,
         "--type", "rsa", "--pin", $UserPin, "--output", $RsaExport))
     Invoke-Utility $OpenSSL @("pkey", "-in", $RsaExport, "-check", "-noout")
     $RsaPublic = Join-Path $OutputDir "exported-rsa-public.der"
