@@ -1924,6 +1924,22 @@ CK_KEY_TYPE P11DESSecretKeyObj::getKeyType()
 P11GOSTSecretKeyObj::P11GOSTSecretKeyObj()
 {
 	initialized = false;
+	keytype = CKK_GOST28147;
+}
+
+bool P11GOSTSecretKeyObj::setKeyType(CK_KEY_TYPE inKeytype)
+{
+	if (initialized) return false;
+	if (inKeytype != CKK_GOST28147 && inKeytype != CKK_KUZNECHIK &&
+	    inKeytype != CKK_MAGMA && inKeytype != CKK_KUZNECHIK_TWIN_KEY &&
+	    inKeytype != CKK_MAGMA_TWIN_KEY) return false;
+	keytype = inKeytype;
+	return true;
+}
+
+CK_KEY_TYPE P11GOSTSecretKeyObj::getKeyType()
+{
+	return keytype;
 }
 
 // Add attributes
@@ -1932,8 +1948,8 @@ bool P11GOSTSecretKeyObj::init(OSObject *inobject)
 	if (initialized) return true;
 	if (inobject == NULL) return false;
 
-	if (!inobject->attributeExists(CKA_KEY_TYPE) || inobject->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED) != CKK_GOST28147) {
-		OSAttribute setKeyType((unsigned long)CKK_GOST28147);
+	if (!inobject->attributeExists(CKA_KEY_TYPE) || inobject->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED) != keytype) {
+		OSAttribute setKeyType((unsigned long)keytype);
 		inobject->setAttribute(CKA_KEY_TYPE, setKeyType);
 	}
 
@@ -1942,13 +1958,14 @@ bool P11GOSTSecretKeyObj::init(OSObject *inobject)
 
 	// Create attributes
 	P11Attribute* attrValue = new P11AttrValue(osobject,P11Attribute::ck1|P11Attribute::ck4|P11Attribute::ck6|P11Attribute::ck7);
-	P11Attribute* attrGost28147Params = new P11AttrGost28147Params(osobject,P11Attribute::ck1|P11Attribute::ck3|P11Attribute::ck5);
+	P11Attribute* attrGost28147Params = keytype == CKK_GOST28147 ?
+		new P11AttrGost28147Params(osobject,P11Attribute::ck1|P11Attribute::ck3|P11Attribute::ck5) : NULL;
 
 	// Initialize the attributes
 	if
 	(
 		!attrValue->init() ||
-		!attrGost28147Params->init()
+		(attrGost28147Params != NULL && !attrGost28147Params->init())
 	)
 	{
 		ERROR_MSG("Could not initialize the attribute");
@@ -1959,7 +1976,8 @@ bool P11GOSTSecretKeyObj::init(OSObject *inobject)
 
 	// Add them to the map
 	attributes[attrValue->getType()] = attrValue;
-	attributes[attrGost28147Params->getType()] = attrGost28147Params;
+	if (attrGost28147Params != NULL)
+		attributes[attrGost28147Params->getType()] = attrGost28147Params;
 
 	initialized = true;
 	return true;

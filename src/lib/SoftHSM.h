@@ -412,7 +412,10 @@ private:
 		CK_ULONG ulCount,
 		CK_OBJECT_HANDLE_PTR phKey,
 		CK_BBOOL isOnToken,
-		CK_BBOOL isPrivate
+		CK_BBOOL isPrivate,
+		CK_KEY_TYPE generatedKeyType = CKK_GENERIC_SECRET,
+		CK_MECHANISM_TYPE keyGenMechanism = CKM_GENERIC_SECRET_KEY_GEN,
+		size_t fixedKeyLen = 0
 	);
 	CK_RV deriveDH
 	(

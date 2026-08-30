@@ -787,6 +787,9 @@ extern "C" {
 #define CKK_GOSTR3410                           (0x30UL)
 #define CKK_GOSTR3411                           (0x31UL)
 #define CKK_GOST28147                           (0x32UL)
+#define CKK_KUZNECHIK                           (0xD4321004UL)
+#define CKK_MAGMA                               (0xD4321005UL)
+#define CKK_KUZNECHIK_TWIN_KEY                  (0xD4321006UL)
 #define CKK_MAGMA_TWIN_KEY                      (0xD4321007UL)
 #define CKK_CHACHA20                            (0x33UL)
 #define CKK_POLY1305                            (0x34UL)
@@ -1216,6 +1219,18 @@ extern "C" {
 #define CKM_GOSTR3410_512                       (CK_VENDOR_PKCS11_RU_TEAM_TC26 | 0x006UL)
 #define CKM_GOSTR3410_12_DERIVE                 (CK_VENDOR_PKCS11_RU_TEAM_TC26 | 0x007UL)
 #define CKM_GOST_KEG                            (CK_VENDOR_PKCS11_RU_TEAM_TC26 | 0x039UL)
+#define CKM_KUZNECHIK_KEXP_15_WRAP              (CK_VENDOR_PKCS11_RU_TEAM_TC26 | 0x02BUL)
+#define CKM_MAGMA_KEXP_15_WRAP                  (CK_VENDOR_PKCS11_RU_TEAM_TC26 | 0x02CUL)
+#define CKM_KUZNECHIK_MGM                       (CK_VENDOR_PKCS11_RU_TEAM_TC26 | 0x02DUL)
+#define CKM_MAGMA_MGM                           (CK_VENDOR_PKCS11_RU_TEAM_TC26 | 0x02EUL)
+#define CKM_KUZNECHIK_KEY_GEN                   (CK_VENDOR_PKCS11_RU_TEAM_TC26 | 0x030UL)
+#define CKM_KUZNECHIK_ECB                       (CK_VENDOR_PKCS11_RU_TEAM_TC26 | 0x031UL)
+#define CKM_KUZNECHIK_CTR_ACPKM                 (CK_VENDOR_PKCS11_RU_TEAM_TC26 | 0x032UL)
+#define CKM_KUZNECHIK_MAC                       (CK_VENDOR_PKCS11_RU_TEAM_TC26 | 0x033UL)
+#define CKM_MAGMA_KEY_GEN                       (CK_VENDOR_PKCS11_RU_TEAM_TC26 | 0x034UL)
+#define CKM_MAGMA_ECB                           (CK_VENDOR_PKCS11_RU_TEAM_TC26 | 0x035UL)
+#define CKM_MAGMA_CTR_ACPKM                     (CK_VENDOR_PKCS11_RU_TEAM_TC26 | 0x036UL)
+#define CKM_MAGMA_MAC                           (CK_VENDOR_PKCS11_RU_TEAM_TC26 | 0x037UL)
 #define CKM_GOSTR3410_WITH_GOSTR3411_12_512     (CK_VENDOR_PKCS11_RU_TEAM_TC26 | 0x009UL)
 #define CKM_GOSTR3411_12_512                    (CK_VENDOR_PKCS11_RU_TEAM_TC26 | 0x013UL)
 #define CKM_GOSTR3411_12_256_HMAC               (CK_VENDOR_PKCS11_RU_TEAM_TC26 | 0x014UL)
@@ -3165,6 +3180,8 @@ typedef struct ck_aes_ctr_params *CK_AES_CTR_PARAMS_PTR;
 
 typedef struct ck_gcm_params CK_GCM_PARAMS;
 typedef struct ck_gcm_params *CK_GCM_PARAMS_PTR;
+typedef CK_GCM_PARAMS CK_MGM_PARAMS;
+typedef CK_GCM_PARAMS_PTR CK_MGM_PARAMS_PTR;
 
 typedef struct ck_gcm_wrap_params CK_GCM_WRAP_PARAMS;
 typedef struct ck_gcm_wrap_params *CK_GCM_WRAP_PARAMS_PTR;

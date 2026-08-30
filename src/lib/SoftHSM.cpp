@@ -299,9 +299,6 @@ static CK_RV newP11Object(CK_OBJECT_CLASS objClass, CK_KEY_TYPE keyType, CK_CERT
 			break;
 		case CKO_SECRET_KEY:
 			if ((keyType == CKK_GENERIC_SECRET) ||
-#ifdef WITH_GOST_3410_2012_256
-			    (keyType == CKK_MAGMA_TWIN_KEY) ||
-#endif
 			    (keyType == CKK_MD5_HMAC) ||
 			    (keyType == CKK_SHA_1_HMAC) ||
 			    (keyType == CKK_SHA224_HMAC) ||
@@ -325,9 +322,13 @@ static CK_RV newP11Object(CK_OBJECT_CLASS objClass, CK_KEY_TYPE keyType, CK_CERT
 				*p11object = key;
 				key->setKeyType(keyType);
 			}
-			else if (keyType == CKK_GOST28147)
+			else if (keyType == CKK_GOST28147 || keyType == CKK_KUZNECHIK ||
+				 keyType == CKK_MAGMA || keyType == CKK_KUZNECHIK_TWIN_KEY ||
+				 keyType == CKK_MAGMA_TWIN_KEY)
 			{
-				*p11object = new P11GOSTSecretKeyObj();
+				P11GOSTSecretKeyObj* key = new P11GOSTSecretKeyObj();
+				*p11object = key;
+				key->setKeyType(keyType);
 			}
 			else
 				return CKR_ATTRIBUTE_VALUE_INVALID;
@@ -1415,16 +1416,16 @@ namespace
 		{ CKM_GOST28147, 0, 0, CKF_HW | CKF_ENCRYPT | CKF_DECRYPT },
 		{ CKM_GOST28147_KEY_GEN, 0, 0, CKF_HW | CKF_GENERATE },
 		{ CKM_GOST28147_MAC, 0, 0, CKF_HW | CKF_SIGN | CKF_VERIFY },
-		{ 0xD4321034UL, 0, 0, CKF_HW | CKF_GENERATE },
-		{ 0xD4321030UL, 0, 0, CKF_HW | CKF_GENERATE },
-		{ 0xD4321035UL, 0, 0, CKF_HW | CKF_ENCRYPT | CKF_DECRYPT },
-		{ 0xD4321031UL, 0, 0, CKF_HW | CKF_ENCRYPT | CKF_DECRYPT },
-		{ 0xD4321036UL, 0, 0, CKF_HW | CKF_ENCRYPT | CKF_DECRYPT },
-		{ 0xD4321032UL, 0, 0, CKF_HW | CKF_ENCRYPT | CKF_DECRYPT },
-		{ 0xD432102EUL, 0, 0, CKF_HW | CKF_ENCRYPT | CKF_DECRYPT },
-		{ 0xD432102DUL, 0, 0, CKF_HW | CKF_ENCRYPT | CKF_DECRYPT },
-		{ 0xD4321037UL, 0, 0, CKF_HW | CKF_SIGN | CKF_VERIFY },
-		{ 0xD4321033UL, 0, 0, CKF_HW | CKF_SIGN | CKF_VERIFY },
+		{ CKM_MAGMA_KEY_GEN, 0, 0, CKF_HW | CKF_GENERATE },
+		{ CKM_KUZNECHIK_KEY_GEN, 0, 0, CKF_HW | CKF_GENERATE },
+		{ CKM_MAGMA_ECB, 0, 0, CKF_HW | CKF_ENCRYPT | CKF_DECRYPT },
+		{ CKM_KUZNECHIK_ECB, 0, 0, CKF_HW | CKF_ENCRYPT | CKF_DECRYPT },
+		{ CKM_MAGMA_CTR_ACPKM, 0, 0, CKF_HW | CKF_ENCRYPT | CKF_DECRYPT },
+		{ CKM_KUZNECHIK_CTR_ACPKM, 0, 0, CKF_HW | CKF_ENCRYPT | CKF_DECRYPT },
+		{ CKM_MAGMA_MGM, 0, 0, CKF_HW | CKF_ENCRYPT | CKF_DECRYPT },
+		{ CKM_KUZNECHIK_MGM, 0, 0, CKF_HW | CKF_ENCRYPT | CKF_DECRYPT },
+		{ CKM_MAGMA_MAC, 0, 0, CKF_HW | CKF_SIGN | CKF_VERIFY },
+		{ CKM_KUZNECHIK_MAC, 0, 0, CKF_HW | CKF_SIGN | CKF_VERIFY },
 		{ CKM_GOSTR3411_12_256_HMAC, 0, 0, CKF_HW | CKF_SIGN | CKF_VERIFY },
 		{ CKM_GOSTR3411_12_512_HMAC, 0, 0, CKF_HW | CKF_SIGN | CKF_VERIFY },
 		{ CKM_GOSTR3411_HMAC, 0, 0, CKF_SIGN | CKF_VERIFY },
@@ -7166,6 +7167,18 @@ CK_RV SoftHSM::C_GenerateKey(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMecha
 			objClass = CKO_SECRET_KEY;
 			keyType = CKK_GENERIC_SECRET;
 			break;
+		case CKM_GOST28147_KEY_GEN:
+			objClass = CKO_SECRET_KEY;
+			keyType = CKK_GOST28147;
+			break;
+		case CKM_KUZNECHIK_KEY_GEN:
+			objClass = CKO_SECRET_KEY;
+			keyType = CKK_KUZNECHIK;
+			break;
+		case CKM_MAGMA_KEY_GEN:
+			objClass = CKO_SECRET_KEY;
+			keyType = CKK_MAGMA;
+			break;
 		default:
 			return CKR_MECHANISM_INVALID;
 	}
@@ -7200,6 +7213,15 @@ CK_RV SoftHSM::C_GenerateKey(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMecha
 		return CKR_TEMPLATE_INCONSISTENT;
 	if (pMechanism->mechanism == CKM_GENERIC_SECRET_KEY_GEN &&
 	    (objClass != CKO_SECRET_KEY || keyType != CKK_GENERIC_SECRET))
+		return CKR_TEMPLATE_INCONSISTENT;
+	if (pMechanism->mechanism == CKM_GOST28147_KEY_GEN &&
+	    (objClass != CKO_SECRET_KEY || keyType != CKK_GOST28147))
+		return CKR_TEMPLATE_INCONSISTENT;
+	if (pMechanism->mechanism == CKM_KUZNECHIK_KEY_GEN &&
+	    (objClass != CKO_SECRET_KEY || keyType != CKK_KUZNECHIK))
+		return CKR_TEMPLATE_INCONSISTENT;
+	if (pMechanism->mechanism == CKM_MAGMA_KEY_GEN &&
+	    (objClass != CKO_SECRET_KEY || keyType != CKK_MAGMA))
 		return CKR_TEMPLATE_INCONSISTENT;
 
 	// Check authorization
@@ -7254,6 +7276,14 @@ CK_RV SoftHSM::C_GenerateKey(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMecha
 	if (pMechanism->mechanism == CKM_GENERIC_SECRET_KEY_GEN)
 	{
 		return this->generateGeneric(hSession, pTemplate, ulCount, phKey, isOnToken, isPrivate);
+	}
+
+	if (pMechanism->mechanism == CKM_GOST28147_KEY_GEN ||
+	    pMechanism->mechanism == CKM_KUZNECHIK_KEY_GEN ||
+	    pMechanism->mechanism == CKM_MAGMA_KEY_GEN)
+	{
+		return this->generateGeneric(hSession, pTemplate, ulCount, phKey,
+			isOnToken, isPrivate, keyType, pMechanism->mechanism, 32);
 	}
 
 	return CKR_GENERAL_ERROR;
@@ -9959,7 +9989,10 @@ CK_RV SoftHSM::generateGeneric
 	CK_ULONG ulCount,
 	CK_OBJECT_HANDLE_PTR phKey,
 	CK_BBOOL isOnToken,
-	CK_BBOOL isPrivate)
+	CK_BBOOL isPrivate,
+	CK_KEY_TYPE generatedKeyType,
+	CK_MECHANISM_TYPE keyGenMechanism,
+	size_t fixedKeyLen)
 {
 	*phKey = CK_INVALID_HANDLE;
 
@@ -9974,7 +10007,7 @@ CK_RV SoftHSM::generateGeneric
 		return CKR_GENERAL_ERROR;
 
 	// Extract desired parameter information
-	size_t keyLen = 0;
+	size_t keyLen = fixedKeyLen;
 	bool checkValue = true;
 	for (CK_ULONG i = 0; i < ulCount; i++)
 	{
@@ -9987,6 +10020,8 @@ CK_RV SoftHSM::generateGeneric
 					return CKR_ATTRIBUTE_VALUE_INVALID;
 				}
 				keyLen = *(CK_ULONG*)pTemplate[i].pValue;
+				if (fixedKeyLen != 0 && keyLen != fixedKeyLen)
+					return CKR_ATTRIBUTE_VALUE_INVALID;
 				break;
 			case CKA_CHECK_VALUE:
 				if (pTemplate[i].ulValueLen > 0)
@@ -10026,12 +10061,11 @@ CK_RV SoftHSM::generateGeneric
 	// Create the secret key object using C_CreateObject
 	const CK_ULONG maxAttribs = 32;
 	CK_OBJECT_CLASS objClass = CKO_SECRET_KEY;
-	CK_KEY_TYPE keyType = CKK_GENERIC_SECRET;
 	CK_ATTRIBUTE keyAttribs[maxAttribs] = {
 		{ CKA_CLASS, &objClass, sizeof(objClass) },
 		{ CKA_TOKEN, &isOnToken, sizeof(isOnToken) },
 		{ CKA_PRIVATE, &isPrivate, sizeof(isPrivate) },
-		{ CKA_KEY_TYPE, &keyType, sizeof(keyType) },
+		{ CKA_KEY_TYPE, &generatedKeyType, sizeof(generatedKeyType) },
 	};
 	CK_ULONG keyAttribsCount = 4;
 
@@ -10068,7 +10102,7 @@ CK_RV SoftHSM::generateGeneric
 
 			// Common Attributes
 			bOK = bOK && osobject->setAttribute(CKA_LOCAL,true);
-			CK_ULONG ulKeyGenMechanism = (CK_ULONG)CKM_GENERIC_SECRET_KEY_GEN;
+			CK_ULONG ulKeyGenMechanism = (CK_ULONG)keyGenMechanism;
 			bOK = bOK && osobject->setAttribute(CKA_KEY_GEN_MECHANISM,ulKeyGenMechanism);
 
 			// Common Secret Key Attributes
