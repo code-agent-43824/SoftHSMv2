@@ -92,7 +92,8 @@ int findSlot(char* slot, char* serial, char* token, bool freeToken, CK_SLOT_ID& 
 	}
 
 	CK_ULONG ulSlotCount;
-	CK_RV rv = p11->C_GetSlotList(CK_TRUE, NULL_PTR, &ulSlotCount);
+	CK_BBOOL tokenPresent = freeToken ? CK_FALSE : CK_TRUE;
+	CK_RV rv = p11->C_GetSlotList(tokenPresent, NULL_PTR, &ulSlotCount);
 	if (rv != CKR_OK)
 	{
 		fprintf(stderr, "ERROR: Could not get the number of slots.\n");
@@ -106,7 +107,7 @@ int findSlot(char* slot, char* serial, char* token, bool freeToken, CK_SLOT_ID& 
 		return 1;
 	}
 
-	rv = p11->C_GetSlotList(CK_FALSE, pSlotList, &ulSlotCount);
+	rv = p11->C_GetSlotList(tokenPresent, pSlotList, &ulSlotCount);
 	if (rv != CKR_OK)
 	{
 		fprintf(stderr, "ERROR: Could not get the slot list.\n");
@@ -248,7 +249,7 @@ int findSlot(char* slot, char* serial, char* token, CK_SLOT_ID& slotID)
 		return 1;
 	}
 
-	rv = p11->C_GetSlotList(CK_FALSE, pSlotList, &ulSlotCount);
+	rv = p11->C_GetSlotList(CK_TRUE, pSlotList, &ulSlotCount);
 	if (rv != CKR_OK)
 	{
 		fprintf(stderr, "ERROR: Could not get the slot list.\n");
@@ -328,7 +329,7 @@ int findSlot(CK_TOKEN_INFO tokenInfo, CK_SLOT_ID& slotID)
 		return 1;
 	}
 
-	rv = p11->C_GetSlotList(CK_FALSE, pSlotList, &ulSlotCount);
+	rv = p11->C_GetSlotList(CK_TRUE, pSlotList, &ulSlotCount);
 	if (rv != CKR_OK)
 	{
 		fprintf(stderr, "ERROR: Could not get the slot list.\n");
