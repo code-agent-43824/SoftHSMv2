@@ -34,6 +34,7 @@
 #include "MutexFactory.h"
 #include "OSSLCryptoFactory.h"
 #include "GOSTSymmetricAlgorithm.h"
+#include "GOSTMacAlgorithm.h"
 #include "OSSLRNG.h"
 #include "OSSLAES.h"
 #include "OSSLDES.h"
@@ -443,6 +444,10 @@ MacAlgorithm* OSSLCryptoFactory::getMacAlgorithm(MacAlgo::Type algorithm)
 			return new OSSLCMACDES();
 		case MacAlgo::CMAC_AES:
 			return new OSSLCMACAES();
+		case MacAlgo::OMAC_KUZNECHIK:
+			return new GOSTMacAlgorithm(GOSTSymmetric::KUZNECHIK);
+		case MacAlgo::OMAC_MAGMA:
+			return new GOSTMacAlgorithm(GOSTSymmetric::MAGMA);
 		default:
 			break;
 	}

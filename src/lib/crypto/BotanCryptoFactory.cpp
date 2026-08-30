@@ -33,6 +33,7 @@
 #include "config.h"
 #include "BotanCryptoFactory.h"
 #include "GOSTSymmetricAlgorithm.h"
+#include "GOSTMacAlgorithm.h"
 #include "BotanAES.h"
 #include "BotanDES.h"
 #include "BotanDSA.h"
@@ -229,6 +230,10 @@ MacAlgorithm* BotanCryptoFactory::getMacAlgorithm(MacAlgo::Type algorithm)
 			return new BotanCMACDES();
 		case MacAlgo::CMAC_AES:
 			return new BotanCMACAES();
+		case MacAlgo::OMAC_KUZNECHIK:
+			return new GOSTMacAlgorithm(GOSTSymmetric::KUZNECHIK);
+		case MacAlgo::OMAC_MAGMA:
+			return new GOSTMacAlgorithm(GOSTSymmetric::MAGMA);
 		default:
 			// No algorithm implementation is available
 			ERROR_MSG("Unknown algorithm '%i'", algorithm);

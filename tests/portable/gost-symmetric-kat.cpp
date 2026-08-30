@@ -1,6 +1,7 @@
 /* Independent known-answer checks from RFC 7801 and RFC 8891. */
 
 #include "GOSTSymmetric.h"
+#include "GOSTMacAlgorithm.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -46,6 +47,29 @@ bool kat(GOSTSymmetric::Cipher cipher, const char* keyHex,
 	return memcmp(actual, expected, blockSize) == 0 &&
 	       memcmp(recovered, plain, blockSize) == 0;
 }
+
+bool macKat(GOSTSymmetric::Cipher cipher, const char* keyHex,
+	const char* dataHex, size_t dataLen, const char* expectedHex, size_t expectedLen)
+{
+	unsigned char keyBytes[32], dataBytes[64], expected[8];
+	if (dataLen > sizeof(dataBytes) || !decode(keyHex, keyBytes, sizeof(keyBytes)) ||
+	    !decode(dataHex, dataBytes, dataLen) ||
+	    !decode(expectedHex, expected, expectedLen)) return false;
+	SymmetricKey key; key.setKeyBits(ByteString(keyBytes, sizeof(keyBytes))); key.setBitLen(256);
+	GOSTMacAlgorithm mac(cipher); ByteString result;
+	const bool completed = mac.signInit(&key) &&
+		mac.signUpdate(ByteString(dataBytes, dataLen)) && mac.signFinal(result);
+	if (!completed || result.size() != expectedLen ||
+	    memcmp(result.const_byte_str(), expected, expectedLen) != 0)
+	{
+		fprintf(stderr, "MAC actual: ");
+		for (size_t i = 0; i < result.size(); ++i)
+			fprintf(stderr, "%02x", result.const_byte_str()[i]);
+		fprintf(stderr, "\n");
+		return false;
+	}
+	return true;
+}
 }
 
 int main()
@@ -63,6 +87,18 @@ int main()
 		"fedcba9876543210", "4ee901e5c2d8ca3d", 8))
 	{
 		fprintf(stderr, "Magma RFC 8891 KAT failed\n");
+		return 1;
+	}
+	if (!macKat(GOSTSymmetric::KUZNECHIK,
+		"8899aabbccddeeff0011223344556677fedcba98765432100123456789abcdef",
+		"1122334455667700ffeeddccbbaa998800112233445566778899aabbcceeff0a112233445566778899aabbcceeff0a002233445566778899aabbcceeff0a0011",
+		64, "336f4d296059fbe3", 8) ||
+	    !macKat(GOSTSymmetric::MAGMA,
+		"ffeeddccbbaa99887766554433221100f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+		"92def06b3c130a59db54c704f8189d204a98fb2e67a8024c8912409b17b57e41",
+		32, "154e7210", 4))
+	{
+		fprintf(stderr, "GOST R 34.13-2015 OMAC KAT failed\n");
 		return 1;
 	}
 	puts("GOST symmetric block KAT: PASS");

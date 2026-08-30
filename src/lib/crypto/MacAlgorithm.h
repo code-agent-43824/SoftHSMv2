@@ -51,7 +51,9 @@ struct MacAlgo
 		HMAC_SHA512,
 		HMAC_GOST,
 		CMAC_DES,
-		CMAC_AES
+		CMAC_AES,
+		OMAC_KUZNECHIK,
+		OMAC_MAGMA
 	};
 };
 
@@ -98,4 +100,3 @@ private:
 };
 
 #endif // !_SOFTHSM_V2_MACALGORITHM_H
-

@@ -4977,6 +4977,8 @@ static bool isMacMechanism(CK_MECHANISM_PTR pMechanism)
 #endif
 		case CKM_DES3_CMAC:
 		case CKM_AES_CMAC:
+		case CKM_KUZNECHIK_MAC:
+		case CKM_MAGMA_MAC:
 			return true;
 		default:
 			return false;
@@ -5091,6 +5093,18 @@ CK_RV SoftHSM::MacSignInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMechani
 			if (keyType != CKK_AES)
 				return CKR_KEY_TYPE_INCONSISTENT;
 			algo = MacAlgo::CMAC_AES;
+			break;
+		case CKM_KUZNECHIK_MAC:
+			if (keyType != CKK_KUZNECHIK) return CKR_KEY_TYPE_INCONSISTENT;
+			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
+				return CKR_MECHANISM_PARAM_INVALID;
+			algo = MacAlgo::OMAC_KUZNECHIK;
+			break;
+		case CKM_MAGMA_MAC:
+			if (keyType != CKK_MAGMA) return CKR_KEY_TYPE_INCONSISTENT;
+			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
+				return CKR_MECHANISM_PARAM_INVALID;
+			algo = MacAlgo::OMAC_MAGMA;
 			break;
 		default:
 			return CKR_MECHANISM_INVALID;
@@ -6212,6 +6226,18 @@ CK_RV SoftHSM::MacVerifyInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMecha
 			if (keyType != CKK_AES)
 				return CKR_KEY_TYPE_INCONSISTENT;
 			algo = MacAlgo::CMAC_AES;
+			break;
+		case CKM_KUZNECHIK_MAC:
+			if (keyType != CKK_KUZNECHIK) return CKR_KEY_TYPE_INCONSISTENT;
+			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
+				return CKR_MECHANISM_PARAM_INVALID;
+			algo = MacAlgo::OMAC_KUZNECHIK;
+			break;
+		case CKM_MAGMA_MAC:
+			if (keyType != CKK_MAGMA) return CKR_KEY_TYPE_INCONSISTENT;
+			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
+				return CKR_MECHANISM_PARAM_INVALID;
+			algo = MacAlgo::OMAC_MAGMA;
 			break;
 		default:
 			return CKR_MECHANISM_INVALID;
