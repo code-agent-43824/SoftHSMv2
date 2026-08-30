@@ -31,6 +31,7 @@ libsofthsm_crypto_la_SOURCES =	AESKey.cpp \
 				HashAlgorithm.cpp \
 				MacAlgorithm.cpp \
 				GOSTSymmetric.cpp \
+				GOSTSymmetricAlgorithm.cpp \
 				MLDSAMechanismParam.cpp \
 				MLDSAParameters.cpp \
 				MLDSAPrivateKey.cpp \

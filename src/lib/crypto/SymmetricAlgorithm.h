@@ -45,7 +45,9 @@ struct SymAlgo
 		Unknown,
 		AES,
 		DES,
-		DES3
+		DES3,
+		KUZNECHIK,
+		MAGMA
 	};
 };
 
@@ -59,7 +61,8 @@ struct SymMode
 		CTR,
 		ECB,
 		GCM,
-		OFB
+		OFB,
+		CTR_ACPKM
 	};
 };
 
@@ -145,4 +148,3 @@ protected:
 };
 
 #endif // !_SOFTHSM_V2_SYMMETRICALGORITHM_H
-

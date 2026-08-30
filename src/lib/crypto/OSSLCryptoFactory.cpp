@@ -33,6 +33,7 @@
 #include "config.h"
 #include "MutexFactory.h"
 #include "OSSLCryptoFactory.h"
+#include "GOSTSymmetricAlgorithm.h"
 #include "OSSLRNG.h"
 #include "OSSLAES.h"
 #include "OSSLDES.h"
@@ -328,6 +329,10 @@ SymmetricAlgorithm* OSSLCryptoFactory::getSymmetricAlgorithm(SymAlgo::Type algor
 		case SymAlgo::DES:
 		case SymAlgo::DES3:
 			return new OSSLDES();
+		case SymAlgo::KUZNECHIK:
+			return new GOSTSymmetricAlgorithm(GOSTSymmetric::KUZNECHIK);
+		case SymAlgo::MAGMA:
+			return new GOSTSymmetricAlgorithm(GOSTSymmetric::MAGMA);
 		default:
 			break;
 	}

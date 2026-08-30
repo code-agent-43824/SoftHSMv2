@@ -3074,6 +3074,10 @@ static bool isSymMechanism(CK_MECHANISM_PTR pMechanism)
 		case CKM_AES_CBC_PAD:
 		case CKM_AES_CTR:
 		case CKM_AES_GCM:
+		case CKM_KUZNECHIK_ECB:
+		case CKM_MAGMA_ECB:
+		case CKM_KUZNECHIK_CTR_ACPKM:
+		case CKM_MAGMA_CTR_ACPKM:
 			return true;
 		default:
 			return false;
@@ -3176,13 +3180,36 @@ CK_RV SoftHSM::SymEncryptInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMech
 			bb = 7;
 			break;
 #endif
-		case CKM_DES3_ECB:
+	case CKM_DES3_ECB:
 			if (keyType != CKK_DES2 && keyType != CKK_DES3)
 				return CKR_KEY_TYPE_INCONSISTENT;
 			algo = SymAlgo::DES3;
 			mode = SymMode::ECB;
 			bb = 7;
 			break;
+		case CKM_KUZNECHIK_ECB:
+			if (keyType != CKK_KUZNECHIK) return CKR_KEY_TYPE_INCONSISTENT;
+			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
+				return CKR_MECHANISM_PARAM_INVALID;
+			algo = SymAlgo::KUZNECHIK; mode = SymMode::ECB; break;
+		case CKM_MAGMA_ECB:
+			if (keyType != CKK_MAGMA) return CKR_KEY_TYPE_INCONSISTENT;
+			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
+				return CKR_MECHANISM_PARAM_INVALID;
+			algo = SymAlgo::MAGMA; mode = SymMode::ECB; break;
+		case CKM_KUZNECHIK_CTR_ACPKM:
+		case CKM_MAGMA_CTR_ACPKM:
+		{
+			const bool kuz = pMechanism->mechanism == CKM_KUZNECHIK_CTR_ACPKM;
+			if (keyType != (kuz ? CKK_KUZNECHIK : CKK_MAGMA)) return CKR_KEY_TYPE_INCONSISTENT;
+			const size_t expected = kuz ? 12 : 8;
+			if (pMechanism->pParameter == NULL_PTR || pMechanism->ulParameterLen != expected)
+				return CKR_MECHANISM_PARAM_INVALID;
+			algo = kuz ? SymAlgo::KUZNECHIK : SymAlgo::MAGMA;
+			mode = SymMode::CTR_ACPKM;
+			iv.resize(expected); memcpy(&iv[0], pMechanism->pParameter, expected);
+			break;
+		}
 		case CKM_DES3_CBC:
 			if (keyType != CKK_DES2 && keyType != CKK_DES3)
 				return CKR_KEY_TYPE_INCONSISTENT;
@@ -3932,13 +3959,36 @@ CK_RV SoftHSM::SymDecryptInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMech
 			bb = 7;
 			break;
 #endif
-		case CKM_DES3_ECB:
+	case CKM_DES3_ECB:
 			if (keyType != CKK_DES2 && keyType != CKK_DES3)
 				return CKR_KEY_TYPE_INCONSISTENT;
 			algo = SymAlgo::DES3;
 			mode = SymMode::ECB;
 			bb = 7;
 			break;
+		case CKM_KUZNECHIK_ECB:
+			if (keyType != CKK_KUZNECHIK) return CKR_KEY_TYPE_INCONSISTENT;
+			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
+				return CKR_MECHANISM_PARAM_INVALID;
+			algo = SymAlgo::KUZNECHIK; mode = SymMode::ECB; break;
+		case CKM_MAGMA_ECB:
+			if (keyType != CKK_MAGMA) return CKR_KEY_TYPE_INCONSISTENT;
+			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
+				return CKR_MECHANISM_PARAM_INVALID;
+			algo = SymAlgo::MAGMA; mode = SymMode::ECB; break;
+		case CKM_KUZNECHIK_CTR_ACPKM:
+		case CKM_MAGMA_CTR_ACPKM:
+		{
+			const bool kuz = pMechanism->mechanism == CKM_KUZNECHIK_CTR_ACPKM;
+			if (keyType != (kuz ? CKK_KUZNECHIK : CKK_MAGMA)) return CKR_KEY_TYPE_INCONSISTENT;
+			const size_t expected = kuz ? 12 : 8;
+			if (pMechanism->pParameter == NULL_PTR || pMechanism->ulParameterLen != expected)
+				return CKR_MECHANISM_PARAM_INVALID;
+			algo = kuz ? SymAlgo::KUZNECHIK : SymAlgo::MAGMA;
+			mode = SymMode::CTR_ACPKM;
+			iv.resize(expected); memcpy(&iv[0], pMechanism->pParameter, expected);
+			break;
+		}
 		case CKM_DES3_CBC:
 			if (keyType != CKK_DES2 && keyType != CKK_DES3)
 				return CKR_KEY_TYPE_INCONSISTENT;

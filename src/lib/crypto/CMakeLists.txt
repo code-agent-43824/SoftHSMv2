@@ -31,6 +31,7 @@ set(SOURCES AESKey.cpp
             HashAlgorithm.cpp
             MacAlgorithm.cpp
             GOSTSymmetric.cpp
+            GOSTSymmetricAlgorithm.cpp
             MLDSAMechanismParam.cpp
             MLDSAParameters.cpp
             MLDSAPrivateKey.cpp

@@ -32,6 +32,7 @@
  *****************************************************************************/
 #include "config.h"
 #include "BotanCryptoFactory.h"
+#include "GOSTSymmetricAlgorithm.h"
 #include "BotanAES.h"
 #include "BotanDES.h"
 #include "BotanDSA.h"
@@ -116,6 +117,10 @@ SymmetricAlgorithm* BotanCryptoFactory::getSymmetricAlgorithm(SymAlgo::Type algo
 		case SymAlgo::DES:
 		case SymAlgo::DES3:
 	                return new BotanDES();
+		case SymAlgo::KUZNECHIK:
+			return new GOSTSymmetricAlgorithm(GOSTSymmetric::KUZNECHIK);
+		case SymAlgo::MAGMA:
+			return new GOSTSymmetricAlgorithm(GOSTSymmetric::MAGMA);
 		default:
 	                // No algorithm implementation is available
         	        ERROR_MSG("Unknown algorithm '%i'", algorithm);
