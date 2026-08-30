@@ -124,6 +124,19 @@ jobs:
             "$HOME/softhsm/softhsm.conf"
           P11_PROFILE_EXPECTED_LABEL='Rutoken ECP' \
             ./portable-token-e2e rutoken-profile "$module"
+          portable-product/softhsm2-export --token 'Rutoken ECP' \
+            --id 504f525441424c4547 --label portable-ci-gost2012-256 \
+            --type gost --pin 12345678 --format der \
+            --output "$GITHUB_WORKSPACE/profile-gate-work/exported-gost.der"
+          openssl asn1parse -inform DER \
+            -in "$GITHUB_WORKSPACE/profile-gate-work/exported-gost.der" \
+            > "$GITHUB_WORKSPACE/profile-gate-work/exported-gost-asn1.txt"
+          grep -E 'GOST R 34\.10-2012 with 256 bit modulus|id-tc26-gost3410-12-256|1\.2\.643\.7\.1\.1\.1\.1' \
+            "$GITHUB_WORKSPACE/profile-gate-work/exported-gost-asn1.txt"
+          grep -E 'id-GostR3410-2001-CryptoPro-A-ParamSet|1\.2\.643\.2\.2\.35\.1' \
+            "$GITHUB_WORKSPACE/profile-gate-work/exported-gost-asn1.txt"
+          grep -E 'GOST R 34\.11-2012 with 256 bit hash|id-tc26-gost3411-12-256|1\.2\.643\.7\.1\.1\.2\.2' \
+            "$GITHUB_WORKSPACE/profile-gate-work/exported-gost-asn1.txt"
       # Behaviour that is plain PKCS #11 rather than Rutoken, checked with the
       # profile off because that is where it also has to hold: slot events, and
       # attributes of a private object being both readable and stored

@@ -26,9 +26,9 @@ CK_FUNCTION_LIST_PTR p11 = NULL_PTR;
 
 static void usage()
 {
-	printf("Force-export an RSA or EC private key from this SoftHSM fork.\n");
+	printf("Force-export an RSA, EC, or GOST private key from this SoftHSM fork.\n");
 	printf("Usage: softhsm2-export --token <label>|--serial <serial>|--slot <number>\n");
-	printf("       --id <hex> --type <rsa|ec> --output <path> [options]\n");
+	printf("       --id <hex> --type <rsa|ec|gost> --output <path> [options]\n");
 	printf("Options:\n");
 	printf("  --label <text>    Also match the private-key label.\n");
 	printf("  --id <hex>        Key ID; compact or colon-separated hexadecimal bytes.\n");
@@ -143,7 +143,8 @@ int main(int argc, char* argv[])
 			case OPT_TYPE:
 				if (!strcmp(optarg, "rsa")) keyType = CKK_RSA;
 				else if (!strcmp(optarg, "ec") || !strcmp(optarg, "ecdsa")) keyType = CKK_EC;
-				else { fprintf(stderr, "ERROR: --type must be rsa or ec.\n"); return 1; }
+				else if (!strcmp(optarg, "gost")) keyType = CKK_GOSTR3410;
+				else { fprintf(stderr, "ERROR: --type must be rsa, ec, or gost.\n"); return 1; }
 				break;
 			case OPT_FORMAT:
 				if (!strcmp(optarg, "pem")) pem = true;

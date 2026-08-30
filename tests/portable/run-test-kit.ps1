@@ -124,6 +124,7 @@ if ($BundledMode -eq "YES") {
     $EffectiveObjectId = if ($env:P11_TEST_OBJECT_ID_HEX) { $env:P11_TEST_OBJECT_ID_HEX } else { "504f525441424c45" }
     $ColonObjectId = $EffectiveObjectId -replace '(.{2})(?=.)', '$1:'
     $EcId = "${EffectiveObjectId}4543"
+    $GostId = "${EffectiveObjectId}47"
     $Selector = if ($env:P11_TEST_SLOT_ID) { @("--slot", $env:P11_TEST_SLOT_ID) } else { @("--token", $EffectiveTokenLabel) }
     $OpenSCSelector = if ($env:P11_TEST_SLOT_ID) { @("--slot", $env:P11_TEST_SLOT_ID) } else { @("--token-label", $EffectiveTokenLabel) }
     $UtilityLog = Join-Path $OutputDir "softhsm-utilities.log"
@@ -179,9 +180,27 @@ if ($BundledMode -eq "YES") {
     if ((Get-FileHash -Algorithm SHA256 $SourceEcPublic).Hash -ne (Get-FileHash -Algorithm SHA256 $ExportedEcPublic).Hash) {
         throw "exported EC public key does not match the imported key"
     }
-    $UtilityLines.Add("[UTIL] PASS: autonomous util and forced RSA/ECDSA PKCS#8 export")
+
+    $ExportedGost = Join-Path $OutputDir "exported-gost.der"
+    $GostAsn1 = Join-Path $OutputDir "exported-gost-asn1.txt"
+    Invoke-Utility $SoftHSMExport @($Selector + @("--id", $GostId, "--label", "portable-ci-gost2012-256",
+        "--type", "gost", "--pin", $UserPin, "--format", "der", "--output", $ExportedGost))
+    $GostAsn1Lines = @(& $OpenSSL asn1parse -inform DER -in $ExportedGost 2>&1)
+    $GostAsn1Code = $LASTEXITCODE
+    $GostAsn1Lines | ForEach-Object { Write-Host $_; $UtilityLines.Add([string]$_) }
+    $GostAsn1Lines | Set-Content -Encoding utf8 -LiteralPath $GostAsn1
+    if ($GostAsn1Code -ne 0) { throw "OpenSSL could not parse exported GOST PKCS#8" }
+    $GostAsn1Text = $GostAsn1Lines -join "`n"
+    foreach ($Pattern in @(
+        'GOST R 34\.10-2012 with 256 bit modulus|id-tc26-gost3410-12-256|1\.2\.643\.7\.1\.1\.1\.1',
+        'id-GostR3410-2001-CryptoPro-A-ParamSet|1\.2\.643\.2\.2\.35\.1',
+        'GOST R 34\.11-2012 with 256 bit hash|id-tc26-gost3411-12-256|1\.2\.643\.7\.1\.1\.2\.2'
+    )) {
+        if ($GostAsn1Text -notmatch $Pattern) { throw "exported GOST PKCS#8 is missing an expected OID" }
+    }
+    $UtilityLines.Add("[UTIL] PASS: autonomous util and forced RSA/ECDSA/GOST PKCS#8 export")
     $UtilityLines | Set-Content -Encoding utf8 -LiteralPath $UtilityLog
-    Write-Host "[UTIL] PASS: autonomous util and forced RSA/ECDSA PKCS#8 export"
+    Write-Host "[UTIL] PASS: autonomous util and forced RSA/ECDSA/GOST PKCS#8 export"
 }
 
 function Invoke-OpenSCPkcs11Tool([string]$Option, [string]$LogName) {

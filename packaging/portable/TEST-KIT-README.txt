@@ -42,7 +42,9 @@ For the bundled module only, the launcher then runs softhsm2-util without a
 --module argument, force-exports the persistent sensitive/non-extractable RSA
 key, imports a P-256 EC fixture with softhsm2-util, force-exports it, validates
 both PKCS#8 files with the bundled OpenSSL, and compares their public keys to
-independent references. GOST export is intentionally outside this test.
+independent references. It also force-exports the persistent sensitive/non-
+extractable GOST R 34.10-2012/256 key and validates its PKCS#8 structure and
+algorithm, curve, and digest OIDs with the bundled OpenSSL.
 
 Linux or macOS:
   bash run-test.sh

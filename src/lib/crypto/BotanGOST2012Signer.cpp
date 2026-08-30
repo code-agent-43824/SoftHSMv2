@@ -21,10 +21,13 @@
 #include "log.h"
 
 #include <botan/bigint.h>
+#include <botan/ber_dec.h>
+#include <botan/der_enc.h>
 #include <botan/ec_group.h>
 #include <botan/gost_3410.h>
 #include <botan/pubkey.h>
 #include <botan/rng.h>
+#include <algorithm>
 #include <cstring>
 #include <stdexcept>
 #include <vector>
@@ -122,7 +125,46 @@ bool BotanGOST2012PrivateKey::deserialise(ByteString& serialised)
 
 ByteString BotanGOST2012PrivateKey::PKCS8Encode()
 {
-	return ByteString();
+	ByteString result;
+	if (ec.size() == 0 || d.size() != 32) return result;
+	std::vector<uint8_t> scalar;
+
+	try
+	{
+		Botan::OID curve;
+		Botan::BER_Decoder(ec.const_byte_str(), ec.size()).decode(curve).verify_end();
+		Botan::DER_Encoder parameterEncoder;
+		parameterEncoder.start_cons(Botan::SEQUENCE).encode(curve);
+		const std::string curveName = curve.to_string();
+		if (curveName.find("1.2.643.2.2.35.") == 0 ||
+		    curveName == "1.2.643.2.2.36.0" ||
+		    curveName == "1.2.643.2.2.36.1")
+			parameterEncoder.encode(Botan::OID("1.2.643.7.1.1.2.2"));
+		const Botan::secure_vector<uint8_t> encodedParameters =
+			parameterEncoder.end_cons().get_contents();
+		const std::vector<uint8_t> parameters(encodedParameters.begin(), encodedParameters.end());
+
+		scalar.assign(d.const_byte_str(), d.const_byte_str() + d.size());
+		std::reverse(scalar.begin(), scalar.end());
+		const Botan::AlgorithmIdentifier algorithm(
+			Botan::OID("1.2.643.7.1.1.1.1"), parameters);
+		const Botan::secure_vector<uint8_t> encoded = Botan::DER_Encoder()
+			.start_cons(Botan::SEQUENCE)
+				.encode(static_cast<size_t>(0))
+				.encode(algorithm)
+				.encode(scalar, Botan::OCTET_STRING)
+			.end_cons()
+			.get_contents();
+		result.resize(encoded.size());
+		std::memcpy(result.byte_str(), encoded.data(), encoded.size());
+	}
+	catch (const std::exception& exception)
+	{
+		ERROR_MSG("GOST R 34.10-2012/256 PKCS #8 encoding failed: %s", exception.what());
+		result.wipe();
+	}
+	std::fill(scalar.begin(), scalar.end(), 0);
+	return result;
 }
 
 bool BotanGOST2012PrivateKey::PKCS8Decode(const ByteString&)

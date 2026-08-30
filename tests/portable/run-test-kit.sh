@@ -148,6 +148,7 @@ if [[ "$bundled_mode" == YES ]]; then
   effective_object_id=${P11_TEST_OBJECT_ID_HEX:-504f525441424c45}
   colon_object_id=$(printf '%s' "$effective_object_id" | sed 's/../&:/g; s/:$//')
   ec_id="${effective_object_id}4543"
+  gost_id="${effective_object_id}47"
   if [[ -n ${P11_TEST_SLOT_ID:-} ]]; then
     selector=(--slot "$P11_TEST_SLOT_ID")
     opensc_selector=(--slot "$P11_TEST_SLOT_ID")
@@ -195,7 +196,20 @@ if [[ "$bundled_mode" == YES ]]; then
       -pubout -outform DER -out "$kit_dir/test-output/exported-ec-public.der"
     cmp "$kit_dir/test-output/source-ec-public.der" \
       "$kit_dir/test-output/exported-ec-public.der"
-    printf '[UTIL] PASS: autonomous util and forced RSA/ECDSA PKCS#8 export\n'
+
+    "$kit_dir/bin/softhsm2-export" "${selector[@]}" --id "$gost_id" \
+      --label portable-ci-gost2012-256 --type gost --pin "$P11_TEST_USER_PIN" \
+      --format der --output "$kit_dir/test-output/exported-gost.der"
+    "$kit_dir/bin/openssl" asn1parse -inform DER \
+      -in "$kit_dir/test-output/exported-gost.der" 2>&1 | \
+      tee "$kit_dir/test-output/exported-gost-asn1.txt"
+    grep -E 'GOST R 34\.10-2012 with 256 bit modulus|id-tc26-gost3410-12-256|1\.2\.643\.7\.1\.1\.1\.1' \
+      "$kit_dir/test-output/exported-gost-asn1.txt"
+    grep -E 'id-GostR3410-2001-CryptoPro-A-ParamSet|1\.2\.643\.2\.2\.35\.1' \
+      "$kit_dir/test-output/exported-gost-asn1.txt"
+    grep -E 'GOST R 34\.11-2012 with 256 bit hash|id-tc26-gost3411-12-256|1\.2\.643\.7\.1\.1\.2\.2' \
+      "$kit_dir/test-output/exported-gost-asn1.txt"
+    printf '[UTIL] PASS: autonomous util and forced RSA/ECDSA/GOST PKCS#8 export\n'
   } 2>&1 | tee "$utility_log"
 fi
 

@@ -8233,10 +8233,25 @@ CK_RV SoftHSM::exportPrivateKey
 	else if (keyType == CKK_EC)
 		alg = AsymAlgo::ECDSA;
 #endif
+#ifdef WITH_GOST
+	else if (keyType == CKK_GOSTR3410)
+		alg = AsymAlgo::GOST;
+#elif defined(WITH_GOST_3410_2012_256)
+	else if (keyType == CKK_GOSTR3410)
+	{
+		// The lightweight GOST-2012 implementation is created below.
+	}
+#endif
 	else
 		return CKR_KEY_TYPE_INCONSISTENT;
 
-	AsymmetricAlgorithm* asymCrypto = CryptoFactory::i()->getAsymmetricAlgorithm(alg);
+	AsymmetricAlgorithm* asymCrypto = NULL;
+#if defined(WITH_GOST_3410_2012_256) && !defined(WITH_GOST)
+	if (keyType == CKK_GOSTR3410)
+		asymCrypto = new (std::nothrow) BotanGOST2012Signer();
+	else
+#endif
+		asymCrypto = CryptoFactory::i()->getAsymmetricAlgorithm(alg);
 	if (asymCrypto == NULL) return CKR_GENERAL_ERROR;
 
 	PrivateKey* privateKey = asymCrypto->newPrivateKey();
@@ -8249,8 +8264,12 @@ CK_RV SoftHSM::exportPrivateKey
 	if (keyType == CKK_RSA)
 		rv = getRSAPrivateKey((RSAPrivateKey*)privateKey, token, key);
 #ifdef WITH_ECC
-	else
+	else if (keyType == CKK_EC)
 		rv = getECPrivateKey((ECPrivateKey*)privateKey, token, key);
+#endif
+#if defined(WITH_GOST) || defined(WITH_GOST_3410_2012_256)
+	else
+		rv = getGOSTPrivateKey((GOSTPrivateKey*)privateKey, token, key);
 #endif
 
 	if (rv == CKR_OK)
