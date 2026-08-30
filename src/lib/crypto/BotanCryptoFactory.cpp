@@ -33,6 +33,8 @@
 #include "config.h"
 #include "BotanCryptoFactory.h"
 #include "GOSTSymmetricAlgorithm.h"
+#include "GOST28147Algorithm.h"
+#include "GOST28147MacAlgorithm.h"
 #include "GOSTMacAlgorithm.h"
 #include "BotanAES.h"
 #include "BotanDES.h"
@@ -118,6 +120,8 @@ SymmetricAlgorithm* BotanCryptoFactory::getSymmetricAlgorithm(SymAlgo::Type algo
 		case SymAlgo::DES:
 		case SymAlgo::DES3:
 	                return new BotanDES();
+		case SymAlgo::GOST28147:
+			return new GOST28147Algorithm();
 		case SymAlgo::KUZNECHIK:
 			return new GOSTSymmetricAlgorithm(GOSTSymmetric::KUZNECHIK);
 		case SymAlgo::MAGMA:
@@ -230,6 +234,8 @@ MacAlgorithm* BotanCryptoFactory::getMacAlgorithm(MacAlgo::Type algorithm)
 			return new BotanCMACDES();
 		case MacAlgo::CMAC_AES:
 			return new BotanCMACAES();
+		case MacAlgo::IMIT_GOST28147:
+			return new GOST28147MacAlgorithm();
 		case MacAlgo::OMAC_KUZNECHIK:
 			return new GOSTMacAlgorithm(GOSTSymmetric::KUZNECHIK);
 		case MacAlgo::OMAC_MAGMA:

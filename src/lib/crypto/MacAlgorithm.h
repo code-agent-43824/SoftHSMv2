@@ -52,6 +52,7 @@ struct MacAlgo
 		HMAC_GOST,
 		CMAC_DES,
 		CMAC_AES,
+		IMIT_GOST28147,
 		OMAC_KUZNECHIK,
 		OMAC_MAGMA
 	};

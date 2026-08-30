@@ -61,6 +61,16 @@ const ByteString& SymmetricKey::getKeyBits() const
 	return keyData;
 }
 
+void SymmetricKey::setAlgorithmParameters(const ByteString& parameters)
+{
+	algorithmParameters = parameters;
+}
+
+const ByteString& SymmetricKey::getAlgorithmParameters() const
+{
+	return algorithmParameters;
+}
+
 // Get the key check value
 ByteString SymmetricKey::getKeyCheckValue() const
 {
@@ -100,4 +110,3 @@ size_t SymmetricKey::getBitLen() const
 {
 	return bitLen;
 }
-

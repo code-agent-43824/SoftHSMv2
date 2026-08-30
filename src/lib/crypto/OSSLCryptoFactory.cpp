@@ -34,6 +34,8 @@
 #include "MutexFactory.h"
 #include "OSSLCryptoFactory.h"
 #include "GOSTSymmetricAlgorithm.h"
+#include "GOST28147Algorithm.h"
+#include "GOST28147MacAlgorithm.h"
 #include "GOSTMacAlgorithm.h"
 #include "OSSLRNG.h"
 #include "OSSLAES.h"
@@ -330,6 +332,8 @@ SymmetricAlgorithm* OSSLCryptoFactory::getSymmetricAlgorithm(SymAlgo::Type algor
 		case SymAlgo::DES:
 		case SymAlgo::DES3:
 			return new OSSLDES();
+		case SymAlgo::GOST28147:
+			return new GOST28147Algorithm();
 		case SymAlgo::KUZNECHIK:
 			return new GOSTSymmetricAlgorithm(GOSTSymmetric::KUZNECHIK);
 		case SymAlgo::MAGMA:
@@ -444,6 +448,8 @@ MacAlgorithm* OSSLCryptoFactory::getMacAlgorithm(MacAlgo::Type algorithm)
 			return new OSSLCMACDES();
 		case MacAlgo::CMAC_AES:
 			return new OSSLCMACAES();
+		case MacAlgo::IMIT_GOST28147:
+			return new GOST28147MacAlgorithm();
 		case MacAlgo::OMAC_KUZNECHIK:
 			return new GOSTMacAlgorithm(GOSTSymmetric::KUZNECHIK);
 		case MacAlgo::OMAC_MAGMA:

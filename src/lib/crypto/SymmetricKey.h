@@ -48,6 +48,8 @@ public:
 
 	// Get the key
 	virtual const ByteString& getKeyBits() const;
+	virtual void setAlgorithmParameters(const ByteString& parameters);
+	virtual const ByteString& getAlgorithmParameters() const;
 
 	// Get the key check value
 	virtual ByteString getKeyCheckValue() const;
@@ -64,10 +66,10 @@ public:
 protected:
 	// The key
 	ByteString keyData;
+	ByteString algorithmParameters;
 
 	// The key length in bits
 	size_t bitLen;
 };
 
 #endif // !_SOFTHSM_V2_SYMMETRICKEY_H
-

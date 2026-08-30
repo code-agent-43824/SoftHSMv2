@@ -3192,6 +3192,17 @@ CK_RV SoftHSM::SymEncryptInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMech
 			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
 				return CKR_MECHANISM_PARAM_INVALID;
 			algo = SymAlgo::KUZNECHIK; mode = SymMode::ECB; break;
+		case CKM_GOST28147_ECB:
+			if (keyType != CKK_GOST28147) return CKR_KEY_TYPE_INCONSISTENT;
+			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
+				return CKR_MECHANISM_PARAM_INVALID;
+			algo = SymAlgo::GOST28147; mode = SymMode::ECB; break;
+		case CKM_GOST28147:
+			if (keyType != CKK_GOST28147) return CKR_KEY_TYPE_INCONSISTENT;
+			if (pMechanism->pParameter == NULL_PTR || pMechanism->ulParameterLen != 8)
+				return CKR_MECHANISM_PARAM_INVALID;
+			algo = SymAlgo::GOST28147; mode = SymMode::CFB;
+			iv.resize(8); memcpy(&iv[0], pMechanism->pParameter, 8); break;
 		case CKM_MAGMA_ECB:
 			if (keyType != CKK_MAGMA) return CKR_KEY_TYPE_INCONSISTENT;
 			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
@@ -3971,6 +3982,17 @@ CK_RV SoftHSM::SymDecryptInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMech
 			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
 				return CKR_MECHANISM_PARAM_INVALID;
 			algo = SymAlgo::KUZNECHIK; mode = SymMode::ECB; break;
+		case CKM_GOST28147_ECB:
+			if (keyType != CKK_GOST28147) return CKR_KEY_TYPE_INCONSISTENT;
+			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
+				return CKR_MECHANISM_PARAM_INVALID;
+			algo = SymAlgo::GOST28147; mode = SymMode::ECB; break;
+		case CKM_GOST28147:
+			if (keyType != CKK_GOST28147) return CKR_KEY_TYPE_INCONSISTENT;
+			if (pMechanism->pParameter == NULL_PTR || pMechanism->ulParameterLen != 8)
+				return CKR_MECHANISM_PARAM_INVALID;
+			algo = SymAlgo::GOST28147; mode = SymMode::CFB;
+			iv.resize(8); memcpy(&iv[0], pMechanism->pParameter, 8); break;
 		case CKM_MAGMA_ECB:
 			if (keyType != CKK_MAGMA) return CKR_KEY_TYPE_INCONSISTENT;
 			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
@@ -4977,6 +4999,7 @@ static bool isMacMechanism(CK_MECHANISM_PTR pMechanism)
 #endif
 		case CKM_DES3_CMAC:
 		case CKM_AES_CMAC:
+		case CKM_GOST28147_MAC:
 		case CKM_KUZNECHIK_MAC:
 		case CKM_MAGMA_MAC:
 			return true;
@@ -5099,6 +5122,12 @@ CK_RV SoftHSM::MacSignInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMechani
 			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
 				return CKR_MECHANISM_PARAM_INVALID;
 			algo = MacAlgo::OMAC_KUZNECHIK;
+			break;
+		case CKM_GOST28147_MAC:
+			if (keyType != CKK_GOST28147) return CKR_KEY_TYPE_INCONSISTENT;
+			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
+				return CKR_MECHANISM_PARAM_INVALID;
+			algo = MacAlgo::IMIT_GOST28147;
 			break;
 		case CKM_MAGMA_MAC:
 			if (keyType != CKK_MAGMA) return CKR_KEY_TYPE_INCONSISTENT;
@@ -6232,6 +6261,12 @@ CK_RV SoftHSM::MacVerifyInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMecha
 			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
 				return CKR_MECHANISM_PARAM_INVALID;
 			algo = MacAlgo::OMAC_KUZNECHIK;
+			break;
+		case CKM_GOST28147_MAC:
+			if (keyType != CKK_GOST28147) return CKR_KEY_TYPE_INCONSISTENT;
+			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
+				return CKR_MECHANISM_PARAM_INVALID;
+			algo = MacAlgo::IMIT_GOST28147;
 			break;
 		case CKM_MAGMA_MAC:
 			if (keyType != CKK_MAGMA) return CKR_KEY_TYPE_INCONSISTENT;
@@ -16015,6 +16050,8 @@ CK_RV SoftHSM::getSymmetricKey(SymmetricKey* skey, Token* token, OSObject* key)
 	}
 
 	skey->setKeyBits(keybits);
+	if (key->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED) == CKK_GOST28147)
+		skey->setAlgorithmParameters(key->getByteStringValue(CKA_GOST28147_PARAMS));
 
 	return CKR_OK;
 }

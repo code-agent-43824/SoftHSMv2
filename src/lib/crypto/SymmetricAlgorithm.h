@@ -46,6 +46,7 @@ struct SymAlgo
 		AES,
 		DES,
 		DES3,
+		GOST28147,
 		KUZNECHIK,
 		MAGMA
 	};

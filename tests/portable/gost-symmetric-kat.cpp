@@ -2,6 +2,9 @@
 
 #include "GOSTSymmetric.h"
 #include "GOSTMacAlgorithm.h"
+#include "GOST28147.h"
+#include "GOST28147Algorithm.h"
+#include "GOST28147MacAlgorithm.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -70,6 +73,53 @@ bool macKat(GOSTSymmetric::Cipher cipher, const char* keyHex,
 	}
 	return true;
 }
+
+bool gost28147Kat()
+{
+	unsigned char key[32], plain[8], expected[8], actual[8], recovered[8];
+	const unsigned char oidA[] = {0x06,0x07,0x2a,0x85,0x03,0x02,0x02,0x1f,0x01};
+	if (!decode("00112233445566778899aabbccddeeff102132435465768798a9bacbdcedf0e1", key, 32) ||
+	    !decode("1020304050607080", plain, 8) || !decode("2685b30ddb497d05", expected, 8)) return false;
+	GOST28147 cipher;
+	if (!cipher.setParamSet(ByteString(oidA, sizeof(oidA))) || !cipher.setKey(key, sizeof(key))) return false;
+	cipher.encryptBlock(plain, actual); cipher.decryptBlock(actual, recovered);
+	return memcmp(actual, expected, 8) == 0 && memcmp(recovered, plain, 8) == 0;
+}
+
+bool gost28147CfbKat()
+{
+	unsigned char keyBytes[32], iv[8], plain[16], expected[16];
+	const unsigned char oidA[] = {0x06,0x07,0x2a,0x85,0x03,0x02,0x02,0x1f,0x01};
+	if (!decode("8d5a2c83a7c70a61d61b34b51fdf42686671a35d874cfd84993663b61ed60dad", keyBytes, 32) ||
+	    !decode("46606f0d8834235a", iv, 8) ||
+	    !decode("d2fdf83ac1b439232eaacc980a02da33", plain, 16) ||
+	    !decode("88b7751674a5ee2d14fe9167d05ccc40", expected, 16)) return false;
+	SymmetricKey key; key.setKeyBits(ByteString(keyBytes, sizeof(keyBytes)));
+	key.setAlgorithmParameters(ByteString(oidA, sizeof(oidA)));
+	GOST28147Algorithm algorithm; ByteString ignored, encrypted, recovered;
+	if (!algorithm.encryptInit(&key, SymMode::CFB, ByteString(iv, sizeof(iv)), false, 0, ByteString(), 0) ||
+	    !algorithm.encryptUpdate(ByteString(plain, sizeof(plain)), ignored) || !algorithm.encryptFinal(encrypted) ||
+	    encrypted.size() != sizeof(expected) || memcmp(encrypted.const_byte_str(), expected, sizeof(expected)) != 0)
+		return false;
+	if (!algorithm.decryptInit(&key, SymMode::CFB, ByteString(iv, sizeof(iv)), false, 0, ByteString(), 0) ||
+	    !algorithm.decryptUpdate(encrypted, ignored) || !algorithm.decryptFinal(recovered)) return false;
+	return recovered.size() == sizeof(plain) && memcmp(recovered.const_byte_str(), plain, sizeof(plain)) == 0;
+}
+
+bool gost28147MacKat()
+{
+	unsigned char keyBytes[32], data[16], expected[4];
+	const unsigned char oidA[] = {0x06,0x07,0x2a,0x85,0x03,0x02,0x02,0x1f,0x01};
+	if (!decode("9d05b79e90cad00a2cdad22ef4e86f5cf5dc37681985b3bfaa18c1c3050a91a2", keyBytes, 32) ||
+	    !decode("b5a1f0e3ce2f021d676194345c41e36e", data, 16) ||
+	    !decode("f81f08a3", expected, 4)) return false;
+	SymmetricKey key; key.setKeyBits(ByteString(keyBytes, sizeof(keyBytes)));
+	key.setAlgorithmParameters(ByteString(oidA, sizeof(oidA)));
+	GOST28147MacAlgorithm algorithm; ByteString result;
+	return algorithm.signInit(&key) && algorithm.signUpdate(ByteString(data, sizeof(data))) &&
+		algorithm.signFinal(result) && result.size() == sizeof(expected) &&
+		memcmp(result.const_byte_str(), expected, sizeof(expected)) == 0;
+}
 }
 
 int main()
@@ -99,6 +149,21 @@ int main()
 		32, "154e7210", 4))
 	{
 		fprintf(stderr, "GOST R 34.13-2015 OMAC KAT failed\n");
+		return 1;
+	}
+	if (!gost28147Kat())
+	{
+		fprintf(stderr, "GOST 28147-89 CryptoPro-A KAT failed\n");
+		return 1;
+	}
+	if (!gost28147CfbKat())
+	{
+		fprintf(stderr, "GOST 28147-89 CryptoPro-A CFB KAT failed\n");
+		return 1;
+	}
+	if (!gost28147MacKat())
+	{
+		fprintf(stderr, "GOST 28147-89 CryptoPro-A MAC KAT failed\n");
 		return 1;
 	}
 	puts("GOST symmetric block KAT: PASS");
