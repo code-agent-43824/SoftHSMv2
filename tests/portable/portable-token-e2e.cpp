@@ -3490,10 +3490,13 @@ static void verifyRutokenProfile(const fs::path& modulePath)
                [&] { return module->C_GetSessionInfo(session, &sessionInfo); });
         if (sessionInfo.slotID != 0) fail("Rutoken facade leaked its backing SoftHSM slot ID");
 
-        const std::string userPin = environment("P11_TEST_USER_PIN", true);
-        login(module, session, CKU_USER, userPin);
-        verifyGOSTSymmetric(module, session);
-        logout(module, session, "CKU_USER");
+        const std::string userPin = environment("P11_TEST_USER_PIN");
+        if (!userPin.empty())
+        {
+            login(module, session, CKU_USER, userPin);
+            verifyGOSTSymmetric(module, session);
+            logout(module, session, "CKU_USER");
+        }
 
         closeSession(module, session);
     }

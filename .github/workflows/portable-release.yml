@@ -305,13 +305,15 @@ jobs:
             > "$RUNNER_TEMP/tokens-before-profile.sha256"
           perl -0pi -e 's/FAKE_RUTOKEN_ECP = false/FAKE_RUTOKEN_ECP = true/' \
             "$HOME/softhsm/softhsm.conf"
-          P11_TEST_USER_PIN=12345678 \
-            "$kit/bin/portable-token-e2e" rutoken-profile \
+          "$kit/bin/portable-token-e2e" rutoken-profile \
             "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so"
           find "$HOME/softhsm/tokens" -type f -print0 | sort -z | xargs -0 sha256sum \
             > "$RUNNER_TEMP/tokens-after-profile.sha256"
           cmp "$RUNNER_TEMP/tokens-before-profile.sha256" \
             "$RUNNER_TEMP/tokens-after-profile.sha256"
+          P11_TEST_USER_PIN=12345678 \
+            "$kit/bin/portable-token-e2e" rutoken-profile \
+              "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so"
           P11_TEST_TOKEN_LABEL=portable-ci-token \
           P11_TEST_OBJECT_ID_HEX=504f525441424c47 \
           P11_TEST_KEY_LABEL=portable-ci-rsa-rutoken \
