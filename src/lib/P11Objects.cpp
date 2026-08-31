@@ -1931,8 +1931,7 @@ bool P11GOSTSecretKeyObj::setKeyType(CK_KEY_TYPE inKeytype)
 {
 	if (initialized) return false;
 	if (inKeytype != CKK_GOST28147 && inKeytype != CKK_KUZNECHIK &&
-	    inKeytype != CKK_MAGMA && inKeytype != CKK_KUZNECHIK_TWIN_KEY &&
-	    inKeytype != CKK_MAGMA_TWIN_KEY) return false;
+	    inKeytype != CKK_MAGMA) return false;
 	keytype = inKeytype;
 	return true;
 }
@@ -1962,13 +1961,12 @@ bool P11GOSTSecretKeyObj::init(OSObject *inobject)
 		new P11AttrGost28147Params(osobject,P11Attribute::ck1|P11Attribute::ck3|P11Attribute::ck5) : NULL;
 
 	// Initialize the attributes
-	if
-	(
-		!attrValue->init() ||
-		(attrGost28147Params != NULL && !attrGost28147Params->init())
-	)
+	const bool valueInitialized = attrValue->init();
+	const bool parametersInitialized = attrGost28147Params == NULL || attrGost28147Params->init();
+	if (!valueInitialized || !parametersInitialized)
 	{
-		ERROR_MSG("Could not initialize the attribute");
+		ERROR_MSG("Could not initialize GOST secret-key attributes (value=%d, parameters=%d)",
+			valueInitialized, parametersInitialized);
 		delete attrValue;
 		delete attrGost28147Params;
 		return false;

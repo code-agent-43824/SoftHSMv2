@@ -74,6 +74,27 @@ bool macKat(GOSTSymmetric::Cipher cipher, const char* keyHex,
 	return true;
 }
 
+bool mgmKat()
+{
+	unsigned char key[32], icn[8], plain[8], expectedCipher[8], expectedTag[8];
+	unsigned char cipherText[8], tag[8], recovered[8];
+	if (!decode("99aabbccddeeff0011223344556677fedcba98765432100123456789abcdef88", key, 32) ||
+	    !decode("0077665544332211", icn, 8) ||
+	    !decode("22334455667700ff", plain, 8) ||
+	    !decode("6a95e1426b259d4e", expectedCipher, 8) ||
+	    !decode("334ee270450bec9e", expectedTag, 8)) return false;
+	GOSTSymmetric algorithm(GOSTSymmetric::MAGMA);
+	if (!algorithm.setKey(key, sizeof(key)) ||
+	    !algorithm.mgmEncrypt(icn, NULL, 0, plain, sizeof(plain), cipherText, tag, sizeof(tag)) ||
+	    memcmp(cipherText, expectedCipher, sizeof(cipherText)) != 0 ||
+	    memcmp(tag, expectedTag, sizeof(tag)) != 0 ||
+	    !algorithm.mgmDecrypt(icn, NULL, 0, cipherText, sizeof(cipherText), tag, sizeof(tag), recovered) ||
+	    memcmp(recovered, plain, sizeof(plain)) != 0) return false;
+	tag[0] ^= 1;
+	memset(recovered, 0xa5, sizeof(recovered));
+	return !algorithm.mgmDecrypt(icn, NULL, 0, cipherText, sizeof(cipherText), tag, sizeof(tag), recovered);
+}
+
 bool gost28147Kat()
 {
 	unsigned char key[32], plain[8], expected[8], actual[8], recovered[8];
@@ -164,6 +185,11 @@ int main()
 	if (!gost28147MacKat())
 	{
 		fprintf(stderr, "GOST 28147-89 CryptoPro-A MAC KAT failed\n");
+		return 1;
+	}
+	if (!mgmKat())
+	{
+		fprintf(stderr, "Magma MGM RFC 9058 KAT failed\n");
 		return 1;
 	}
 	puts("GOST symmetric block KAT: PASS");

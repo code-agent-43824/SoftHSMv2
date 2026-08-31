@@ -2853,6 +2853,397 @@ static void verifyRutokenExtension(Module& module, const CK_TOKEN_INFO& token)
           CKR_FUNCTION_NOT_SUPPORTED, "C_EX_FreeBuffer(unimplemented extension)");
 }
 
+static CK_OBJECT_HANDLE createGOSTSecret(Module& module, CK_SESSION_HANDLE session,
+                                         CK_KEY_TYPE type, const Bytes& value,
+                                         bool wrap = false, bool unwrap = false)
+{
+    CK_OBJECT_CLASS keyClass = CKO_SECRET_KEY;
+    CK_BBOOL no = CK_FALSE, yes = CK_TRUE;
+    std::vector<CK_ATTRIBUTE> attributes = {
+        {CKA_CLASS, &keyClass, sizeof(keyClass)},
+        {CKA_KEY_TYPE, &type, sizeof(type)},
+        {CKA_TOKEN, &no, sizeof(no)},
+        {CKA_PRIVATE, &no, sizeof(no)},
+        {CKA_VALUE, const_cast<unsigned char*>(value.data()), static_cast<CK_ULONG>(value.size())},
+        {CKA_ENCRYPT, &yes, sizeof(yes)},
+        {CKA_DECRYPT, &yes, sizeof(yes)},
+        {CKA_SIGN, &yes, sizeof(yes)},
+        {CKA_VERIFY, &yes, sizeof(yes)},
+        {CKA_WRAP, wrap ? &yes : &no, sizeof(yes)},
+        {CKA_UNWRAP, unwrap ? &yes : &no, sizeof(yes)},
+        {CKA_EXTRACTABLE, &yes, sizeof(yes)}
+    };
+    Bytes gostParameters;
+    if (type == CKK_GOST28147)
+    {
+        gostParameters = bytesFromHex("06072a850302021f01");
+        attributes.push_back({CKA_GOST28147_PARAMS, gostParameters.data(),
+                              static_cast<CK_ULONG>(gostParameters.size())});
+    }
+    CK_OBJECT_HANDLE key = CK_INVALID_HANDLE;
+    callOk("C_CreateObject", "GOST symmetric session key type=" + hexNumber(type),
+           [&] { return module->C_CreateObject(session, attributes.data(),
+                         static_cast<CK_ULONG>(attributes.size()), &key); });
+    return key;
+}
+
+static CK_OBJECT_HANDLE generateGOSTSecret(Module& module, CK_SESSION_HANDLE session,
+                                           CK_MECHANISM_TYPE mechanismType,
+                                           CK_KEY_TYPE type)
+{
+    CK_OBJECT_CLASS keyClass = CKO_SECRET_KEY;
+    CK_BBOOL no = CK_FALSE;
+    CK_MECHANISM mechanism{mechanismType, nullptr, 0};
+    std::vector<CK_ATTRIBUTE> attributes = {
+        {CKA_CLASS, &keyClass, sizeof(keyClass)},
+        {CKA_KEY_TYPE, &type, sizeof(type)},
+        {CKA_TOKEN, &no, sizeof(no)},
+        {CKA_PRIVATE, &no, sizeof(no)}
+    };
+    Bytes gostParameters;
+    if (type == CKK_GOST28147)
+    {
+        gostParameters = bytesFromHex("06072a850302021f01");
+        attributes.push_back({CKA_GOST28147_PARAMS, gostParameters.data(),
+                              static_cast<CK_ULONG>(gostParameters.size())});
+    }
+    CK_OBJECT_HANDLE key = CK_INVALID_HANDLE;
+    callOk("C_GenerateKey", "TC26 symmetric key type=" + hexNumber(type),
+           [&] { return module->C_GenerateKey(session, &mechanism, attributes.data(),
+                         static_cast<CK_ULONG>(attributes.size()), &key); });
+    if (attribute(module, session, key, CKA_VALUE).size() != 32)
+        fail("generated TC26 symmetric key is not 256 bits");
+    return key;
+}
+
+static Bytes encryptOneShot(Module& module, CK_SESSION_HANDLE session,
+                            CK_OBJECT_HANDLE key, CK_MECHANISM& mechanism,
+                            const Bytes& plain)
+{
+    callOk("C_EncryptInit", "GOST symmetric known-answer operation",
+           [&] { return module->C_EncryptInit(session, &mechanism, key); });
+    CK_ULONG length = 0;
+    callOk("C_Encrypt", "GOST symmetric length query",
+           [&] { return module->C_Encrypt(session, const_cast<unsigned char*>(plain.data()),
+                                           static_cast<CK_ULONG>(plain.size()), nullptr, &length); });
+    Bytes result(length);
+    callOk("C_Encrypt", "GOST symmetric data operation",
+           [&] { return module->C_Encrypt(session, const_cast<unsigned char*>(plain.data()),
+                                           static_cast<CK_ULONG>(plain.size()), result.data(), &length); });
+    result.resize(length);
+    return result;
+}
+
+static Bytes decryptOneShot(Module& module, CK_SESSION_HANDLE session,
+                            CK_OBJECT_HANDLE key, CK_MECHANISM& mechanism,
+                            const Bytes& cipherText)
+{
+    callOk("C_DecryptInit", "GOST symmetric decrypt operation",
+           [&] { return module->C_DecryptInit(session, &mechanism, key); });
+    CK_ULONG length = static_cast<CK_ULONG>(cipherText.size());
+    Bytes result(length);
+    callOk("C_Decrypt", "GOST symmetric decrypt data",
+           [&] { return module->C_Decrypt(session, const_cast<unsigned char*>(cipherText.data()),
+                                           static_cast<CK_ULONG>(cipherText.size()), result.data(), &length); });
+    result.resize(length);
+    return result;
+}
+
+static Bytes signOneShot(Module& module, CK_SESSION_HANDLE session,
+                         CK_OBJECT_HANDLE key, CK_MECHANISM_TYPE mechanismType,
+                         const Bytes& data)
+{
+    CK_MECHANISM mechanism{mechanismType, nullptr, 0};
+    callOk("C_SignInit", "GOST symmetric MAC",
+           [&] { return module->C_SignInit(session, &mechanism, key); });
+    CK_ULONG length = 0;
+    callOk("C_Sign", "GOST symmetric MAC length query",
+           [&] { return module->C_Sign(session, const_cast<unsigned char*>(data.data()),
+                                       static_cast<CK_ULONG>(data.size()), nullptr, &length); });
+    Bytes signature(length);
+    callOk("C_Sign", "GOST symmetric MAC",
+           [&] { return module->C_Sign(session, const_cast<unsigned char*>(data.data()),
+                                       static_cast<CK_ULONG>(data.size()), signature.data(), &length); });
+    signature.resize(length);
+    return signature;
+}
+
+static void verifyOneShot(Module& module, CK_SESSION_HANDLE session,
+                          CK_OBJECT_HANDLE key, CK_MECHANISM_TYPE mechanismType,
+                          const Bytes& data, const Bytes& signature)
+{
+    CK_MECHANISM mechanism{mechanismType, nullptr, 0};
+    callOk("C_VerifyInit", "GOST symmetric MAC",
+           [&] { return module->C_VerifyInit(session, &mechanism, key); });
+    callOk("C_Verify", "GOST symmetric MAC",
+           [&] { return module->C_Verify(session, const_cast<unsigned char*>(data.data()),
+                         static_cast<CK_ULONG>(data.size()),
+                         const_cast<unsigned char*>(signature.data()),
+                         static_cast<CK_ULONG>(signature.size())); });
+}
+
+static void verifyGOSTSymmetric(Module& module, CK_SESSION_HANDLE session)
+{
+    generateGOSTSecret(module, session, CKM_GOST28147_KEY_GEN, CKK_GOST28147);
+    generateGOSTSecret(module, session, CKM_KUZNECHIK_KEY_GEN, CKK_KUZNECHIK);
+    generateGOSTSecret(module, session, CKM_MAGMA_KEY_GEN, CKK_MAGMA);
+
+    const Bytes kuzKey = bytesFromHex(
+        "8899aabbccddeeff0011223344556677fedcba98765432100123456789abcdef");
+    const Bytes magmaKey = bytesFromHex(
+        "ffeeddccbbaa99887766554433221100f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff");
+    const CK_OBJECT_HANDLE kuz = createGOSTSecret(module, session, CKK_KUZNECHIK, kuzKey);
+    const CK_OBJECT_HANDLE magma = createGOSTSecret(module, session, CKK_MAGMA, magmaKey);
+
+    CK_MECHANISM kuzEcb{CKM_KUZNECHIK_ECB, nullptr, 0};
+    const Bytes kuzPlain = bytesFromHex("1122334455667700ffeeddccbbaa9988");
+    const Bytes kuzCipher = encryptOneShot(module, session, kuz, kuzEcb, kuzPlain);
+    if (kuzCipher != bytesFromHex("7f679d90bebc24305a468d42b9d4edcd") ||
+        decryptOneShot(module, session, kuz, kuzEcb, kuzCipher) != kuzPlain)
+        fail("CKM_KUZNECHIK_ECB does not match RFC 7801");
+
+    CK_MECHANISM magmaEcb{CKM_MAGMA_ECB, nullptr, 0};
+    const Bytes magmaPlain = bytesFromHex("fedcba9876543210");
+    const Bytes magmaCipher = encryptOneShot(module, session, magma, magmaEcb, magmaPlain);
+    if (magmaCipher != bytesFromHex("4ee901e5c2d8ca3d") ||
+        decryptOneShot(module, session, magma, magmaEcb, magmaCipher) != magmaPlain)
+        fail("CKM_MAGMA_ECB does not match RFC 8891");
+
+    Bytes mgmKeyBytes = bytesFromHex(
+        "99aabbccddeeff0011223344556677fedcba98765432100123456789abcdef88");
+    const CK_OBJECT_HANDLE mgmKey = createGOSTSecret(module, session, CKK_MAGMA, mgmKeyBytes);
+    Bytes icn = bytesFromHex("0077665544332211");
+    CK_MGM_PARAMS mgmParams{icn.data(), static_cast<CK_ULONG>(icn.size()), 64,
+                            nullptr, 0, 64};
+    CK_MECHANISM mgm{CKM_MAGMA_MGM, &mgmParams, sizeof(mgmParams)};
+    const Bytes mgmPlain = bytesFromHex("22334455667700ff");
+    const Bytes mgmCipher = encryptOneShot(module, session, mgmKey, mgm, mgmPlain);
+    if (mgmCipher != bytesFromHex("6a95e1426b259d4e334ee270450bec9e") ||
+        decryptOneShot(module, session, mgmKey, mgm, mgmCipher) != mgmPlain)
+        fail("CKM_MAGMA_MGM does not match RFC 9058");
+    Bytes damaged = mgmCipher;
+    damaged.back() ^= 1;
+    callOk("C_DecryptInit", "CKM_MAGMA_MGM tampered tag",
+           [&] { return module->C_DecryptInit(session, &mgm, mgmKey); });
+    CK_ULONG damagedLength = static_cast<CK_ULONG>(damaged.size());
+    Bytes damagedOutput(damagedLength);
+    check(invoke("C_Decrypt", "CKM_MAGMA_MGM tampered tag",
+                 [&] { return module->C_Decrypt(session, damaged.data(),
+                             static_cast<CK_ULONG>(damaged.size()), damagedOutput.data(), &damagedLength); }),
+          CKR_ENCRYPTED_DATA_INVALID, "C_Decrypt(CKM_MAGMA_MGM tampered tag)");
+
+    Bytes kuzMgmIcn = bytesFromHex("1122334455667700ffeeddccbbaa9988");
+    Bytes kuzMgmAad = bytesFromHex(
+        "0202020202020202010101010101010104040404040404040303030303030303"
+        "ea0505050505050505");
+    CK_MGM_PARAMS kuzMgmParams{kuzMgmIcn.data(), static_cast<CK_ULONG>(kuzMgmIcn.size()),
+                               128, kuzMgmAad.data(),
+                               static_cast<CK_ULONG>(kuzMgmAad.size()), 128};
+    CK_MECHANISM kuzMgm{CKM_KUZNECHIK_MGM, &kuzMgmParams, sizeof(kuzMgmParams)};
+    const Bytes kuzMgmPlain = bytesFromHex(
+        "1122334455667700ffeeddccbbaa998800112233445566778899aabbcceeff0a"
+        "112233445566778899aabbcceeff0a002233445566778899aabbcceeff0a0011"
+        "aabbcc");
+    const Bytes kuzMgmExpected = bytesFromHex(
+        "a9757b8147956e9055b8a33de89f42fc8075d2212bf9fd5bd3f7069aadc16b39"
+        "497ab15915a6ba85936b5d0ea9f6851cc60c14d4d3f883d0ab94420695c76deb"
+        "2c7552cf5d656f40c34f5c46e8bb0e29fcdb4c");
+    const Bytes kuzMgmCipher = encryptOneShot(module, session, kuz, kuzMgm, kuzMgmPlain);
+    if (kuzMgmCipher != kuzMgmExpected ||
+        decryptOneShot(module, session, kuz, kuzMgm, kuzMgmCipher) != kuzMgmPlain)
+        fail("CKM_KUZNECHIK_MGM does not match RFC 9058");
+
+    Bytes acpkmParams = bytesFromHex("000000100102030405060708");
+    CK_MECHANISM acpkm{CKM_KUZNECHIK_CTR_ACPKM, acpkmParams.data(),
+                       static_cast<CK_ULONG>(acpkmParams.size())};
+    const Bytes streamPlain = bytesFromHex(
+        "00112233445566778899aabbccddeeff102132435465768798a9bacbdcedfe0f55");
+    const Bytes streamCipher = encryptOneShot(module, session, kuz, acpkm, streamPlain);
+    if (decryptOneShot(module, session, kuz, acpkm, streamCipher) != streamPlain)
+        fail("CKM_KUZNECHIK_CTR_ACPKM round trip failed");
+
+    const Bytes kuzMacData = bytesFromHex(
+        "1122334455667700ffeeddccbbaa998800112233445566778899aabbcceeff0a"
+        "112233445566778899aabbcceeff0a002233445566778899aabbcceeff0a0011");
+    const Bytes kuzMac = signOneShot(module, session, kuz, CKM_KUZNECHIK_MAC, kuzMacData);
+    if (kuzMac != bytesFromHex("336f4d296059fbe3"))
+        fail("CKM_KUZNECHIK_MAC does not match GOST R 34.13-2015");
+    verifyOneShot(module, session, kuz, CKM_KUZNECHIK_MAC, kuzMacData, kuzMac);
+
+    const Bytes magmaMacData = bytesFromHex(
+        "92def06b3c130a59db54c704f8189d204a98fb2e67a8024c8912409b17b57e41");
+    const Bytes magmaMac = signOneShot(module, session, magma, CKM_MAGMA_MAC, magmaMacData);
+    if (magmaMac != bytesFromHex("154e7210"))
+        fail("CKM_MAGMA_MAC does not match GOST R 34.13-2015");
+    verifyOneShot(module, session, magma, CKM_MAGMA_MAC, magmaMacData, magmaMac);
+
+    const Bytes gostKeyBytes = bytesFromHex(
+        "00112233445566778899aabbccddeeff102132435465768798a9bacbdcedf0e1");
+    const CK_OBJECT_HANDLE gost = createGOSTSecret(module, session, CKK_GOST28147,
+                                                   gostKeyBytes, true, true);
+    CK_MECHANISM gostEcb{CKM_GOST28147_ECB, nullptr, 0};
+    const Bytes gostPlain = bytesFromHex("1020304050607080");
+    const Bytes gostCipher = encryptOneShot(module, session, gost, gostEcb, gostPlain);
+    if (gostCipher != bytesFromHex("2685b30ddb497d05") ||
+        decryptOneShot(module, session, gost, gostEcb, gostCipher) != gostPlain)
+        fail("CKM_GOST28147_ECB does not match the CryptoPro-A vector");
+
+    const Bytes gostCfbKeyBytes = bytesFromHex(
+        "8d5a2c83a7c70a61d61b34b51fdf42686671a35d874cfd84993663b61ed60dad");
+    const CK_OBJECT_HANDLE gostCfbKey = createGOSTSecret(module, session, CKK_GOST28147,
+                                                         gostCfbKeyBytes);
+    Bytes gostCfbIv = bytesFromHex("46606f0d8834235a");
+    CK_MECHANISM gostCfb{CKM_GOST28147, gostCfbIv.data(),
+                         static_cast<CK_ULONG>(gostCfbIv.size())};
+    const Bytes gostCfbPlain = bytesFromHex("d2fdf83ac1b439232eaacc980a02da33");
+    const Bytes gostCfbCipher = encryptOneShot(module, session, gostCfbKey, gostCfb,
+                                               gostCfbPlain);
+    if (gostCfbCipher != bytesFromHex("88b7751674a5ee2d14fe9167d05ccc40") ||
+        decryptOneShot(module, session, gostCfbKey, gostCfb, gostCfbCipher) != gostCfbPlain)
+        fail("CKM_GOST28147 CFB does not match the CryptoPro-A vector");
+
+    const Bytes gostMacKeyBytes = bytesFromHex(
+        "9d05b79e90cad00a2cdad22ef4e86f5cf5dc37681985b3bfaa18c1c3050a91a2");
+    const CK_OBJECT_HANDLE gostMacKey = createGOSTSecret(module, session, CKK_GOST28147,
+                                                         gostMacKeyBytes);
+    const Bytes gostMacData = bytesFromHex("b5a1f0e3ce2f021d676194345c41e36e");
+    const Bytes gostMac = signOneShot(module, session, gostMacKey, CKM_GOST28147_MAC,
+                                      gostMacData);
+    if (gostMac != bytesFromHex("f81f08a3"))
+        fail("CKM_GOST28147_MAC does not match the CryptoPro-A vector");
+    verifyOneShot(module, session, gostMacKey, CKM_GOST28147_MAC, gostMacData, gostMac);
+
+    const Bytes twinBytes = bytesFromHex(
+        "00112233445566778899aabbccddeeff102132435465768798a9bacbdcedfe0f"
+        "ffeeddccbbaa998877665544332211000123456789abcdef1032547698badcfe");
+    const CK_OBJECT_HANDLE twin = createGOSTSecret(module, session,
+                                                   CKK_KUZNECHIK_TWIN_KEY,
+                                                   twinBytes, true, true);
+    Bytes ukm = bytesFromHex("1234567890abcdef");
+    CK_MECHANISM kexp{CKM_KUZNECHIK_KEXP_15_WRAP, ukm.data(),
+                      static_cast<CK_ULONG>(ukm.size())};
+    CK_ULONG wrappedLength = 0;
+    callOk("C_WrapKey", "CKM_KUZNECHIK_KEXP_15_WRAP length query",
+           [&] { return module->C_WrapKey(session, &kexp, twin, kuz, nullptr, &wrappedLength); });
+    if (wrappedLength != 48) fail("Kuznechik KExp15 returned an unexpected length");
+    Bytes wrapped(wrappedLength);
+    callOk("C_WrapKey", "CKM_KUZNECHIK_KEXP_15_WRAP",
+           [&] { return module->C_WrapKey(session, &kexp, twin, kuz,
+                                           wrapped.data(), &wrappedLength); });
+    CK_OBJECT_CLASS secretClass = CKO_SECRET_KEY;
+    CK_KEY_TYPE kuzType = CKK_KUZNECHIK;
+    CK_BBOOL no = CK_FALSE;
+    CK_ATTRIBUTE unwrapTemplate[] = {
+        {CKA_CLASS, &secretClass, sizeof(secretClass)},
+        {CKA_KEY_TYPE, &kuzType, sizeof(kuzType)},
+        {CKA_TOKEN, &no, sizeof(no)},
+        {CKA_PRIVATE, &no, sizeof(no)}
+    };
+    CK_OBJECT_HANDLE unwrapped = CK_INVALID_HANDLE;
+    callOk("C_UnwrapKey", "CKM_KUZNECHIK_KEXP_15_WRAP",
+           [&] { return module->C_UnwrapKey(session, &kexp, twin, wrapped.data(),
+                         static_cast<CK_ULONG>(wrapped.size()), unwrapTemplate,
+                         sizeof(unwrapTemplate) / sizeof(unwrapTemplate[0]), &unwrapped); });
+    if (attribute(module, session, unwrapped, CKA_VALUE) != kuzKey)
+        fail("Kuznechik KExp15 did not restore the wrapped key");
+    wrapped.back() ^= 1;
+    check(invoke("C_UnwrapKey", "CKM_KUZNECHIK_KEXP_15_WRAP tampered tag",
+                 [&] { return module->C_UnwrapKey(session, &kexp, twin, wrapped.data(),
+                             static_cast<CK_ULONG>(wrapped.size()), unwrapTemplate,
+                             sizeof(unwrapTemplate) / sizeof(unwrapTemplate[0]), &unwrapped); }),
+          CKR_WRAPPED_KEY_INVALID, "C_UnwrapKey(KExp15 tampered tag)");
+
+    const CK_OBJECT_HANDLE magmaTwin = createGOSTSecret(module, session,
+                                                        CKK_MAGMA_TWIN_KEY,
+                                                        twinBytes, true, true);
+    Bytes magmaUkm = bytesFromHex("12345678");
+    CK_MECHANISM magmaKexp{CKM_MAGMA_KEXP_15_WRAP, magmaUkm.data(),
+                           static_cast<CK_ULONG>(magmaUkm.size())};
+    wrappedLength = 0;
+    callOk("C_WrapKey", "CKM_MAGMA_KEXP_15_WRAP length query",
+           [&] { return module->C_WrapKey(session, &magmaKexp, magmaTwin, magma,
+                                           nullptr, &wrappedLength); });
+    if (wrappedLength != 40) fail("Magma KExp15 returned an unexpected length");
+    Bytes magmaWrapped(wrappedLength);
+    callOk("C_WrapKey", "CKM_MAGMA_KEXP_15_WRAP",
+           [&] { return module->C_WrapKey(session, &magmaKexp, magmaTwin, magma,
+                                           magmaWrapped.data(), &wrappedLength); });
+    CK_KEY_TYPE magmaType = CKK_MAGMA;
+    unwrapTemplate[1] = {CKA_KEY_TYPE, &magmaType, sizeof(magmaType)};
+    unwrapped = CK_INVALID_HANDLE;
+    callOk("C_UnwrapKey", "CKM_MAGMA_KEXP_15_WRAP",
+           [&] { return module->C_UnwrapKey(session, &magmaKexp, magmaTwin,
+                         magmaWrapped.data(), static_cast<CK_ULONG>(magmaWrapped.size()),
+                         unwrapTemplate, sizeof(unwrapTemplate) / sizeof(unwrapTemplate[0]),
+                         &unwrapped); });
+    if (attribute(module, session, unwrapped, CKA_VALUE) != magmaKey)
+        fail("Magma KExp15 did not restore the wrapped key");
+
+    const Bytes genericKeyBytes = bytesFromHex(
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+    const CK_OBJECT_HANDLE genericKey = createGOSTSecret(module, session,
+                                                          CKK_GENERIC_SECRET,
+                                                          genericKeyBytes);
+    wrappedLength = 0;
+    callOk("C_WrapKey", "CKM_KUZNECHIK_KEXP_15_WRAP generic-secret length query",
+           [&] { return module->C_WrapKey(session, &kexp, twin, genericKey,
+                                           nullptr, &wrappedLength); });
+    Bytes genericWrapped(wrappedLength);
+    callOk("C_WrapKey", "CKM_KUZNECHIK_KEXP_15_WRAP generic secret",
+           [&] { return module->C_WrapKey(session, &kexp, twin, genericKey,
+                                           genericWrapped.data(), &wrappedLength); });
+    CK_KEY_TYPE genericType = CKK_GENERIC_SECRET;
+    unwrapTemplate[1] = {CKA_KEY_TYPE, &genericType, sizeof(genericType)};
+    unwrapped = CK_INVALID_HANDLE;
+    callOk("C_UnwrapKey", "CKM_KUZNECHIK_KEXP_15_WRAP generic secret",
+           [&] { return module->C_UnwrapKey(session, &kexp, twin, genericWrapped.data(),
+                         static_cast<CK_ULONG>(genericWrapped.size()), unwrapTemplate,
+                         sizeof(unwrapTemplate) / sizeof(unwrapTemplate[0]), &unwrapped); });
+    if (attribute(module, session, unwrapped, CKA_VALUE) != genericKeyBytes)
+        fail("Kuznechik KExp15 did not restore CKK_GENERIC_SECRET");
+
+    const Bytes wrappedGostKeyBytes = bytesFromHex(
+        "ffeeddccbbaa99887766554433221100112233445566778899aabbccddeeff00");
+    const CK_OBJECT_HANDLE wrappedGostKey = createGOSTSecret(module, session,
+                                                              CKK_GOST28147,
+                                                              wrappedGostKeyBytes);
+    CK_MECHANISM gostWrap{CKM_GOST28147_KEY_WRAP, nullptr, 0};
+    wrappedLength = 0;
+    callOk("C_WrapKey", "CKM_GOST28147_KEY_WRAP length query",
+           [&] { return module->C_WrapKey(session, &gostWrap, gost, wrappedGostKey,
+                                           nullptr, &wrappedLength); });
+    if (wrappedLength != 36) fail("GOST 28147 key wrap returned an unexpected length");
+    Bytes gostWrapped(wrappedLength);
+    callOk("C_WrapKey", "CKM_GOST28147_KEY_WRAP",
+           [&] { return module->C_WrapKey(session, &gostWrap, gost, wrappedGostKey,
+                                           gostWrapped.data(), &wrappedLength); });
+    CK_KEY_TYPE gostType = CKK_GOST28147;
+    Bytes unwrapGostParameters = bytesFromHex("06072a850302021f01");
+    CK_ATTRIBUTE gostUnwrapTemplate[] = {
+        {CKA_CLASS, &secretClass, sizeof(secretClass)},
+        {CKA_KEY_TYPE, &gostType, sizeof(gostType)},
+        {CKA_TOKEN, &no, sizeof(no)},
+        {CKA_PRIVATE, &no, sizeof(no)},
+        {CKA_GOST28147_PARAMS, unwrapGostParameters.data(),
+         static_cast<CK_ULONG>(unwrapGostParameters.size())}
+    };
+    unwrapped = CK_INVALID_HANDLE;
+    callOk("C_UnwrapKey", "CKM_GOST28147_KEY_WRAP",
+           [&] { return module->C_UnwrapKey(session, &gostWrap, gost, gostWrapped.data(),
+                         static_cast<CK_ULONG>(gostWrapped.size()), gostUnwrapTemplate,
+                         sizeof(gostUnwrapTemplate) / sizeof(gostUnwrapTemplate[0]), &unwrapped); });
+    if (attribute(module, session, unwrapped, CKA_VALUE) != wrappedGostKeyBytes)
+        fail("GOST 28147 key wrap did not restore the wrapped key");
+    gostWrapped.back() ^= 1;
+    check(invoke("C_UnwrapKey", "CKM_GOST28147_KEY_WRAP tampered MAC",
+                 [&] { return module->C_UnwrapKey(session, &gostWrap, gost, gostWrapped.data(),
+                             static_cast<CK_ULONG>(gostWrapped.size()), gostUnwrapTemplate,
+                             sizeof(gostUnwrapTemplate) / sizeof(gostUnwrapTemplate[0]), &unwrapped); }),
+          CKR_WRAPPED_KEY_INVALID, "C_UnwrapKey(GOST 28147 tampered MAC)");
+
+    trace("REFERENCE", "GOST 28147, Kuznechik and Magma PKCS #11 encryption, MGM and KExp15 verified");
+}
+
 static void verifyRutokenProfile(const fs::path& modulePath)
 {
     Module module(modulePath);
@@ -3098,6 +3489,11 @@ static void verifyRutokenProfile(const fs::path& modulePath)
         callOk("C_GetSessionInfo", "hSession=session, pInfo=&sessionInfo",
                [&] { return module->C_GetSessionInfo(session, &sessionInfo); });
         if (sessionInfo.slotID != 0) fail("Rutoken facade leaked its backing SoftHSM slot ID");
+
+        const std::string userPin = environment("P11_TEST_USER_PIN", true);
+        login(module, session, CKU_USER, userPin);
+        verifyGOSTSymmetric(module, session);
+        logout(module, session, "CKU_USER");
 
         closeSession(module, session);
     }

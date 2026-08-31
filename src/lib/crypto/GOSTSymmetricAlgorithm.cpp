@@ -9,19 +9,32 @@ unsigned long loadBE32(const unsigned char* p)
 }
 }
 
-GOSTSymmetricAlgorithm::GOSTSymmetricAlgorithm(GOSTSymmetric::Cipher cipher) : cipherType(cipher) {}
-GOSTSymmetricAlgorithm::~GOSTSymmetricAlgorithm() { input.wipe(); parameters.wipe(); }
+GOSTSymmetricAlgorithm::GOSTSymmetricAlgorithm(GOSTSymmetric::Cipher cipher) :
+	cipherType(cipher), encrypting(false) {}
+GOSTSymmetricAlgorithm::~GOSTSymmetricAlgorithm()
+{
+	input.wipe(); parameters.wipe(); associatedData.wipe();
+}
 
 size_t GOSTSymmetricAlgorithm::getBlockSize() const
 {
 	return cipherType == GOSTSymmetric::KUZNECHIK ? 16 : 8;
 }
 
+bool GOSTSymmetricAlgorithm::checkMaximumBytes(unsigned long bytes)
+{
+	if (currentCipherMode != SymMode::MGM) return true;
+	const uint64_t maximum = cipherType == GOSTSymmetric::MAGMA ?
+		((UINT64_C(1) << 29) - 1) : ((UINT64_C(1) << 61) - 1);
+	const uint64_t maximumInput = maximum + (encrypting ? 0 : currentTagBytes);
+	return input.size() <= maximumInput && bytes <= maximumInput - input.size();
+}
+
 bool GOSTSymmetricAlgorithm::init(const SymmetricKey* key, SymMode::Type mode,
-	const ByteString& params, bool encrypt)
+	const ByteString& params, bool encrypt, const ByteString& aad, size_t tagBytes)
 {
 	if (key == NULL || key->getKeyBits().size() != 32 ||
-	    (mode != SymMode::ECB && mode != SymMode::CTR_ACPKM)) return false;
+	    (mode != SymMode::ECB && mode != SymMode::CTR_ACPKM && mode != SymMode::MGM)) return false;
 	if (mode == SymMode::ECB && params.size() != 0) return false;
 	if (mode == SymMode::CTR_ACPKM)
 	{
@@ -29,31 +42,38 @@ bool GOSTSymmetricAlgorithm::init(const SymmetricKey* key, SymMode::Type mode,
 		const unsigned long period = loadBE32(params.const_byte_str());
 		if (period != 0 && (period < getBlockSize() || period % getBlockSize() != 0)) return false;
 	}
-	input.wipe(); parameters = params;
-	return encrypt ? SymmetricAlgorithm::encryptInit(key, mode, params, false) :
-		SymmetricAlgorithm::decryptInit(key, mode, params, false);
+	if (mode == SymMode::MGM &&
+	    (params.size() != getBlockSize() || (params.const_byte_str()[0] & 0x80) != 0 ||
+	     tagBytes < 4 || tagBytes > getBlockSize() ||
+	     (cipherType == GOSTSymmetric::MAGMA && aad.size() > ((size_t)1 << 29) - 1))) return false;
+	if (mode != SymMode::MGM && (aad.size() != 0 || tagBytes != 0)) return false;
+	input.wipe(); parameters = params; associatedData = aad; encrypting = encrypt;
+	return encrypt ? SymmetricAlgorithm::encryptInit(key, mode, params, false, 0, aad, tagBytes) :
+		SymmetricAlgorithm::decryptInit(key, mode, params, false, 0, aad, tagBytes);
 }
 
 bool GOSTSymmetricAlgorithm::encryptInit(const SymmetricKey* key, SymMode::Type mode,
 	const ByteString& iv, bool padding, size_t, const ByteString& aad, size_t tagBytes)
 {
-	return !padding && aad.size() == 0 && tagBytes == 0 && init(key, mode, iv, true);
+	return !padding && init(key, mode, iv, true, aad, tagBytes);
 }
 
 bool GOSTSymmetricAlgorithm::decryptInit(const SymmetricKey* key, SymMode::Type mode,
 	const ByteString& iv, bool padding, size_t, const ByteString& aad, size_t tagBytes)
 {
-	return !padding && aad.size() == 0 && tagBytes == 0 && init(key, mode, iv, false);
+	return !padding && init(key, mode, iv, false, aad, tagBytes);
 }
 
 bool GOSTSymmetricAlgorithm::encryptUpdate(const ByteString& data, ByteString& out)
 {
+	if (!checkMaximumBytes(data.size())) return false;
 	if (!SymmetricAlgorithm::encryptUpdate(data, out)) return false;
 	input += data; out.wipe(); return true;
 }
 
 bool GOSTSymmetricAlgorithm::decryptUpdate(const ByteString& data, ByteString& out)
 {
+	if (!checkMaximumBytes(data.size())) return false;
 	if (!SymmetricAlgorithm::decryptUpdate(data, out)) return false;
 	input += data; out.wipe(); return true;
 }
@@ -63,9 +83,33 @@ bool GOSTSymmetricAlgorithm::decryptFinal(ByteString& out) { return finish(out, 
 
 bool GOSTSymmetricAlgorithm::finish(ByteString& out, bool encrypt)
 {
-	bool ok = currentCipherMode == SymMode::ECB ? processECB(out, encrypt) : processCTRACPKM(out);
+	bool ok;
+	if (currentCipherMode == SymMode::ECB) ok = processECB(out, encrypt);
+	else if (currentCipherMode == SymMode::MGM) ok = processMGM(out, encrypt);
+	else ok = processCTRACPKM(out);
 	if (ok) ok = encrypt ? SymmetricAlgorithm::encryptFinal(out) : SymmetricAlgorithm::decryptFinal(out);
-	input.wipe(); parameters.wipe(); return ok;
+	input.wipe(); parameters.wipe(); associatedData.wipe(); return ok;
+}
+
+bool GOSTSymmetricAlgorithm::processMGM(ByteString& out, bool encrypt)
+{
+	GOSTSymmetric cipher(cipherType);
+	if (!cipher.setKey(currentKey->getKeyBits().const_byte_str(), 32)) return false;
+	if (encrypt)
+	{
+		if (input.size() == 0 && associatedData.size() == 0) return false;
+		out.resize(input.size() + currentTagBytes);
+		return cipher.mgmEncrypt(parameters.const_byte_str(), associatedData.const_byte_str(),
+			associatedData.size(), input.const_byte_str(), input.size(), out.byte_str(),
+			out.byte_str() + input.size(), currentTagBytes);
+	}
+	if (input.size() < currentTagBytes ||
+	    (input.size() == currentTagBytes && associatedData.size() == 0)) return false;
+	const size_t cipherLen = input.size() - currentTagBytes;
+	out.resize(cipherLen);
+	return cipher.mgmDecrypt(parameters.const_byte_str(), associatedData.const_byte_str(),
+		associatedData.size(), input.const_byte_str(), cipherLen,
+		input.const_byte_str() + cipherLen, currentTagBytes, out.byte_str());
 }
 
 bool GOSTSymmetricAlgorithm::processECB(ByteString& out, bool encrypt)

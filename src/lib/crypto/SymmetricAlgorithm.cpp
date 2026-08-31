@@ -207,6 +207,7 @@ bool SymmetricAlgorithm::isStreamCipher()
 		case SymMode::CFB:
 		case SymMode::CTR:
 		case SymMode::GCM:
+		case SymMode::MGM:
 		case SymMode::OFB:
 			return true;
 		default:

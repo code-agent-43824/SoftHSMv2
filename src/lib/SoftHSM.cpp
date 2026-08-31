@@ -63,6 +63,8 @@
 #include "DHPrivateKey.h"
 #include "GOSTPublicKey.h"
 #include "GOSTPrivateKey.h"
+#include "GOST28147.h"
+#include "GOSTSymmetric.h"
 #ifdef WITH_GOST_3410_2012_256
 #include "BotanGOST2012KEG.h"
 #include "BotanGOST2012KeyGenerator.h"
@@ -299,10 +301,8 @@ static CK_RV newP11Object(CK_OBJECT_CLASS objClass, CK_KEY_TYPE keyType, CK_CERT
 			break;
 		case CKO_SECRET_KEY:
 			if ((keyType == CKK_GENERIC_SECRET) ||
-#ifdef WITH_GOST_3410_2012_256
 			    (keyType == CKK_KUZNECHIK_TWIN_KEY) ||
 			    (keyType == CKK_MAGMA_TWIN_KEY) ||
-#endif
 			    (keyType == CKK_MD5_HMAC) ||
 			    (keyType == CKK_SHA_1_HMAC) ||
 			    (keyType == CKK_SHA224_HMAC) ||
@@ -3077,14 +3077,43 @@ static bool isSymMechanism(CK_MECHANISM_PTR pMechanism)
 		case CKM_AES_CBC_PAD:
 		case CKM_AES_CTR:
 		case CKM_AES_GCM:
+		case CKM_GOST28147_ECB:
+		case CKM_GOST28147:
 		case CKM_KUZNECHIK_ECB:
 		case CKM_MAGMA_ECB:
 		case CKM_KUZNECHIK_CTR_ACPKM:
 		case CKM_MAGMA_CTR_ACPKM:
+		case CKM_KUZNECHIK_MGM:
+		case CKM_MAGMA_MGM:
 			return true;
 		default:
 			return false;
 	}
+}
+
+static CK_RV parseMGMParameters(CK_MECHANISM_PTR mechanism, size_t blockSize,
+	ByteString& iv, ByteString& aad, size_t& tagBytes)
+{
+	if (mechanism->pParameter == NULL_PTR ||
+	    mechanism->ulParameterLen != sizeof(CK_MGM_PARAMS))
+		return CKR_MECHANISM_PARAM_INVALID;
+	CK_MGM_PARAMS_PTR params = CK_MGM_PARAMS_PTR(mechanism->pParameter);
+	const uint64_t maximumBytes = blockSize == 8 ?
+		((UINT64_C(1) << 29) - 1) : ((UINT64_C(1) << 61) - 1);
+	if (params->pIv == NULL_PTR || params->ulIvLen != blockSize ||
+	    (params->ulIvBits != 0 && params->ulIvBits != blockSize * 8) ||
+	    (params->pIv[0] & 0x80) != 0 ||
+	    (params->ulAADLen != 0 && params->pAAD == NULL_PTR) ||
+	    params->ulAADLen > maximumBytes ||
+	    params->ulTagBits < 32 || params->ulTagBits > blockSize * 8 ||
+	    params->ulTagBits % 8 != 0)
+		return CKR_MECHANISM_PARAM_INVALID;
+	iv.resize(blockSize);
+	memcpy(iv.byte_str(), params->pIv, blockSize);
+	aad.resize(params->ulAADLen);
+	if (params->ulAADLen != 0) memcpy(aad.byte_str(), params->pAAD, params->ulAADLen);
+	tagBytes = params->ulTagBits / 8;
+	return CKR_OK;
 }
 
 // SymAlgorithm version of C_EncryptInit
@@ -3222,6 +3251,18 @@ CK_RV SoftHSM::SymEncryptInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMech
 			algo = kuz ? SymAlgo::KUZNECHIK : SymAlgo::MAGMA;
 			mode = SymMode::CTR_ACPKM;
 			iv.resize(expected); memcpy(&iv[0], pMechanism->pParameter, expected);
+			break;
+		}
+		case CKM_KUZNECHIK_MGM:
+		case CKM_MAGMA_MGM:
+		{
+			const bool kuz = pMechanism->mechanism == CKM_KUZNECHIK_MGM;
+			if (keyType != (kuz ? CKK_KUZNECHIK : CKK_MAGMA)) return CKR_KEY_TYPE_INCONSISTENT;
+			CK_RV parameterResult = parseMGMParameters(pMechanism, kuz ? 16 : 8,
+				iv, aad, tagBytes);
+			if (parameterResult != CKR_OK) return parameterResult;
+			algo = kuz ? SymAlgo::KUZNECHIK : SymAlgo::MAGMA;
+			mode = SymMode::MGM;
 			break;
 		}
 		case CKM_DES3_CBC:
@@ -4012,6 +4053,18 @@ CK_RV SoftHSM::SymDecryptInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMech
 			algo = kuz ? SymAlgo::KUZNECHIK : SymAlgo::MAGMA;
 			mode = SymMode::CTR_ACPKM;
 			iv.resize(expected); memcpy(&iv[0], pMechanism->pParameter, expected);
+			break;
+		}
+		case CKM_KUZNECHIK_MGM:
+		case CKM_MAGMA_MGM:
+		{
+			const bool kuz = pMechanism->mechanism == CKM_KUZNECHIK_MGM;
+			if (keyType != (kuz ? CKK_KUZNECHIK : CKK_MAGMA)) return CKR_KEY_TYPE_INCONSISTENT;
+			CK_RV parameterResult = parseMGMParameters(pMechanism, kuz ? 16 : 8,
+				iv, aad, tagBytes);
+			if (parameterResult != CKR_OK) return parameterResult;
+			algo = kuz ? SymAlgo::KUZNECHIK : SymAlgo::MAGMA;
+			mode = SymMode::MGM;
 			break;
 		}
 		case CKM_DES3_CBC:
@@ -7715,6 +7768,59 @@ CK_RV SoftHSM::WrapKeySym
 	ByteString& wrapped
 )
 {
+	if (pMechanism->mechanism == CKM_KUZNECHIK_KEXP_15_WRAP ||
+	    pMechanism->mechanism == CKM_MAGMA_KEXP_15_WRAP)
+	{
+		const bool kuz = pMechanism->mechanism == CKM_KUZNECHIK_KEXP_15_WRAP;
+		const size_t block = kuz ? 16 : 8;
+		const size_t ukmLen = block / 2;
+		if (pMechanism->pParameter == NULL_PTR || pMechanism->ulParameterLen != ukmLen)
+			return CKR_MECHANISM_PARAM_INVALID;
+		if (keydata.size() != 32) return CKR_KEY_SIZE_RANGE;
+		SymmetricKey twin;
+		if (getSymmetricKey(&twin, token, wrapKey) != CKR_OK || twin.getKeyBits().size() != 64)
+			return CKR_GENERAL_ERROR;
+		GOSTSymmetric macCipher(kuz ? GOSTSymmetric::KUZNECHIK : GOSTSymmetric::MAGMA);
+		GOSTSymmetric encCipher(kuz ? GOSTSymmetric::KUZNECHIK : GOSTSymmetric::MAGMA);
+		const unsigned char* twinBits = twin.getKeyBits().const_byte_str();
+		if (!macCipher.setKey(twinBits, 32) || !encCipher.setKey(twinBits + 32, 32))
+			return CKR_GENERAL_ERROR;
+		ByteString authenticated(static_cast<const unsigned char*>(pMechanism->pParameter), ukmLen);
+		authenticated += keydata;
+		unsigned char tag[16];
+		if (!macCipher.omac(authenticated.const_byte_str(), authenticated.size(), tag))
+			return CKR_GENERAL_ERROR;
+		ByteString plain = keydata;
+		plain += ByteString(tag, block);
+		wrapped.resize(plain.size());
+		const bool ok = encCipher.ctr(static_cast<const unsigned char*>(pMechanism->pParameter),
+			ukmLen, plain.const_byte_str(), wrapped.byte_str(), wrapped.size());
+		memset(tag, 0, sizeof(tag));
+		return ok ? CKR_OK : CKR_GENERAL_ERROR;
+	}
+	if (pMechanism->mechanism == CKM_GOST28147_KEY_WRAP)
+	{
+		if (!((pMechanism->pParameter == NULL_PTR && pMechanism->ulParameterLen == 0) ||
+		      (pMechanism->pParameter != NULL_PTR && pMechanism->ulParameterLen == 8)))
+			return CKR_MECHANISM_PARAM_INVALID;
+		if (keydata.size() != 32) return CKR_KEY_SIZE_RANGE;
+		SymmetricKey wrappingKey;
+		if (getSymmetricKey(&wrappingKey, token, wrapKey) != CKR_OK ||
+		    wrappingKey.getKeyBits().size() != 32) return CKR_GENERAL_ERROR;
+		GOST28147 cipher;
+		if (!cipher.setParamSet(wrappingKey.getAlgorithmParameters()) ||
+		    !cipher.setKey(wrappingKey.getKeyBits().const_byte_str(), 32)) return CKR_GENERAL_ERROR;
+		wrapped.resize(36);
+		for (size_t offset = 0; offset < 32; offset += 8)
+			cipher.encryptBlock(keydata.const_byte_str() + offset, wrapped.byte_str() + offset);
+		unsigned char mac[8] = {0};
+		if (pMechanism->pParameter != NULL_PTR) memcpy(mac, pMechanism->pParameter, 8);
+		for (size_t offset = 0; offset < 32; offset += 8)
+			cipher.macBlock(mac, keydata.const_byte_str() + offset);
+		memcpy(wrapped.byte_str() + 32, mac, 4);
+		memset(mac, 0, sizeof(mac));
+		return CKR_OK;
+	}
 	// Get the symmetric algorithm matching the mechanism
 	SymAlgo::Type algo = SymAlgo::Unknown;
 	SymWrap::Type mode = SymWrap::Unknown;
@@ -8082,6 +8188,19 @@ CK_RV SoftHSM::C_WrapKey
                             pMechanism->ulParameterLen != 16)
                                 return CKR_ARGUMENTS_BAD;
                         break;
+		case CKM_GOST28147_KEY_WRAP:
+			if (!((pMechanism->pParameter == NULL_PTR && pMechanism->ulParameterLen == 0) ||
+			      (pMechanism->pParameter != NULL_PTR && pMechanism->ulParameterLen == 8)))
+				return CKR_MECHANISM_PARAM_INVALID;
+			break;
+		case CKM_KUZNECHIK_KEXP_15_WRAP:
+			if (pMechanism->pParameter == NULL_PTR || pMechanism->ulParameterLen != 8)
+				return CKR_MECHANISM_PARAM_INVALID;
+			break;
+		case CKM_MAGMA_KEXP_15_WRAP:
+			if (pMechanism->pParameter == NULL_PTR || pMechanism->ulParameterLen != 4)
+				return CKR_MECHANISM_PARAM_INVALID;
+			break;
 		default:
 			return CKR_MECHANISM_INVALID;
 	}
@@ -8121,6 +8240,15 @@ CK_RV SoftHSM::C_WrapKey
 		wrapKey->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED) != CKK_RSA)
 		return CKR_WRAPPING_KEY_TYPE_INCONSISTENT;
 	if ((pMechanism->mechanism == CKM_AES_CBC || pMechanism->mechanism == CKM_AES_CBC_PAD) && wrapKey->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED) != CKK_AES)
+		return CKR_WRAPPING_KEY_TYPE_INCONSISTENT;
+	if (pMechanism->mechanism == CKM_GOST28147_KEY_WRAP &&
+	    wrapKey->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED) != CKK_GOST28147)
+		return CKR_WRAPPING_KEY_TYPE_INCONSISTENT;
+	if (pMechanism->mechanism == CKM_KUZNECHIK_KEXP_15_WRAP &&
+	    wrapKey->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED) != CKK_KUZNECHIK_TWIN_KEY)
+		return CKR_WRAPPING_KEY_TYPE_INCONSISTENT;
+	if (pMechanism->mechanism == CKM_MAGMA_KEXP_15_WRAP &&
+	    wrapKey->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED) != CKK_MAGMA_TWIN_KEY)
 		return CKR_WRAPPING_KEY_TYPE_INCONSISTENT;
 	if (pMechanism->mechanism == CKM_DES3_CBC && (wrapKey->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED) != CKK_DES2 ||
 		wrapKey->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED) != CKK_DES3))
@@ -8163,6 +8291,14 @@ CK_RV SoftHSM::C_WrapKey
 		return CKR_KEY_NOT_WRAPPABLE;
 	// CKM_RSA_PKCS and CKM_RSA_PKCS_OAEP can be used only on SECRET keys: PKCS#11 2.40 draft 2 section 2.1.6 PKCS #1 v1.5 RSA & section 2.1.8 PKCS #1 RSA OAEP
 	if ((pMechanism->mechanism == CKM_RSA_PKCS || pMechanism->mechanism == CKM_RSA_PKCS_OAEP) && keyClass != CKO_SECRET_KEY)
+		return CKR_KEY_NOT_WRAPPABLE;
+	const CK_KEY_TYPE wrappedKeyType = key->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED);
+	if (pMechanism->mechanism == CKM_GOST28147_KEY_WRAP && wrappedKeyType != CKK_GOST28147)
+		return CKR_KEY_NOT_WRAPPABLE;
+	if ((pMechanism->mechanism == CKM_KUZNECHIK_KEXP_15_WRAP ||
+	     pMechanism->mechanism == CKM_MAGMA_KEXP_15_WRAP) &&
+	    wrappedKeyType != CKK_GENERIC_SECRET && wrappedKeyType != CKK_GOST28147 &&
+	    wrappedKeyType != CKK_KUZNECHIK && wrappedKeyType != CKK_MAGMA)
 		return CKR_KEY_NOT_WRAPPABLE;
 
 	// Verify the wrap template attribute
@@ -8442,6 +8578,62 @@ CK_RV SoftHSM::UnwrapKeySym
 	ByteString& keydata
 )
 {
+	if (pMechanism->mechanism == CKM_KUZNECHIK_KEXP_15_WRAP ||
+	    pMechanism->mechanism == CKM_MAGMA_KEXP_15_WRAP)
+	{
+		const bool kuz = pMechanism->mechanism == CKM_KUZNECHIK_KEXP_15_WRAP;
+		const size_t block = kuz ? 16 : 8;
+		const size_t ukmLen = block / 2;
+		if (pMechanism->pParameter == NULL_PTR || pMechanism->ulParameterLen != ukmLen)
+			return CKR_MECHANISM_PARAM_INVALID;
+		if (wrapped.size() != 32 + block) return CKR_WRAPPED_KEY_LEN_RANGE;
+		SymmetricKey twin;
+		if (getSymmetricKey(&twin, token, unwrapKey) != CKR_OK || twin.getKeyBits().size() != 64)
+			return CKR_GENERAL_ERROR;
+		GOSTSymmetric macCipher(kuz ? GOSTSymmetric::KUZNECHIK : GOSTSymmetric::MAGMA);
+		GOSTSymmetric encCipher(kuz ? GOSTSymmetric::KUZNECHIK : GOSTSymmetric::MAGMA);
+		const unsigned char* twinBits = twin.getKeyBits().const_byte_str();
+		if (!macCipher.setKey(twinBits, 32) || !encCipher.setKey(twinBits + 32, 32))
+			return CKR_GENERAL_ERROR;
+		ByteString plain;
+		plain.resize(wrapped.size());
+		if (!encCipher.ctr(static_cast<const unsigned char*>(pMechanism->pParameter), ukmLen,
+			wrapped.const_byte_str(), plain.byte_str(), plain.size())) return CKR_GENERAL_ERROR;
+		ByteString authenticated(static_cast<const unsigned char*>(pMechanism->pParameter), ukmLen);
+		authenticated += ByteString(plain.const_byte_str(), 32);
+		unsigned char tag[16], different = 0;
+		if (!macCipher.omac(authenticated.const_byte_str(), authenticated.size(), tag))
+			return CKR_GENERAL_ERROR;
+		for (size_t i = 0; i < block; ++i) different |= tag[i] ^ plain[32 + i];
+		memset(tag, 0, sizeof(tag));
+		if (different != 0) return CKR_WRAPPED_KEY_INVALID;
+		keydata = ByteString(plain.const_byte_str(), 32);
+		return CKR_OK;
+	}
+	if (pMechanism->mechanism == CKM_GOST28147_KEY_WRAP)
+	{
+		if (!((pMechanism->pParameter == NULL_PTR && pMechanism->ulParameterLen == 0) ||
+		      (pMechanism->pParameter != NULL_PTR && pMechanism->ulParameterLen == 8)))
+			return CKR_MECHANISM_PARAM_INVALID;
+		if (wrapped.size() != 36) return CKR_WRAPPED_KEY_LEN_RANGE;
+		SymmetricKey unwrappingKey;
+		if (getSymmetricKey(&unwrappingKey, token, unwrapKey) != CKR_OK ||
+		    unwrappingKey.getKeyBits().size() != 32) return CKR_GENERAL_ERROR;
+		GOST28147 cipher;
+		if (!cipher.setParamSet(unwrappingKey.getAlgorithmParameters()) ||
+		    !cipher.setKey(unwrappingKey.getKeyBits().const_byte_str(), 32)) return CKR_GENERAL_ERROR;
+		keydata.resize(32);
+		for (size_t offset = 0; offset < 32; offset += 8)
+			cipher.decryptBlock(wrapped.const_byte_str() + offset, keydata.byte_str() + offset);
+		unsigned char mac[8] = {0}, different = 0;
+		if (pMechanism->pParameter != NULL_PTR) memcpy(mac, pMechanism->pParameter, 8);
+		for (size_t offset = 0; offset < 32; offset += 8)
+			cipher.macBlock(mac, keydata.const_byte_str() + offset);
+		for (size_t i = 0; i < 4; ++i) different |= mac[i] ^ wrapped[32 + i];
+		memset(mac, 0, sizeof(mac));
+		if (different != 0) { keydata.wipe(); return CKR_WRAPPED_KEY_INVALID; }
+		return CKR_OK;
+	}
 	// Get the symmetric algorithm matching the mechanism
 	SymAlgo::Type algo = SymAlgo::Unknown;
 	SymWrap::Type mode = SymWrap::Unknown;
@@ -8591,7 +8783,6 @@ CK_RV SoftHSM::UnwrapKeyAsym
 			algo = AsymAlgo::RSA;
 			mode = AsymMech::RSA_PKCS;
 			break;
-
 		case CKM_RSA_PKCS_OAEP:
 			algo = AsymAlgo::RSA;
 			mode = AsymMech::RSA_PKCS_OAEP;
@@ -8868,6 +9059,22 @@ CK_RV SoftHSM::C_UnwrapKey
                             pMechanism->ulParameterLen != 8)
 				return CKR_ARGUMENTS_BAD;
 			break;
+		case CKM_GOST28147_KEY_WRAP:
+			if (ulWrappedKeyLen != 36) return CKR_WRAPPED_KEY_LEN_RANGE;
+			if (!((pMechanism->pParameter == NULL_PTR && pMechanism->ulParameterLen == 0) ||
+			      (pMechanism->pParameter != NULL_PTR && pMechanism->ulParameterLen == 8)))
+				return CKR_MECHANISM_PARAM_INVALID;
+			break;
+		case CKM_KUZNECHIK_KEXP_15_WRAP:
+			if (ulWrappedKeyLen != 48) return CKR_WRAPPED_KEY_LEN_RANGE;
+			if (pMechanism->pParameter == NULL_PTR || pMechanism->ulParameterLen != 8)
+				return CKR_MECHANISM_PARAM_INVALID;
+			break;
+		case CKM_MAGMA_KEXP_15_WRAP:
+			if (ulWrappedKeyLen != 40) return CKR_WRAPPED_KEY_LEN_RANGE;
+			if (pMechanism->pParameter == NULL_PTR || pMechanism->ulParameterLen != 4)
+				return CKR_MECHANISM_PARAM_INVALID;
+			break;
 
 		default:
 			return CKR_MECHANISM_INVALID;
@@ -8909,6 +9116,15 @@ CK_RV SoftHSM::C_UnwrapKey
 		return CKR_UNWRAPPING_KEY_TYPE_INCONSISTENT;
 	if ((pMechanism->mechanism == CKM_AES_CBC || pMechanism->mechanism == CKM_AES_CBC_PAD) && unwrapKey->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED) != CKK_AES)
 		return CKR_WRAPPING_KEY_TYPE_INCONSISTENT;
+	if (pMechanism->mechanism == CKM_GOST28147_KEY_WRAP &&
+	    unwrapKey->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED) != CKK_GOST28147)
+		return CKR_UNWRAPPING_KEY_TYPE_INCONSISTENT;
+	if (pMechanism->mechanism == CKM_KUZNECHIK_KEXP_15_WRAP &&
+	    unwrapKey->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED) != CKK_KUZNECHIK_TWIN_KEY)
+		return CKR_UNWRAPPING_KEY_TYPE_INCONSISTENT;
+	if (pMechanism->mechanism == CKM_MAGMA_KEXP_15_WRAP &&
+	    unwrapKey->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED) != CKK_MAGMA_TWIN_KEY)
+		return CKR_UNWRAPPING_KEY_TYPE_INCONSISTENT;
 	if (pMechanism->mechanism == CKM_DES3_CBC && (unwrapKey->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED) != CKK_DES2 ||
 		unwrapKey->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED) != CKK_DES3))
 		return CKR_WRAPPING_KEY_TYPE_INCONSISTENT;
@@ -8938,6 +9154,15 @@ CK_RV SoftHSM::C_UnwrapKey
 	// Report errors and/or unexpected usage.
 	if (objClass != CKO_SECRET_KEY && objClass != CKO_PRIVATE_KEY)
 		return CKR_ATTRIBUTE_VALUE_INVALID;
+	if (pMechanism->mechanism == CKM_GOST28147_KEY_WRAP &&
+	    (objClass != CKO_SECRET_KEY || keyType != CKK_GOST28147))
+		return CKR_TEMPLATE_INCONSISTENT;
+	if ((pMechanism->mechanism == CKM_KUZNECHIK_KEXP_15_WRAP ||
+	     pMechanism->mechanism == CKM_MAGMA_KEXP_15_WRAP) &&
+	    (objClass != CKO_SECRET_KEY ||
+	     (keyType != CKK_GENERIC_SECRET && keyType != CKK_GOST28147 &&
+	      keyType != CKK_KUZNECHIK && keyType != CKK_MAGMA)))
+		return CKR_TEMPLATE_INCONSISTENT;
 	// Key type will be handled at object creation
 
 	// Check authorization

@@ -38,6 +38,15 @@ public:
 	void encryptBlock(const unsigned char* in, unsigned char* out) const;
 	void decryptBlock(const unsigned char* in, unsigned char* out) const;
 	size_t blockSize() const;
+	bool ctr(const unsigned char* iv, size_t ivLen, const unsigned char* in,
+		unsigned char* out, size_t len) const;
+	bool omac(const unsigned char* in, size_t len, unsigned char* out) const;
+	bool mgmEncrypt(const unsigned char* icn, const unsigned char* aad, size_t aadLen,
+		const unsigned char* plain, size_t plainLen, unsigned char* cipherText,
+		unsigned char* tag, size_t tagLen) const;
+	bool mgmDecrypt(const unsigned char* icn, const unsigned char* aad, size_t aadLen,
+		const unsigned char* cipherText, size_t cipherLen, const unsigned char* tag,
+		size_t tagLen, unsigned char* plain) const;
 
 private:
 	GOSTSymmetric(const GOSTSymmetric&);

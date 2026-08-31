@@ -1066,8 +1066,12 @@ CK_RV P11AttrValue::updateAttr(Token *token, bool isPrivate, CK_VOID_PTR pValue,
 				checkValue = des.getKeyCheckValue();
 				break;
 			case CKK_GOST28147:
+			case CKK_KUZNECHIK:
+			case CKK_MAGMA:
+			case CKK_KUZNECHIK_TWIN_KEY:
+			case CKK_MAGMA_TWIN_KEY:
 				// TODO: Encryption support for CKK_GOST28147
-				// We do not calculate the KCV
+				// TC26 keys do not expose an AES/DES-style KCV.
 				break;
 			default:
 				return CKR_GENERAL_ERROR;

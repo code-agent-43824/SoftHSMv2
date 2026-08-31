@@ -116,6 +116,63 @@ void xorBlock(unsigned char* a, const unsigned char* b, size_t n)
 	for (size_t i = 0; i < n; ++i) a[i] ^= b[i];
 }
 
+void shiftSubkey(const unsigned char* in, unsigned char* out, size_t block)
+{
+	unsigned char carry = 0;
+	for (size_t i = block; i != 0; --i)
+	{
+		const unsigned char next = (unsigned char)(in[i - 1] >> 7);
+		out[i - 1] = (unsigned char)((in[i - 1] << 1) | carry);
+		carry = next;
+	}
+	if (carry) out[block - 1] ^= block == 16 ? 0x87 : 0x1b;
+}
+
+void incrementHalf(unsigned char* value, size_t begin, size_t end)
+{
+	for (size_t i = end; i != begin; --i)
+		if (++value[i - 1] != 0) break;
+}
+
+void gfMultiply(const unsigned char* x, const unsigned char* y,
+	unsigned char* out, size_t block)
+{
+	unsigned char v[16], z[16] = {0};
+	memcpy(v, x, block);
+	for (size_t bit = 0; bit < block * 8; ++bit)
+	{
+		if ((y[block - 1 - bit / 8] >> (bit % 8)) & 1) xorBlock(z, v, block);
+		const bool carry = (v[0] & 0x80) != 0;
+		for (size_t i = 0; i + 1 < block; ++i)
+			v[i] = (unsigned char)((v[i] << 1) | (v[i + 1] >> 7));
+		v[block - 1] <<= 1;
+		if (carry) v[block - 1] ^= block == 16 ? 0x87 : 0x1b;
+	}
+	memcpy(out, z, block);
+	memset(v, 0, sizeof(v));
+	memset(z, 0, sizeof(z));
+}
+
+void storeLength(unsigned char* out, size_t len, size_t bytes)
+{
+	const uint64_t bits = (uint64_t)len * 8;
+	for (size_t i = 0; i < bytes; ++i)
+		out[bytes - 1 - i] = i < sizeof(bits) ? (unsigned char)(bits >> (8 * i)) : 0;
+}
+
+bool equalConstantTime(const unsigned char* a, const unsigned char* b, size_t len)
+{
+	unsigned char different = 0;
+	for (size_t i = 0; i < len; ++i) different |= a[i] ^ b[i];
+	return different == 0;
+}
+
+size_t maximumMGMBytes(size_t block)
+{
+	if (block == 8) return ((size_t)1 << 29) - 1;
+	return sizeof(size_t) >= 8 ? (size_t)((UINT64_C(1) << 61) - 1) : (size_t)-1;
+}
+
 uint32_t loadBE32(const unsigned char* p)
 {
 	return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
@@ -171,6 +228,154 @@ bool GOSTSymmetric::setKey(const unsigned char* key, size_t keyLen)
 size_t GOSTSymmetric::blockSize() const
 {
 	return cipher == KUZNECHIK ? 16 : 8;
+}
+
+bool GOSTSymmetric::ctr(const unsigned char* iv, size_t ivLen,
+	const unsigned char* in, unsigned char* out, size_t len) const
+{
+	const size_t block = blockSize();
+	if (!keyed || iv == NULL || ivLen != block / 2 ||
+	    (len != 0 && (in == NULL || out == NULL))) return false;
+	unsigned char counter[16] = {0}, gamma[16];
+	memcpy(counter, iv, ivLen);
+	for (size_t offset = 0; offset < len; offset += block)
+	{
+		encryptBlock(counter, gamma);
+		const size_t take = len - offset < block ? len - offset : block;
+		for (size_t i = 0; i < take; ++i) out[offset + i] = in[offset + i] ^ gamma[i];
+		incrementHalf(counter, block / 2, block);
+	}
+	memset(counter, 0, sizeof(counter));
+	memset(gamma, 0, sizeof(gamma));
+	return true;
+}
+
+bool GOSTSymmetric::omac(const unsigned char* in, size_t len, unsigned char* out) const
+{
+	const size_t block = blockSize();
+	if (!keyed || out == NULL || (len != 0 && in == NULL)) return false;
+	unsigned char zero[16] = {0}, l[16], k1[16], k2[16], chain[16] = {0}, last[16];
+	encryptBlock(zero, l);
+	shiftSubkey(l, k1, block);
+	shiftSubkey(k1, k2, block);
+	const size_t full = len / block;
+	const bool complete = len != 0 && len % block == 0;
+	const size_t beforeLast = complete ? full - 1 : full;
+	for (size_t n = 0; n < beforeLast; ++n)
+	{
+		xorBlock(chain, in + n * block, block);
+		encryptBlock(chain, chain);
+	}
+	memset(last, 0, sizeof(last));
+	if (complete)
+	{
+		memcpy(last, in + beforeLast * block, block);
+		xorBlock(last, k1, block);
+	}
+	else
+	{
+		const size_t tail = len - beforeLast * block;
+		if (tail != 0) memcpy(last, in + beforeLast * block, tail);
+		last[tail] = 0x80;
+		xorBlock(last, k2, block);
+	}
+	xorBlock(chain, last, block);
+	encryptBlock(chain, out);
+	memset(l, 0, sizeof(l)); memset(k1, 0, sizeof(k1)); memset(k2, 0, sizeof(k2));
+	memset(chain, 0, sizeof(chain)); memset(last, 0, sizeof(last));
+	return true;
+}
+
+bool GOSTSymmetric::mgmEncrypt(const unsigned char* icn, const unsigned char* aad,
+	size_t aadLen, const unsigned char* plain, size_t plainLen,
+	unsigned char* cipherText, unsigned char* tag, size_t tagLen) const
+{
+	const size_t block = blockSize();
+	if (!keyed || icn == NULL || (icn[0] & 0x80) != 0 || tag == NULL ||
+	    tagLen < 4 || tagLen > block ||
+	    (aadLen == 0 && plainLen == 0) ||
+	    aadLen > maximumMGMBytes(block) || plainLen > maximumMGMBytes(block) ||
+	    (aadLen != 0 && aad == NULL) ||
+	    (plainLen != 0 && (plain == NULL || cipherText == NULL))) return false;
+
+	unsigned char y[16], z[16], gamma[16], h[16], product[16], sum[16] = {0};
+	memcpy(y, icn, block); y[0] &= 0x7f; encryptBlock(y, y);
+	for (size_t offset = 0; offset < plainLen; offset += block)
+	{
+		encryptBlock(y, gamma);
+		const size_t take = plainLen - offset < block ? plainLen - offset : block;
+		for (size_t i = 0; i < take; ++i) cipherText[offset + i] = plain[offset + i] ^ gamma[i];
+		incrementHalf(y, block / 2, block);
+	}
+
+	memcpy(z, icn, block); z[0] |= 0x80; encryptBlock(z, z);
+	const unsigned char* parts[2] = {aad, cipherText};
+	const size_t lengths[2] = {aadLen, plainLen};
+	for (size_t part = 0; part < 2; ++part)
+	{
+		for (size_t offset = 0; offset < lengths[part]; offset += block)
+		{
+			unsigned char padded[16] = {0};
+			const size_t take = lengths[part] - offset < block ? lengths[part] - offset : block;
+			memcpy(padded, parts[part] + offset, take);
+			encryptBlock(z, h); gfMultiply(h, padded, product, block); xorBlock(sum, product, block);
+			incrementHalf(z, 0, block / 2);
+			memset(padded, 0, sizeof(padded));
+		}
+	}
+	unsigned char lengthBlock[16] = {0};
+	storeLength(lengthBlock, aadLen, block / 2);
+	storeLength(lengthBlock + block / 2, plainLen, block / 2);
+	encryptBlock(z, h); gfMultiply(h, lengthBlock, product, block); xorBlock(sum, product, block);
+	encryptBlock(sum, gamma); memcpy(tag, gamma, tagLen);
+	memset(y, 0, sizeof(y)); memset(z, 0, sizeof(z)); memset(gamma, 0, sizeof(gamma));
+	memset(h, 0, sizeof(h)); memset(product, 0, sizeof(product)); memset(sum, 0, sizeof(sum));
+	memset(lengthBlock, 0, sizeof(lengthBlock));
+	return true;
+}
+
+bool GOSTSymmetric::mgmDecrypt(const unsigned char* icn, const unsigned char* aad,
+	size_t aadLen, const unsigned char* cipherText, size_t cipherLen,
+	const unsigned char* tag, size_t tagLen, unsigned char* plain) const
+{
+	if (cipherLen != 0 && (cipherText == NULL || plain == NULL)) return false;
+	unsigned char expected[16], dummy = 0;
+	unsigned char* temporary = cipherLen == 0 ? &dummy : plain;
+	// MGM authenticates ciphertext.  CTR is its own inverse, so generate the
+	// expected tag with a zero plaintext that produces the supplied ciphertext,
+	// then decrypt only after authentication succeeds.
+	const size_t block = blockSize();
+	unsigned char y[16], gamma[16];
+	if (!keyed || icn == NULL || (icn[0] & 0x80) != 0 || tag == NULL ||
+	    tagLen < 4 || tagLen > block || (aadLen != 0 && aad == NULL)) return false;
+	if (aadLen == 0 && cipherLen == 0) return false;
+	if (aadLen > maximumMGMBytes(block) || cipherLen > maximumMGMBytes(block)) return false;
+	memcpy(y, icn, block); y[0] &= 0x7f; encryptBlock(y, y);
+	for (size_t offset = 0; offset < cipherLen; offset += block)
+	{
+		encryptBlock(y, gamma);
+		const size_t take = cipherLen - offset < block ? cipherLen - offset : block;
+		for (size_t i = 0; i < take; ++i) temporary[offset + i] = cipherText[offset + i] ^ gamma[i];
+		incrementHalf(y, block / 2, block);
+	}
+	if (!mgmEncrypt(icn, aad, aadLen, temporary, cipherLen, temporary, expected, tagLen) ||
+	    !equalConstantTime(expected, tag, tagLen))
+	{
+		if (cipherLen != 0) memset(plain, 0, cipherLen);
+		memset(expected, 0, sizeof(expected)); memset(y, 0, sizeof(y)); memset(gamma, 0, sizeof(gamma));
+		return false;
+	}
+	// The in-place mgmEncrypt call restored ciphertext; apply CTR once more.
+	memcpy(y, icn, block); y[0] &= 0x7f; encryptBlock(y, y);
+	for (size_t offset = 0; offset < cipherLen; offset += block)
+	{
+		encryptBlock(y, gamma);
+		const size_t take = cipherLen - offset < block ? cipherLen - offset : block;
+		for (size_t i = 0; i < take; ++i) plain[offset + i] = cipherText[offset + i] ^ gamma[i];
+		incrementHalf(y, block / 2, block);
+	}
+	memset(expected, 0, sizeof(expected)); memset(y, 0, sizeof(y)); memset(gamma, 0, sizeof(gamma));
+	return true;
 }
 
 void GOSTSymmetric::encryptBlock(const unsigned char* in, unsigned char* out) const

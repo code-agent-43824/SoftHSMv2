@@ -20,18 +20,22 @@ public:
 	virtual bool wrapKey(const SymmetricKey*, SymWrap::Type, const ByteString&, ByteString&) { return false; }
 	virtual bool unwrapKey(const SymmetricKey*, SymWrap::Type, const ByteString&, ByteString&) { return false; }
 	virtual size_t getBlockSize() const;
-	virtual bool checkMaximumBytes(unsigned long) { return true; }
+	virtual bool checkMaximumBytes(unsigned long bytes);
 
 private:
-	bool init(const SymmetricKey*, SymMode::Type, const ByteString&, bool);
+	bool init(const SymmetricKey*, SymMode::Type, const ByteString&, bool,
+		const ByteString&, size_t);
 	bool finish(ByteString&, bool);
 	bool processECB(ByteString&, bool);
 	bool processCTRACPKM(ByteString&);
+	bool processMGM(ByteString&, bool);
 	void meshKey(GOSTSymmetric&, unsigned char[32]) const;
 	static void incrementCounter(unsigned char*, size_t);
 	GOSTSymmetric::Cipher cipherType;
 	ByteString input;
 	ByteString parameters;
+	ByteString associatedData;
+	bool encrypting;
 };
 
 #endif

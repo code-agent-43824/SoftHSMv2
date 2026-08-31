@@ -62,6 +62,7 @@ struct SymMode
 		CTR,
 		ECB,
 		GCM,
+		MGM,
 		OFB,
 		CTR_ACPKM
 	};
