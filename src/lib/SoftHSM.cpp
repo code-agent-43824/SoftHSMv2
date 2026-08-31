@@ -299,6 +299,10 @@ static CK_RV newP11Object(CK_OBJECT_CLASS objClass, CK_KEY_TYPE keyType, CK_CERT
 			break;
 		case CKO_SECRET_KEY:
 			if ((keyType == CKK_GENERIC_SECRET) ||
+#ifdef WITH_GOST_3410_2012_256
+			    (keyType == CKK_KUZNECHIK_TWIN_KEY) ||
+			    (keyType == CKK_MAGMA_TWIN_KEY) ||
+#endif
 			    (keyType == CKK_MD5_HMAC) ||
 			    (keyType == CKK_SHA_1_HMAC) ||
 			    (keyType == CKK_SHA224_HMAC) ||
@@ -323,8 +327,7 @@ static CK_RV newP11Object(CK_OBJECT_CLASS objClass, CK_KEY_TYPE keyType, CK_CERT
 				key->setKeyType(keyType);
 			}
 			else if (keyType == CKK_GOST28147 || keyType == CKK_KUZNECHIK ||
-				 keyType == CKK_MAGMA || keyType == CKK_KUZNECHIK_TWIN_KEY ||
-				 keyType == CKK_MAGMA_TWIN_KEY)
+				 keyType == CKK_MAGMA)
 			{
 				P11GOSTSecretKeyObj* key = new P11GOSTSecretKeyObj();
 				*p11object = key;
