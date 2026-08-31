@@ -123,6 +123,7 @@ jobs:
           perl -0pi -e 's/FAKE_RUTOKEN_ECP = false/FAKE_RUTOKEN_ECP = true/' \
             "$HOME/softhsm/softhsm.conf"
           P11_PROFILE_EXPECTED_LABEL='Rutoken ECP' \
+          P11_TEST_USER_PIN=12345678 \
             ./portable-token-e2e rutoken-profile "$module"
           portable-product/softhsm2-export --token 'Rutoken ECP' \
             --id 504f525441424c4547 --label portable-ci-gost2012-256 \

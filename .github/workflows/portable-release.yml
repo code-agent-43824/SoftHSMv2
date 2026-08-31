@@ -305,7 +305,8 @@ jobs:
             > "$RUNNER_TEMP/tokens-before-profile.sha256"
           perl -0pi -e 's/FAKE_RUTOKEN_ECP = false/FAKE_RUTOKEN_ECP = true/' \
             "$HOME/softhsm/softhsm.conf"
-          "$kit/bin/portable-token-e2e" rutoken-profile \
+          P11_TEST_USER_PIN=12345678 \
+            "$kit/bin/portable-token-e2e" rutoken-profile \
             "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so"
           find "$HOME/softhsm/tokens" -type f -print0 | sort -z | xargs -0 sha256sum \
             > "$RUNNER_TEMP/tokens-after-profile.sha256"
@@ -392,7 +393,8 @@ jobs:
           test ! -e "$GITHUB_WORKSPACE/downloaded/tokens"
           perl -0pi -e 's/FAKE_RUTOKEN_ECP = false/FAKE_RUTOKEN_ECP = true/' \
             "$HOME/softhsm/softhsm.conf"
-          "$RUNNER_TEMP/packaged-testkit/bin/portable-token-e2e" rutoken-profile \
+          P11_TEST_USER_PIN=12345678 \
+            "$RUNNER_TEMP/packaged-testkit/bin/portable-token-e2e" rutoken-profile \
             "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so"
           P11_TEST_TOKEN_LABEL=portable-ci-token \
           P11_TEST_OBJECT_ID_HEX=504f525441424c47 \
@@ -447,8 +449,10 @@ jobs:
           set "P11_TEST_KEY_LABEL="
           if exist "%CD%\downloaded\tokens" exit /b 1
           powershell -NoProfile -Command "(Get-Content -Raw '%USERPROFILE%\softhsm\softhsm.conf').Replace('FAKE_RUTOKEN_ECP = false','FAKE_RUTOKEN_ECP = true') | Set-Content -NoNewline -Encoding ascii '%USERPROFILE%\softhsm\softhsm.conf'"
+          set "P11_TEST_USER_PIN=12345678"
           "%RUNNER_TEMP%\packaged-testkit\bin\portable-token-e2e.exe" rutoken-profile "%CD%\downloaded\softhsm2.dll"
           if errorlevel 1 exit /b %ERRORLEVEL%
+          set "P11_TEST_USER_PIN="
           set "P11_TEST_TOKEN_LABEL=portable-ci-token"
           set "P11_TEST_OBJECT_ID_HEX=504f525441424c47"
           set "P11_TEST_KEY_LABEL=portable-ci-rsa-rutoken"
@@ -504,8 +508,10 @@ jobs:
           set "P11_TEST_KEY_LABEL="
           if exist "%CD%\downloaded\tokens" exit /b 1
           powershell -NoProfile -Command "(Get-Content -Raw '%USERPROFILE%\softhsm\softhsm.conf').Replace('FAKE_RUTOKEN_ECP = false','FAKE_RUTOKEN_ECP = true') | Set-Content -NoNewline -Encoding ascii '%USERPROFILE%\softhsm\softhsm.conf'"
+          set "P11_TEST_USER_PIN=12345678"
           "%RUNNER_TEMP%\packaged-testkit\bin\portable-token-e2e.exe" rutoken-profile "%CD%\downloaded\softhsm2.dll"
           if errorlevel 1 exit /b %ERRORLEVEL%
+          set "P11_TEST_USER_PIN="
           set "P11_TEST_TOKEN_LABEL=portable-ci-token"
           set "P11_TEST_OBJECT_ID_HEX=504f525441424c47"
           set "P11_TEST_KEY_LABEL=portable-ci-rsa-rutoken"
@@ -561,8 +567,10 @@ jobs:
           set "P11_TEST_KEY_LABEL="
           if exist "%CD%\downloaded\tokens" exit /b 1
           powershell -NoProfile -Command "(Get-Content -Raw '%USERPROFILE%\softhsm\softhsm.conf').Replace('FAKE_RUTOKEN_ECP = false','FAKE_RUTOKEN_ECP = true') | Set-Content -NoNewline -Encoding ascii '%USERPROFILE%\softhsm\softhsm.conf'"
+          set "P11_TEST_USER_PIN=12345678"
           "%RUNNER_TEMP%\packaged-testkit\bin\portable-token-e2e.exe" rutoken-profile "%CD%\downloaded\softhsm2.dll"
           if errorlevel 1 exit /b %ERRORLEVEL%
+          set "P11_TEST_USER_PIN="
           set "P11_TEST_TOKEN_LABEL=portable-ci-token"
           set "P11_TEST_OBJECT_ID_HEX=504f525441424c47"
           set "P11_TEST_KEY_LABEL=portable-ci-rsa-rutoken"
@@ -617,7 +625,8 @@ jobs:
           test ! -e "$GITHUB_WORKSPACE/downloaded/tokens"
           perl -0pi -e 's/FAKE_RUTOKEN_ECP = false/FAKE_RUTOKEN_ECP = true/' \
             "$HOME/softhsm/softhsm.conf"
-          "$RUNNER_TEMP/packaged-testkit/bin/portable-token-e2e" rutoken-profile \
+          P11_TEST_USER_PIN=12345678 \
+            "$RUNNER_TEMP/packaged-testkit/bin/portable-token-e2e" rutoken-profile \
             "$GITHUB_WORKSPACE/downloaded/libsofthsm2.dylib"
           P11_TEST_TOKEN_LABEL=portable-ci-token \
           P11_TEST_OBJECT_ID_HEX=504f525441424c47 \
