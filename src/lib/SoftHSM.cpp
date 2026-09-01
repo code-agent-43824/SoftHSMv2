@@ -1288,6 +1288,23 @@ void SoftHSM::prepareSupportedMechanisms(std::map<std::string, CK_MECHANISM_TYPE
 #ifdef WITH_GOST_3411_2012
 	t["CKM_GOSTR3411_2012_256"] = CKM_GOSTR3411_2012_256;
 #endif
+	t["CKM_GOST28147_KEY_GEN"] = CKM_GOST28147_KEY_GEN;
+	t["CKM_KUZNECHIK_KEY_GEN"] = CKM_KUZNECHIK_KEY_GEN;
+	t["CKM_MAGMA_KEY_GEN"] = CKM_MAGMA_KEY_GEN;
+	t["CKM_GOST28147_ECB"] = CKM_GOST28147_ECB;
+	t["CKM_GOST28147"] = CKM_GOST28147;
+	t["CKM_KUZNECHIK_ECB"] = CKM_KUZNECHIK_ECB;
+	t["CKM_MAGMA_ECB"] = CKM_MAGMA_ECB;
+	t["CKM_KUZNECHIK_CTR_ACPKM"] = CKM_KUZNECHIK_CTR_ACPKM;
+	t["CKM_MAGMA_CTR_ACPKM"] = CKM_MAGMA_CTR_ACPKM;
+	t["CKM_KUZNECHIK_MGM"] = CKM_KUZNECHIK_MGM;
+	t["CKM_MAGMA_MGM"] = CKM_MAGMA_MGM;
+	t["CKM_GOST28147_MAC"] = CKM_GOST28147_MAC;
+	t["CKM_KUZNECHIK_MAC"] = CKM_KUZNECHIK_MAC;
+	t["CKM_MAGMA_MAC"] = CKM_MAGMA_MAC;
+	t["CKM_GOST28147_KEY_WRAP"] = CKM_GOST28147_KEY_WRAP;
+	t["CKM_KUZNECHIK_KEXP_15_WRAP"] = CKM_KUZNECHIK_KEXP_15_WRAP;
+	t["CKM_MAGMA_KEXP_15_WRAP"] = CKM_MAGMA_KEXP_15_WRAP;
 #ifdef WITH_EDDSA
 	t["CKM_EC_EDWARDS_KEY_PAIR_GEN"] = CKM_EC_EDWARDS_KEY_PAIR_GEN;
 	t["CKM_EDDSA"]			= CKM_EDDSA;
@@ -1845,6 +1862,43 @@ CK_RV SoftHSM::C_GetMechanismInfo(CK_SLOT_ID slotID, CK_MECHANISM_TYPE type, CK_
 		case CKM_AES_KEY_WRAP:
 			pInfo->ulMinKeySize = 16;
 			pInfo->ulMaxKeySize = 0x80000000;
+			pInfo->flags = CKF_WRAP | CKF_UNWRAP;
+			break;
+		case CKM_GOST28147_KEY_GEN:
+		case CKM_KUZNECHIK_KEY_GEN:
+		case CKM_MAGMA_KEY_GEN:
+			pInfo->ulMinKeySize = 32;
+			pInfo->ulMaxKeySize = 32;
+			pInfo->flags = CKF_GENERATE;
+			break;
+		case CKM_GOST28147_ECB:
+		case CKM_GOST28147:
+		case CKM_KUZNECHIK_ECB:
+		case CKM_MAGMA_ECB:
+		case CKM_KUZNECHIK_CTR_ACPKM:
+		case CKM_MAGMA_CTR_ACPKM:
+		case CKM_KUZNECHIK_MGM:
+		case CKM_MAGMA_MGM:
+			pInfo->ulMinKeySize = 32;
+			pInfo->ulMaxKeySize = 32;
+			pInfo->flags = CKF_ENCRYPT | CKF_DECRYPT;
+			break;
+		case CKM_GOST28147_MAC:
+		case CKM_KUZNECHIK_MAC:
+		case CKM_MAGMA_MAC:
+			pInfo->ulMinKeySize = 32;
+			pInfo->ulMaxKeySize = 32;
+			pInfo->flags = CKF_SIGN | CKF_VERIFY;
+			break;
+		case CKM_GOST28147_KEY_WRAP:
+			pInfo->ulMinKeySize = 32;
+			pInfo->ulMaxKeySize = 32;
+			pInfo->flags = CKF_WRAP | CKF_UNWRAP;
+			break;
+		case CKM_KUZNECHIK_KEXP_15_WRAP:
+		case CKM_MAGMA_KEXP_15_WRAP:
+			pInfo->ulMinKeySize = 64;
+			pInfo->ulMaxKeySize = 64;
 			pInfo->flags = CKF_WRAP | CKF_UNWRAP;
 			break;
 #ifdef HAVE_AES_KEY_WRAP_PAD

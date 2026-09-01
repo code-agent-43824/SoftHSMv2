@@ -37,6 +37,9 @@ if (-not $env:P11_TEST_USER_PIN) { throw "USER_PIN is missing from testkit.conf"
 if (-not $env:P11_TEST_REQUIRE_GOST_IMPORT_EXPORT) {
     $env:P11_TEST_REQUIRE_GOST_IMPORT_EXPORT = $BundledMode
 }
+if (-not $env:P11_TEST_REQUIRE_GOST_SYMMETRIC) {
+    $env:P11_TEST_REQUIRE_GOST_SYMMETRIC = $BundledMode
+}
 if (-not $env:P11_TEST_REQUIRE_RSA_IMPORT_EXPORT) {
     $env:P11_TEST_REQUIRE_RSA_IMPORT_EXPORT = $BundledMode
 }

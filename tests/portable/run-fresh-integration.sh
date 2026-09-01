@@ -42,6 +42,9 @@ fi
 if [[ -z ${P11_TEST_REQUIRE_GOST_IMPORT_EXPORT:-} ]]; then
   export P11_TEST_REQUIRE_GOST_IMPORT_EXPORT=$bundled_mode
 fi
+if [[ -z ${P11_TEST_REQUIRE_GOST_SYMMETRIC:-} ]]; then
+  export P11_TEST_REQUIRE_GOST_SYMMETRIC=$bundled_mode
+fi
 if [[ -z ${P11_TEST_REQUIRE_RSA_IMPORT_EXPORT:-} ]]; then
   export P11_TEST_REQUIRE_RSA_IMPORT_EXPORT=$bundled_mode
 fi

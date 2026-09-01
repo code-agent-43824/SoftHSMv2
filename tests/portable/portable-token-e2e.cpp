@@ -730,6 +730,9 @@ static const char* mechanismName(CK_MECHANISM_TYPE mechanism)
         case CKM_GOSTR3410_WITH_GOSTR3411_2012_256: return "CKM_GOSTR3410_WITH_GOSTR3411_2012_256";
         case CKM_GOSTR3411_2012_256: return "CKM_GOSTR3411_2012_256";
         case CKM_GOST_KEG: return "CKM_GOST_KEG";
+        case CKM_GOST28147_ECB: return "CKM_GOST28147_ECB";
+        case CKM_KUZNECHIK_ECB: return "CKM_KUZNECHIK_ECB";
+        case CKM_MAGMA_MGM: return "CKM_MAGMA_MGM";
         default: return "CKM_<unknown>";
     }
 }
@@ -1971,6 +1974,8 @@ static void removePriorTestObjects(Module& module, CK_SESSION_HANDLE session, co
                      " prior test objects with CKA_ID=" + hexBytes(id.data(), id.size()));
 }
 
+static void verifyGOSTSymmetric(Module& module, CK_SESSION_HANDLE session);
+
 static void prepare(const fs::path& modulePath, const fs::path& work)
 {
     const bool initializeToken = environmentYes("P11_TEST_INITIALIZE_TOKEN");
@@ -2038,6 +2043,23 @@ static void prepare(const fs::path& modulePath, const fs::path& work)
     verifyStreebog256(module, session);
     const GOST2012KeyPair gostKeyPair = verifyGOST2012KeyGeneration(module, session, rsaObjectId);
     verifyGOST2012Signing(module, session, gostKeyPair);
+    const std::string requireGOSTSymmetricSetting = environment("P11_TEST_REQUIRE_GOST_SYMMETRIC");
+    const bool requireGOSTSymmetric = requireGOSTSymmetricSetting.empty() ||
+                                      environmentYes("P11_TEST_REQUIRE_GOST_SYMMETRIC");
+    if (requireGOSTSymmetric)
+    {
+        trace("SCENARIO", "BEGIN GOST SYMMETRIC: encryption, decryption, MAC, and key wrapping");
+        requireMechanism(module, slot, CKM_GOST28147_ECB, CKF_ENCRYPT | CKF_DECRYPT, 32);
+        requireMechanism(module, slot, CKM_KUZNECHIK_ECB, CKF_ENCRYPT | CKF_DECRYPT, 32);
+        requireMechanism(module, slot, CKM_MAGMA_MGM, CKF_ENCRYPT | CKF_DECRYPT, 32);
+        verifyGOSTSymmetric(module, session);
+        trace("SCENARIO", "END GOST SYMMETRIC: all required checks passed");
+    }
+    else
+    {
+        trace("SKIP", "GOST symmetric mechanisms are optional for an external module; "
+                      "normal GOST generation and signing remain required and passed");
+    }
     const std::string requireGOSTImportExportSetting = environment("P11_TEST_REQUIRE_GOST_IMPORT_EXPORT");
     const bool requireGOSTImportExport = requireGOSTImportExportSetting.empty() ||
                                          environmentYes("P11_TEST_REQUIRE_GOST_IMPORT_EXPORT");

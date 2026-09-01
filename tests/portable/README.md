@@ -28,6 +28,8 @@ requires these standard capabilities from the selected token:
 - `CKM_GOSTR3410_KEY_PAIR_GEN` with 256-bit GOST keys;
 - raw `CKM_GOSTR3410` and combined TC26
   `CKM_GOSTR3410_WITH_GOSTR3411_2012_256` signing;
+- GOST 28147-89, Kuznechik, and Magma symmetric encryption, decryption, MAC,
+  authenticated encryption, and key wrapping when testing the bundled module;
 - RSA and GOST private-key import/export round trips when testing the bundled
   SoftHSM module; both are optional capabilities for external modules;
 - persistent RSA key and X.509 certificate objects.
@@ -41,6 +43,11 @@ The GOST scenario generates a persistent 2012/256 key pair, signs a
 precomputed Streebog-256 digest, signs and hashes the same message in one-shot
 and multipart forms, and checks all three randomized signatures with a small
 independent implementation of the GOST verification equation in the C++ test.
+For the bundled SoftHSM module the same generic scenario also checks known-answer
+encryption and decryption vectors for GOST 28147-89 ECB/CFB, Kuznechik ECB,
+Magma ECB, and both MGM variants; a Kuznechik CTR-ACPKM round trip; GOST MACs;
+and authenticated KExp15/GOST 28147 key-wrap round trips and rejection of
+tampered tags.
 For the bundled SoftHSM module it also generates exportable RSA and GOST pairs,
 reads every private component, imports each pair as separate public and private
 objects with `C_CreateObject`, reads the imported values back, and proves the
@@ -83,6 +90,7 @@ export P11_TEST_USER_PIN='user-pin'
 export P11_TEST_SLOT_ID='12345'             # recommended when several slots exist
 export P11_TEST_TOKEN_LABEL='existing-label' # optional exact selector
 export P11_TEST_REQUIRE_GOST_IMPORT_EXPORT=NO
+export P11_TEST_REQUIRE_GOST_SYMMETRIC=NO
 export P11_TEST_REQUIRE_RSA_IMPORT_EXPORT=NO
 tests/portable/run-pkcs11-integration.sh \
   /absolute/path/to/vendor-pkcs11.so "$(command -v openssl)" ./test-output
@@ -102,13 +110,14 @@ ID derived by appending byte `47` (ASCII `G`) to the configured RSA ID. Searches
 also include `CKA_KEY_TYPE`, so RSA and GOST objects cannot be selected for one
 another.
 
-The downloadable test-kit launchers set both
-`P11_TEST_REQUIRE_GOST_IMPORT_EXPORT` and
+The downloadable test-kit launchers set
+`P11_TEST_REQUIRE_GOST_IMPORT_EXPORT`, `P11_TEST_REQUIRE_GOST_SYMMETRIC`, and
 `P11_TEST_REQUIRE_RSA_IMPORT_EXPORT` to `YES` for their bundled SoftHSM module
 and `NO` when an alternate PKCS #11 library is supplied. The generic runner
-defaults both to `YES`; set them to `NO` explicitly for a vendor module. These
-switches affect only the coupled private-key export/import round trips, not
-ordinary RSA/GOST generation, CSR/CMS, or signing checks.
+defaults all three to `YES`; set them to `NO` explicitly for a vendor module.
+The symmetric switch controls the GOST encryption/MAC/wrapping checks; the
+other two control only the coupled private-key export/import round trips.
+Ordinary RSA/GOST generation, CSR/CMS, and signing checks remain mandatory.
 
 The client also provides `probe <module>`, a PIN-free initialization and slot
 enumeration check used by CI to verify first-use configuration creation when no
