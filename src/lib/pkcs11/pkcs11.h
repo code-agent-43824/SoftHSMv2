@@ -787,6 +787,12 @@ extern "C" {
 #define CKK_GOSTR3410                           (0x30UL)
 #define CKK_GOSTR3411                           (0x31UL)
 #define CKK_GOST28147                           (0x32UL)
+/* TC26 key types. The neighbours below came from the reference device and
+   from Rutoken's own headers; 0xD4321003 continues the same published TC26
+   sequence, in which GOST R 34.10-2012/512 sits immediately before Kuznechik.
+   It has not been read off a device - no 512-bit key existed on the reference
+   token to read it from. */
+#define CKK_GOSTR3410_512                       (0xD4321003UL)
 #define CKK_KUZNECHIK                           (0xD4321004UL)
 #define CKK_MAGMA                               (0xD4321005UL)
 #define CKK_KUZNECHIK_TWIN_KEY                  (0xD4321006UL)

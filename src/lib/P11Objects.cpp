@@ -1094,8 +1094,9 @@ bool P11DHPublicKeyObj::init(OSObject *inobject)
 }
 
 // Constructor
-P11GOSTPublicKeyObj::P11GOSTPublicKeyObj()
+P11GOSTPublicKeyObj::P11GOSTPublicKeyObj(CK_KEY_TYPE inKeyType)
 {
+	keyType = inKeyType;
 	initialized = false;
 }
 
@@ -1105,8 +1106,14 @@ bool P11GOSTPublicKeyObj::init(OSObject *inobject)
 	if (initialized) return true;
 	if (inobject == NULL) return false;
 
-	if (!inobject->attributeExists(CKA_KEY_TYPE) || inobject->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED) != CKK_GOSTR3410) {
-		OSAttribute setKeyType((unsigned long)CKK_GOSTR3410);
+	// Both GOST R 34.10-2012 sizes live in this object class and differ only
+	// by key type. The variant is chosen when the object is constructed, so a
+	// 512-bit key is not silently relabelled as a 256-bit one here - which is
+	// what happened while this defaulted to CKK_GOSTR3410: the template then
+	// disagreed with the object and creation failed as inconsistent.
+	if (!inobject->attributeExists(CKA_KEY_TYPE) ||
+	    inobject->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED) != keyType) {
+		OSAttribute setKeyType((unsigned long)keyType);
 		inobject->setAttribute(CKA_KEY_TYPE, setKeyType);
 	}
 
@@ -1605,8 +1612,9 @@ bool P11DHPrivateKeyObj::init(OSObject *inobject)
 }
 
 // Constructor
-P11GOSTPrivateKeyObj::P11GOSTPrivateKeyObj()
+P11GOSTPrivateKeyObj::P11GOSTPrivateKeyObj(CK_KEY_TYPE inKeyType)
 {
+	keyType = inKeyType;
 	initialized = false;
 }
 
@@ -1616,8 +1624,14 @@ bool P11GOSTPrivateKeyObj::init(OSObject *inobject)
 	if (initialized) return true;
 	if (inobject == NULL) return false;
 
-	if (!inobject->attributeExists(CKA_KEY_TYPE) || inobject->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED) != CKK_GOSTR3410) {
-		OSAttribute setKeyType((unsigned long)CKK_GOSTR3410);
+	// Both GOST R 34.10-2012 sizes live in this object class and differ only
+	// by key type. The variant is chosen when the object is constructed, so a
+	// 512-bit key is not silently relabelled as a 256-bit one here - which is
+	// what happened while this defaulted to CKK_GOSTR3410: the template then
+	// disagreed with the object and creation failed as inconsistent.
+	if (!inobject->attributeExists(CKA_KEY_TYPE) ||
+	    inobject->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED) != keyType) {
+		OSAttribute setKeyType((unsigned long)keyType);
 		inobject->setAttribute(CKA_KEY_TYPE, setKeyType);
 	}
 

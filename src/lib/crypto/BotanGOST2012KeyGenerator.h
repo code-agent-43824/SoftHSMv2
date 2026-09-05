@@ -22,9 +22,14 @@
 class BotanGOST2012KeyGenerator
 {
 public:
+	// orderBits selects the variant: 256 for GOST R 34.10-2012/256, 512 for
+	// the 512-bit one. It is checked against the curve rather than trusted,
+	// so a caller that pairs the wrong curve with a size gets a failure and
+	// not a key on a curve it did not ask for.
 	static bool generate(const ByteString& encodedCurveOID,
 	                     ByteString& publicValue,
-	                     ByteString& privateValue);
+	                     ByteString& privateValue,
+	                     size_t orderBits = 256);
 };
 
 #endif // !_SOFTHSM_V2_BOTANGOST2012KEYGENERATOR_H

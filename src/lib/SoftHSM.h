@@ -403,7 +403,8 @@ private:
 		CK_BBOOL isPublicKeyOnToken,
 		CK_BBOOL isPublicKeyPrivate,
 		CK_BBOOL isPrivateKeyOnToken,
-		CK_BBOOL isPrivateKeyPrivate
+		CK_BBOOL isPrivateKeyPrivate,
+		size_t orderBits = 256
 	);
 	CK_RV generateGeneric
 	(

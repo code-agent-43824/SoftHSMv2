@@ -261,6 +261,12 @@ static CK_RV newP11Object(CK_OBJECT_CLASS objClass, CK_KEY_TYPE keyType, CK_CERT
 				*p11object = new P11DHPublicKeyObj();
 			else if (keyType == CKK_GOSTR3410)
 				*p11object = new P11GOSTPublicKeyObj();
+#ifdef WITH_GOST_3410_2012_512
+			// The 512-bit variant uses the same object class; only the
+			// key type and the length of its values differ.
+			else if (keyType == CKK_GOSTR3410_512)
+				*p11object = new P11GOSTPublicKeyObj(CKK_GOSTR3410_512);
+#endif
 			else if (keyType == CKK_EC_EDWARDS)
 				*p11object = new P11EDPublicKeyObj();
 #ifdef WITH_ML_DSA
@@ -286,6 +292,12 @@ static CK_RV newP11Object(CK_OBJECT_CLASS objClass, CK_KEY_TYPE keyType, CK_CERT
 				*p11object = new P11DHPrivateKeyObj();
 			else if (keyType == CKK_GOSTR3410)
 				*p11object = new P11GOSTPrivateKeyObj();
+#ifdef WITH_GOST_3410_2012_512
+			// The 512-bit variant uses the same object class; only the
+			// key type and the length of its values differ.
+			else if (keyType == CKK_GOSTR3410_512)
+				*p11object = new P11GOSTPrivateKeyObj(CKK_GOSTR3410_512);
+#endif
 			else if (keyType == CKK_EC_EDWARDS)
 				*p11object = new P11EDPrivateKeyObj();
 #ifdef WITH_ML_DSA
@@ -1282,6 +1294,9 @@ void SoftHSM::prepareSupportedMechanisms(std::map<std::string, CK_MECHANISM_TYPE
 	t["CKM_GOSTR3410"] = CKM_GOSTR3410;
 	t["CKM_GOSTR3410_WITH_GOSTR3411_2012_256"] = CKM_GOSTR3410_WITH_GOSTR3411_2012_256;
 #endif
+#ifdef WITH_GOST_3410_2012_512
+	t["CKM_GOSTR3410_512_KEY_PAIR_GEN"] = CKM_GOSTR3410_512_KEY_PAIR_GEN;
+#endif
 #ifdef WITH_GOST_3410_2012_256
 	t["CKM_GOST_KEG"] = CKM_GOST_KEG;
 #endif
@@ -2061,6 +2076,13 @@ CK_RV SoftHSM::C_GetMechanismInfo(CK_SLOT_ID slotID, CK_MECHANISM_TYPE type, CK_
 			pInfo->ulMinKeySize = 0;
 			pInfo->ulMaxKeySize = 0;
 			pInfo->flags = CKF_DIGEST;
+			break;
+#endif
+#ifdef WITH_GOST_3410_2012_512
+		case CKM_GOSTR3410_512_KEY_PAIR_GEN:
+			pInfo->ulMinKeySize = 512;
+			pInfo->ulMaxKeySize = 512;
+			pInfo->flags = CKF_GENERATE_KEY_PAIR;
 			break;
 #endif
 #ifdef WITH_EDDSA
@@ -7591,6 +7613,11 @@ CK_RV SoftHSM::C_GenerateKeyPair
 			keyType = CKK_GOSTR3410;
 			break;
 #endif
+#ifdef WITH_GOST_3410_2012_512
+		case CKM_GOSTR3410_512_KEY_PAIR_GEN:
+			keyType = CKK_GOSTR3410_512;
+			break;
+#endif
 #ifdef WITH_EDDSA
 		case CKM_EC_EDWARDS_KEY_PAIR_GEN:
 			keyType = CKK_EC_EDWARDS;
@@ -7631,6 +7658,8 @@ CK_RV SoftHSM::C_GenerateKeyPair
 		return CKR_TEMPLATE_INCONSISTENT;
 	if (pMechanism->mechanism == CKM_GOSTR3410_KEY_PAIR_GEN && keyType != CKK_GOSTR3410)
 		return CKR_TEMPLATE_INCONSISTENT;
+	if (pMechanism->mechanism == CKM_GOSTR3410_512_KEY_PAIR_GEN && keyType != CKK_GOSTR3410_512)
+		return CKR_TEMPLATE_INCONSISTENT;
 	if (pMechanism->mechanism == CKM_EC_EDWARDS_KEY_PAIR_GEN && keyType != CKK_EC_EDWARDS)
 		return CKR_TEMPLATE_INCONSISTENT;
 	if (pMechanism->mechanism == CKM_ML_DSA_KEY_PAIR_GEN && keyType != CKK_ML_DSA)
@@ -7657,6 +7686,8 @@ CK_RV SoftHSM::C_GenerateKeyPair
 	if (pMechanism->mechanism == CKM_DH_PKCS_KEY_PAIR_GEN && keyType != CKK_DH)
 		return CKR_TEMPLATE_INCONSISTENT;
 	if (pMechanism->mechanism == CKM_GOSTR3410_KEY_PAIR_GEN && keyType != CKK_GOSTR3410)
+		return CKR_TEMPLATE_INCONSISTENT;
+	if (pMechanism->mechanism == CKM_GOSTR3410_512_KEY_PAIR_GEN && keyType != CKK_GOSTR3410_512)
 		return CKR_TEMPLATE_INCONSISTENT;
 	if (pMechanism->mechanism == CKM_EC_EDWARDS_KEY_PAIR_GEN && keyType != CKK_EC_EDWARDS)
 		return CKR_TEMPLATE_INCONSISTENT;
@@ -7716,6 +7747,22 @@ CK_RV SoftHSM::C_GenerateKeyPair
 									 phPublicKey, phPrivateKey,
 									 ispublicKeyToken, ispublicKeyPrivate, isprivateKeyToken, isprivateKeyPrivate);
 	}
+
+#ifdef WITH_GOST_3410_2012_512
+	// Generate GOST R 34.10-2012/512 keys
+	if (pMechanism->mechanism == CKM_GOSTR3410_512_KEY_PAIR_GEN)
+	{
+		if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
+			return CKR_MECHANISM_PARAM_INVALID;
+		return this->generateGOST2012(hSession,
+									 pPublicKeyTemplate, ulPublicKeyAttributeCount,
+									 pPrivateKeyTemplate, ulPrivateKeyAttributeCount,
+									 phPublicKey, phPrivateKey,
+									 ispublicKeyToken, ispublicKeyPrivate,
+									 isprivateKeyToken, isprivateKeyPrivate,
+									 512);
+	}
+#endif
 
 	// Generate GOST keys
 	if (pMechanism->mechanism == CKM_GOSTR3410_KEY_PAIR_GEN)
@@ -13729,7 +13776,8 @@ CK_RV SoftHSM::generateGOST2012
 	CK_BBOOL isPublicKeyOnToken,
 	CK_BBOOL isPublicKeyPrivate,
 	CK_BBOOL isPrivateKeyOnToken,
-	CK_BBOOL isPrivateKeyPrivate)
+	CK_BBOOL isPrivateKeyPrivate,
+	size_t orderBits)
 {
 	*phPublicKey = CK_INVALID_HANDLE;
 	*phPrivateKey = CK_INVALID_HANDLE;
@@ -13788,31 +13836,60 @@ CK_RV SoftHSM::generateGOST2012
 	const ByteString cryptoProExchangeA("06072a850302022400");
 	const ByteString streebog256("06082a85030701010202");
 
+	// The 512-bit curves. Only paramSetA is here, and deliberately: the pinned
+	// Botan knows 1.2.643.7.1.2.1.2.1 and neither of the other two, so
+	// accepting paramSetB or paramSetC would mean silently generating a key on
+	// a curve the caller did not name. Refusing is the honest answer until
+	// their domain parameters are supplied explicitly.
+	const ByteString tc26Curve512A("06092a8503070102010201");
+	const ByteString tc26Curve512B("06092a8503070102010202");
+	const ByteString tc26Curve512C("06092a8503070102010203");
+	const ByteString streebog512("06082a85030701010203");
+
+	const bool is512 = orderBits == 512;
+
 	// Aktiv's library supplies the digest parameter set itself, so software
 	// written for a Rutoken names only the curve. Requiring both attributes
 	// made every such key generation fail with CKR_TEMPLATE_INCOMPLETE.
 	// Only one digest parameter set is accepted below anyway, so defaulting to
 	// it cannot pick a set the caller did not want.
-	if (param3411.size() == 0) param3411 = streebog256;
+	if (param3411.size() == 0) param3411 = is512 ? streebog512 : streebog256;
 
 	if (param3410.size() == 0)
 		return CKR_TEMPLATE_INCOMPLETE;
-	if (param3410 != tc26CurveA && param3410 != tc26CurveB &&
-	    param3410 != cryptoProCurveA && param3410 != cryptoProExchangeA)
-		return CKR_ATTRIBUTE_VALUE_INVALID;
-	if (param3411 != streebog256)
-		return CKR_ATTRIBUTE_VALUE_INVALID;
+	if (is512)
+	{
+		if (param3410 == tc26Curve512B || param3410 == tc26Curve512C)
+		{
+			ERROR_MSG("GOST R 34.10-2012/512 paramSetB and paramSetC are not "
+			          "supported: their domain parameters are not available to "
+			          "this build, and substituting paramSetA would be wrong");
+			return CKR_ATTRIBUTE_VALUE_INVALID;
+		}
+		if (param3410 != tc26Curve512A)
+			return CKR_ATTRIBUTE_VALUE_INVALID;
+		if (param3411 != streebog512)
+			return CKR_ATTRIBUTE_VALUE_INVALID;
+	}
+	else
+	{
+		if (param3410 != tc26CurveA && param3410 != tc26CurveB &&
+		    param3410 != cryptoProCurveA && param3410 != cryptoProExchangeA)
+			return CKR_ATTRIBUTE_VALUE_INVALID;
+		if (param3411 != streebog256)
+			return CKR_ATTRIBUTE_VALUE_INVALID;
+	}
 
 	ByteString publicValue;
 	ByteString privateValue;
-	if (!BotanGOST2012KeyGenerator::generate(param3410, publicValue, privateValue))
+	if (!BotanGOST2012KeyGenerator::generate(param3410, publicValue, privateValue, orderBits))
 		return CKR_FUNCTION_FAILED;
 
 	CK_RV rv = CKR_OK;
 	const CK_ULONG maxAttribs = 32;
 	CK_OBJECT_CLASS publicKeyClass = CKO_PUBLIC_KEY;
 	CK_OBJECT_CLASS privateKeyClass = CKO_PRIVATE_KEY;
-	CK_KEY_TYPE keyType = CKK_GOSTR3410;
+	CK_KEY_TYPE keyType = is512 ? CKK_GOSTR3410_512 : CKK_GOSTR3410;
 
 	CK_ATTRIBUTE publicKeyAttribs[maxAttribs] = {
 		{ CKA_CLASS, &publicKeyClass, sizeof(publicKeyClass) },
@@ -13865,7 +13942,8 @@ CK_RV SoftHSM::generateGOST2012
 		else if (object->startTransaction())
 		{
 			bool ok = object->setAttribute(CKA_LOCAL, true);
-			CK_ULONG mechanism = (CK_ULONG)CKM_GOSTR3410_KEY_PAIR_GEN;
+			CK_ULONG mechanism = (CK_ULONG)(is512 ? CKM_GOSTR3410_512_KEY_PAIR_GEN
+			                                 : CKM_GOSTR3410_KEY_PAIR_GEN);
 			ok = ok && object->setAttribute(CKA_KEY_GEN_MECHANISM, mechanism);
 			ByteString storedPublic;
 			if (isPublicKeyPrivate)
@@ -13918,7 +13996,8 @@ CK_RV SoftHSM::generateGOST2012
 		else if (object->startTransaction())
 		{
 			bool ok = object->setAttribute(CKA_LOCAL, true);
-			CK_ULONG mechanism = (CK_ULONG)CKM_GOSTR3410_KEY_PAIR_GEN;
+			CK_ULONG mechanism = (CK_ULONG)(is512 ? CKM_GOSTR3410_512_KEY_PAIR_GEN
+			                                 : CKM_GOSTR3410_KEY_PAIR_GEN);
 			ok = ok && object->setAttribute(CKA_KEY_GEN_MECHANISM, mechanism);
 			const bool alwaysSensitive = object->getBooleanValue(CKA_SENSITIVE, false);
 			const bool neverExtractable = !object->getBooleanValue(CKA_EXTRACTABLE, false);

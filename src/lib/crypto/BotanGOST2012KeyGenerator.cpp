@@ -55,10 +55,18 @@ private:
 
 bool BotanGOST2012KeyGenerator::generate(const ByteString& encodedCurveOID,
 	                                     ByteString& publicValue,
-	                                     ByteString& privateValue)
+	                                     ByteString& privateValue,
+	                                     size_t orderBits)
 {
 	publicValue.wipe();
 	privateValue.wipe();
+
+	if (orderBits != 256 && orderBits != 512)
+	{
+		ERROR_MSG("GOST R 34.10-2012 supports 256-bit and 512-bit orders only");
+		return false;
+	}
+	const size_t coordinateBytes = orderBits / 8;
 
 	try
 	{
@@ -66,9 +74,10 @@ bool BotanGOST2012KeyGenerator::generate(const ByteString& encodedCurveOID,
 		if (!encodedCurve.empty())
 			std::memcpy(encodedCurve.data(), encodedCurveOID.const_byte_str(), encodedCurve.size());
 		Botan::EC_Group group(encodedCurve);
-		if (group.get_order().bits() != 256)
+		if (group.get_order().bits() != orderBits)
 		{
-			ERROR_MSG("GOST R 34.10-2012/256 requires a 256-bit curve");
+			ERROR_MSG("GOST R 34.10-2012/%zu was asked for a curve of order %zu bits",
+			          orderBits, (size_t) group.get_order().bits());
 			return false;
 		}
 
@@ -76,33 +85,33 @@ bool BotanGOST2012KeyGenerator::generate(const ByteString& encodedCurveOID,
 		Botan::GOST_3410_PrivateKey key(rng, group);
 		const std::vector<uint8_t> point =
 			key.public_point().encode(Botan::PointGFp::UNCOMPRESSED);
-		if (point.size() != 65 || point[0] != 0x04)
+		if (point.size() != 1 + 2 * coordinateBytes || point[0] != 0x04)
 		{
-			ERROR_MSG("Botan returned an invalid GOST R 34.10-2012/256 public point");
+			ERROR_MSG("Botan returned an invalid GOST R 34.10-2012 public point");
 			return false;
 		}
 
 		// PKCS #11 stores GOST coordinates as little-endian X || Y.
-		publicValue.resize(64);
-		for (size_t i = 0; i < 32; ++i)
+		publicValue.resize(2 * coordinateBytes);
+		for (size_t i = 0; i < coordinateBytes; ++i)
 		{
-			publicValue[i] = point[32 - i];
-			publicValue[32 + i] = point[64 - i];
+			publicValue[i] = point[coordinateBytes - i];
+			publicValue[coordinateBytes + i] = point[2 * coordinateBytes - i];
 		}
 
 		// Keep the scalar in the representation used by SoftHSM's existing
 		// GOST key classes, ready for the later signing implementation.
-		privateValue.resize(32);
+		privateValue.resize(coordinateBytes);
 		key.private_value().binary_encode(privateValue.byte_str(), privateValue.size());
 		return true;
 	}
 	catch (const std::exception& exception)
 	{
-		ERROR_MSG("GOST R 34.10-2012/256 key generation failed: %s", exception.what());
+		ERROR_MSG("GOST R 34.10-2012 key generation failed: %s", exception.what());
 	}
 	catch (...)
 	{
-		ERROR_MSG("GOST R 34.10-2012/256 key generation failed");
+		ERROR_MSG("GOST R 34.10-2012 key generation failed");
 	}
 
 	publicValue.wipe();

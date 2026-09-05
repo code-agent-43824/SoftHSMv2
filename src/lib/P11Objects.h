@@ -240,13 +240,15 @@ protected:
 class P11GOSTPublicKeyObj : public P11PublicKeyObj
 {
 public:
-	// Constructor
-	P11GOSTPublicKeyObj();
+	// Constructor. Both GOST R 34.10-2012 sizes share this object
+	// class and differ only by key type, which the caller names.
+	P11GOSTPublicKeyObj(CK_KEY_TYPE inKeyType = CKK_GOSTR3410);
 
 	// Add attributes
 	virtual bool init(OSObject *inobject);
 
 protected:
+	CK_KEY_TYPE keyType;
 	bool initialized;
 };
 
@@ -355,13 +357,15 @@ protected:
 class P11GOSTPrivateKeyObj : public P11PrivateKeyObj
 {
 public:
-	// Constructor
-	P11GOSTPrivateKeyObj();
+	// Constructor. Both GOST R 34.10-2012 sizes share this object
+	// class and differ only by key type, which the caller names.
+	P11GOSTPrivateKeyObj(CK_KEY_TYPE inKeyType = CKK_GOSTR3410);
 
 	// Add attributes
 	virtual bool init(OSObject *inobject);
 
 protected:
+	CK_KEY_TYPE keyType;
 	bool initialized;
 };
 
