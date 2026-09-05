@@ -1296,6 +1296,8 @@ void SoftHSM::prepareSupportedMechanisms(std::map<std::string, CK_MECHANISM_TYPE
 #endif
 #ifdef WITH_GOST_3410_2012_512
 	t["CKM_GOSTR3410_512_KEY_PAIR_GEN"] = CKM_GOSTR3410_512_KEY_PAIR_GEN;
+	t["CKM_GOSTR3410_512"] = CKM_GOSTR3410_512;
+	t["CKM_GOSTR3410_WITH_GOSTR3411_12_512"] = CKM_GOSTR3410_WITH_GOSTR3411_12_512;
 #endif
 #ifdef WITH_GOST_3410_2012_256
 	t["CKM_GOST_KEG"] = CKM_GOST_KEG;
@@ -2083,6 +2085,12 @@ CK_RV SoftHSM::C_GetMechanismInfo(CK_SLOT_ID slotID, CK_MECHANISM_TYPE type, CK_
 			pInfo->ulMinKeySize = 512;
 			pInfo->ulMaxKeySize = 512;
 			pInfo->flags = CKF_GENERATE_KEY_PAIR;
+			break;
+		case CKM_GOSTR3410_512:
+		case CKM_GOSTR3410_WITH_GOSTR3411_12_512:
+			pInfo->ulMinKeySize = 512;
+			pInfo->ulMaxKeySize = 512;
+			pInfo->flags = CKF_SIGN | CKF_VERIFY;
 			break;
 #endif
 #ifdef WITH_EDDSA
@@ -5681,6 +5689,23 @@ CK_RV SoftHSM::AsymSignInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMechan
 			isGOST = true;
 			break;
 #endif
+#ifdef WITH_GOST_3410_2012_512
+		case CKM_GOSTR3410_512:
+			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
+				return CKR_MECHANISM_PARAM_INVALID;
+			mechanism = AsymMech::GOST_512;
+			bAllowMultiPartOp = false;
+			isGOST = true;
+			break;
+		case CKM_GOSTR3410_WITH_GOSTR3411_12_512:
+			if (!gostParamsetAccepted(pMechanism, GOSTR3411_2012_512_PARAMSET_OID,
+			                          sizeof(GOSTR3411_2012_512_PARAMSET_OID)))
+				return CKR_MECHANISM_PARAM_INVALID;
+			mechanism = AsymMech::GOST_GOST_512;
+			bAllowMultiPartOp = true;
+			isGOST = true;
+			break;
+#endif
 #ifdef WITH_EDDSA
 		case CKM_EDDSA:
 			mechanism = AsymMech::EDDSA;
@@ -5855,7 +5880,13 @@ CK_RV SoftHSM::AsymSignInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMechan
 #if defined(WITH_GOST) || defined(WITH_GOST_3410_2012_256)
 	else if (isGOST)
 	{
-		if (keyType != CKK_GOSTR3410)
+		// Each mechanism goes with the key size it was defined for; pairing a
+		// 256-bit key with the 512-bit mechanism, or the other way round,
+		// would sign a digest of the wrong length.
+		const bool wants512 = mechanism == AsymMech::GOST_512 ||
+		                      mechanism == AsymMech::GOST_GOST_512;
+		if (keyType != (wants512 ? (CK_KEY_TYPE) CKK_GOSTR3410_512
+		                         : (CK_KEY_TYPE) CKK_GOSTR3410))
 			return CKR_KEY_TYPE_INCONSISTENT;
 
 #ifdef WITH_GOST
@@ -6539,7 +6570,7 @@ CK_RV SoftHSM::AsymVerifyInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMech
 #ifdef WITH_ECC
 	bool isECDSA = false;
 #endif
-#ifdef WITH_GOST
+#if defined(WITH_GOST) || defined(WITH_GOST_3410_2012_256)
 	bool isGOST = false;
 #endif
 #ifdef WITH_EDDSA
@@ -6803,6 +6834,42 @@ CK_RV SoftHSM::AsymVerifyInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMech
 			isGOST = true;
 			break;
 #endif
+#if defined(WITH_GOST_3410_2012_256) && !defined(WITH_GOST)
+		// Until now this dispatch had no GOST 2012 case at all, so verifying a
+		// signature this module had just produced was impossible.
+		case CKM_GOSTR3410:
+			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
+				return CKR_MECHANISM_PARAM_INVALID;
+			mechanism = AsymMech::GOST;
+			bAllowMultiPartOp = false;
+			isGOST = true;
+			break;
+		case CKM_GOSTR3410_WITH_GOSTR3411_2012_256:
+			if (!gostParamsetAccepted(pMechanism, GOSTR3411_2012_256_PARAMSET_OID,
+			                          sizeof(GOSTR3411_2012_256_PARAMSET_OID)))
+				return CKR_MECHANISM_PARAM_INVALID;
+			mechanism = AsymMech::GOST_GOST;
+			bAllowMultiPartOp = true;
+			isGOST = true;
+			break;
+#endif
+#ifdef WITH_GOST_3410_2012_512
+		case CKM_GOSTR3410_512:
+			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
+				return CKR_MECHANISM_PARAM_INVALID;
+			mechanism = AsymMech::GOST_512;
+			bAllowMultiPartOp = false;
+			isGOST = true;
+			break;
+		case CKM_GOSTR3410_WITH_GOSTR3411_12_512:
+			if (!gostParamsetAccepted(pMechanism, GOSTR3411_2012_512_PARAMSET_OID,
+			                          sizeof(GOSTR3411_2012_512_PARAMSET_OID)))
+				return CKR_MECHANISM_PARAM_INVALID;
+			mechanism = AsymMech::GOST_GOST_512;
+			bAllowMultiPartOp = true;
+			isGOST = true;
+			break;
+#endif
 #ifdef WITH_EDDSA
 		case CKM_EDDSA:
 			mechanism = AsymMech::EDDSA;
@@ -6974,13 +7041,20 @@ CK_RV SoftHSM::AsymVerifyInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMech
 		}
 	}
 #endif
-#ifdef WITH_GOST
+#if defined(WITH_GOST) || defined(WITH_GOST_3410_2012_256)
 	else if (isGOST)
 	{
-		if (keyType != CKK_GOSTR3410)
+		const bool wants512 = mechanism == AsymMech::GOST_512 ||
+		                      mechanism == AsymMech::GOST_GOST_512;
+		if (keyType != (wants512 ? (CK_KEY_TYPE) CKK_GOSTR3410_512
+		                         : (CK_KEY_TYPE) CKK_GOSTR3410))
 			return CKR_KEY_TYPE_INCONSISTENT;
 
+#ifdef WITH_GOST
 		asymCrypto = CryptoFactory::i()->getAsymmetricAlgorithm(AsymAlgo::GOST);
+#else
+		asymCrypto = new (std::nothrow) BotanGOST2012Signer();
+#endif
 		if (asymCrypto == NULL) return CKR_MECHANISM_INVALID;
 
 		publicKey = asymCrypto->newPublicKey();

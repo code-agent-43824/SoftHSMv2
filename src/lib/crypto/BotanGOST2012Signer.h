@@ -19,6 +19,7 @@
 
 #include "AsymmetricAlgorithm.h"
 #include "GOSTPrivateKey.h"
+#include "GOSTPublicKey.h"
 #include <botan/hash.h>
 #include <memory>
 
@@ -35,6 +36,17 @@ public:
 	virtual bool PKCS8Decode(const ByteString& ber);
 };
 
+class BotanGOST2012PublicKey : public GOSTPublicKey
+{
+public:
+	static const char* type;
+
+	virtual bool isOfType(const char* inType);
+	virtual unsigned long getOutputLength() const;
+	virtual ByteString serialise() const;
+	virtual bool deserialise(ByteString& serialised);
+};
+
 class BotanGOST2012Signer : public AsymmetricAlgorithm
 {
 public:
@@ -45,6 +57,11 @@ public:
 	                     const MechanismParam* mechanismParam = NULL);
 	virtual bool signUpdate(const ByteString& dataToSign);
 	virtual bool signFinal(ByteString& signature);
+
+	virtual bool verifyInit(PublicKey* publicKey, const AsymMech::Type mechanism,
+	                       const MechanismParam* mechanismParam = NULL);
+	virtual bool verifyUpdate(const ByteString& originalData);
+	virtual bool verifyFinal(const ByteString& signature);
 
 	virtual bool encrypt(PublicKey*, const ByteString&, ByteString&,
 	                     const AsymMech::Type, const MechanismParam* = NULL);

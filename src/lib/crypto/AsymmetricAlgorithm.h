@@ -98,6 +98,10 @@ struct AsymMech
 		ECDSA_SHA512,
 		GOST,
 		GOST_GOST,
+		// The 512-bit GOST R 34.10-2012 pair: a precomputed 64-byte digest,
+		// and the joint mechanism that hashes with Streebog-512 itself.
+		GOST_512,
+		GOST_GOST_512,
 		EDDSA,
 		MLDSA,
 		MLKEM

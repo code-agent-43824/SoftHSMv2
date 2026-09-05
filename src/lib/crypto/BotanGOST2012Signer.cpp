@@ -57,19 +57,54 @@ private:
 	RNG* source;
 };
 
-bool signDigest(BotanGOST2012PrivateKey* privateKey,
+// How many bytes a coordinate, the scalar and half a signature take for a
+// mechanism. Zero means the mechanism is not one of ours.
+size_t mechanismCoordinateBytes(AsymMech::Type mechanism)
+{
+	switch (mechanism)
+	{
+		case AsymMech::GOST:
+		case AsymMech::GOST_GOST:
+			return 32;
+		case AsymMech::GOST_512:
+		case AsymMech::GOST_GOST_512:
+			return 64;
+		default:
+			return 0;
+	}
+}
+
+bool mechanismHashes(AsymMech::Type mechanism)
+{
+	return mechanism == AsymMech::GOST_GOST || mechanism == AsymMech::GOST_GOST_512;
+}
+
+const char* mechanismHashName(AsymMech::Type mechanism)
+{
+	return mechanism == AsymMech::GOST_GOST_512 ? "Streebog-512" : "Streebog-256";
+}
+
+Botan::EC_Group groupOf(const ByteString& ec, size_t coordinateBytes)
+{
+	std::vector<uint8_t> encodedCurve(ec.size());
+	if (!encodedCurve.empty())
+		std::memcpy(encodedCurve.data(), ec.const_byte_str(), encodedCurve.size());
+	Botan::EC_Group group(encodedCurve);
+	if (group.get_order().bits() != coordinateBytes * 8)
+		throw std::runtime_error("the curve does not match the mechanism's key size");
+	return group;
+}
+
+bool signDigest(BotanGOST2012PrivateKey* privateKey, size_t coordinateBytes,
 	            const ByteString& digest, ByteString& signature)
 {
-	if (privateKey == NULL || digest.size() != 32 || privateKey->getD().size() != 32)
+	if (privateKey == NULL || coordinateBytes == 0 ||
+	    digest.size() != coordinateBytes || privateKey->getD().size() != coordinateBytes)
 		return false;
 
 	try
 	{
-		std::vector<uint8_t> encodedCurve(privateKey->getEC().size());
-		if (!encodedCurve.empty())
-			std::memcpy(encodedCurve.data(), privateKey->getEC().const_byte_str(), encodedCurve.size());
-		Botan::EC_Group group(encodedCurve);
-		if (group.get_order().bits() != 256) return false;
+		Botan::EC_Group group = groupOf(privateKey->getEC(), coordinateBytes);
 
 		const Botan::BigInt scalar(privateKey->getD().const_byte_str(), privateKey->getD().size());
 		if (scalar.is_zero() || scalar >= group.get_order()) return false;
@@ -78,7 +113,7 @@ bool signDigest(BotanGOST2012PrivateKey* privateKey,
 		Botan::PK_Signer signer(botanKey, rng, "Raw", Botan::IEEE_1363);
 		const std::vector<uint8_t> result =
 			signer.sign_message(digest.const_byte_str(), digest.size(), rng);
-		if (result.size() != 64) return false;
+		if (result.size() != 2 * coordinateBytes) return false;
 
 		signature.resize(result.size());
 		std::memcpy(signature.byte_str(), result.data(), result.size());
@@ -86,14 +121,84 @@ bool signDigest(BotanGOST2012PrivateKey* privateKey,
 	}
 	catch (const std::exception& exception)
 	{
-		ERROR_MSG("GOST R 34.10-2012/256 signing failed: %s", exception.what());
+		ERROR_MSG("GOST R 34.10-2012 signing failed: %s", exception.what());
 	}
 	catch (...)
 	{
-		ERROR_MSG("GOST R 34.10-2012/256 signing failed");
+		ERROR_MSG("GOST R 34.10-2012 signing failed");
 	}
 	return false;
 }
+
+// PKCS #11 keeps the public point as little-endian X || Y; Botan wants the
+// uncompressed big-endian encoding. This is the inverse of what
+// BotanGOST2012KeyGenerator does on the way out.
+bool verifyDigest(BotanGOST2012PublicKey* publicKey, size_t coordinateBytes,
+	              const ByteString& digest, const ByteString& signature)
+{
+	if (publicKey == NULL || coordinateBytes == 0 ||
+	    digest.size() != coordinateBytes ||
+	    signature.size() != 2 * coordinateBytes ||
+	    publicKey->getQ().size() != 2 * coordinateBytes)
+		return false;
+
+	try
+	{
+		Botan::EC_Group group = groupOf(publicKey->getEC(), coordinateBytes);
+
+		const unsigned char* q = publicKey->getQ().const_byte_str();
+		std::vector<uint8_t> point(1 + 2 * coordinateBytes);
+		point[0] = 0x04;
+		for (size_t i = 0; i < coordinateBytes; ++i)
+		{
+			point[coordinateBytes - i] = q[i];
+			point[2 * coordinateBytes - i] = q[coordinateBytes + i];
+		}
+
+		const Botan::PointGFp publicPoint = group.OS2ECP(point.data(), point.size());
+		Botan::GOST_3410_PublicKey botanKey(group, publicPoint);
+		Botan::PK_Verifier verifier(botanKey, "Raw", Botan::IEEE_1363);
+		return verifier.verify_message(digest.const_byte_str(), digest.size(),
+		                               signature.const_byte_str(), signature.size());
+	}
+	catch (const std::exception& exception)
+	{
+		ERROR_MSG("GOST R 34.10-2012 verification failed: %s", exception.what());
+	}
+	catch (...)
+	{
+		ERROR_MSG("GOST R 34.10-2012 verification failed");
+	}
+	return false;
+}
+}
+
+const char* BotanGOST2012PublicKey::type = "Botan GOST 2012 Public Key";
+
+bool BotanGOST2012PublicKey::isOfType(const char* inType)
+{
+	return inType != NULL && std::strcmp(type, inType) == 0;
+}
+
+unsigned long BotanGOST2012PublicKey::getOutputLength() const
+{
+	// Twice the coordinate size: the signature is r || s.
+	return (unsigned long) q.size();
+}
+
+ByteString BotanGOST2012PublicKey::serialise() const
+{
+	return ec.serialise() + q.serialise();
+}
+
+bool BotanGOST2012PublicKey::deserialise(ByteString& serialised)
+{
+	ByteString decodedEC = ByteString::chainDeserialise(serialised);
+	ByteString decodedQ = ByteString::chainDeserialise(serialised);
+	if (decodedEC.size() == 0 || decodedQ.size() == 0) return false;
+	setEC(decodedEC);
+	setQ(decodedQ);
+	return true;
 }
 
 const char* BotanGOST2012PrivateKey::type = "Botan GOST 2012 Private Key";
@@ -105,7 +210,8 @@ bool BotanGOST2012PrivateKey::isOfType(const char* inType)
 
 unsigned long BotanGOST2012PrivateKey::getOutputLength() const
 {
-	return 64;
+	// The signature is r || s, each the size of the scalar.
+	return (unsigned long) (2 * d.size());
 }
 
 ByteString BotanGOST2012PrivateKey::serialise() const
@@ -185,7 +291,7 @@ bool BotanGOST2012Signer::signInit(PrivateKey* privateKey,
 	                               const MechanismParam* mechanismParam)
 {
 	if (mechanismParam != NULL ||
-	    (mechanism != AsymMech::GOST && mechanism != AsymMech::GOST_GOST) ||
+	    mechanismCoordinateBytes(mechanism) == 0 ||
 	    privateKey == NULL || !privateKey->isOfType(BotanGOST2012PrivateKey::type) ||
 	    !AsymmetricAlgorithm::signInit(privateKey, mechanism, mechanismParam))
 		return false;
@@ -193,8 +299,8 @@ bool BotanGOST2012Signer::signInit(PrivateKey* privateKey,
 	rawInput.wipe();
 	try
 	{
-		if (mechanism == AsymMech::GOST_GOST)
-			hash = Botan::HashFunction::create_or_throw("Streebog-256");
+		if (mechanismHashes(mechanism))
+			hash = Botan::HashFunction::create_or_throw(mechanismHashName(mechanism));
 		else
 			hash.reset();
 	}
@@ -212,7 +318,7 @@ bool BotanGOST2012Signer::signUpdate(const ByteString& dataToSign)
 	if (!AsymmetricAlgorithm::signUpdate(dataToSign)) return false;
 	try
 	{
-		if (currentMechanism == AsymMech::GOST_GOST)
+		if (mechanismHashes(currentMechanism))
 		{
 			if (dataToSign.size() != 0)
 				hash->update(dataToSign.const_byte_str(), dataToSign.size());
@@ -220,7 +326,7 @@ bool BotanGOST2012Signer::signUpdate(const ByteString& dataToSign)
 		else
 		{
 			rawInput += dataToSign;
-			if (rawInput.size() > 32) return false;
+			if (rawInput.size() > mechanismCoordinateBytes(currentMechanism)) return false;
 		}
 		return true;
 	}
@@ -235,9 +341,9 @@ bool BotanGOST2012Signer::signFinal(ByteString& signature)
 	ByteString digest;
 	try
 	{
-		if (currentMechanism == AsymMech::GOST_GOST)
+		if (mechanismHashes(currentMechanism))
 		{
-			digest.resize(32);
+			digest.resize(mechanismCoordinateBytes(currentMechanism));
 			hash->final(digest.byte_str());
 		}
 		else
@@ -254,9 +360,93 @@ bool BotanGOST2012Signer::signFinal(ByteString& signature)
 
 	BotanGOST2012PrivateKey* privateKey =
 		static_cast<BotanGOST2012PrivateKey*>(currentPrivateKey);
-	const bool result = signDigest(privateKey, digest, signature);
+	const bool result = signDigest(privateKey,
+	                               mechanismCoordinateBytes(currentMechanism),
+	                               digest, signature);
 	ByteString dummy;
 	if (!AsymmetricAlgorithm::signFinal(dummy)) return false;
+	rawInput.wipe();
+	hash.reset();
+	return result;
+}
+
+bool BotanGOST2012Signer::verifyInit(PublicKey* publicKey,
+	                                 const AsymMech::Type mechanism,
+	                                 const MechanismParam* mechanismParam)
+{
+	if (mechanismParam != NULL ||
+	    mechanismCoordinateBytes(mechanism) == 0 ||
+	    publicKey == NULL || !publicKey->isOfType(BotanGOST2012PublicKey::type) ||
+	    !AsymmetricAlgorithm::verifyInit(publicKey, mechanism, mechanismParam))
+		return false;
+
+	rawInput.wipe();
+	try
+	{
+		if (mechanismHashes(mechanism))
+			hash = Botan::HashFunction::create_or_throw(mechanismHashName(mechanism));
+		else
+			hash.reset();
+	}
+	catch (...)
+	{
+		AsymmetricAlgorithm::verifyFinal(ByteString());
+		return false;
+	}
+	return true;
+}
+
+bool BotanGOST2012Signer::verifyUpdate(const ByteString& originalData)
+{
+	if (!AsymmetricAlgorithm::verifyUpdate(originalData)) return false;
+	try
+	{
+		if (mechanismHashes(currentMechanism))
+		{
+			if (originalData.size() != 0)
+				hash->update(originalData.const_byte_str(), originalData.size());
+		}
+		else
+		{
+			rawInput += originalData;
+			if (rawInput.size() > mechanismCoordinateBytes(currentMechanism)) return false;
+		}
+		return true;
+	}
+	catch (...)
+	{
+		return false;
+	}
+}
+
+bool BotanGOST2012Signer::verifyFinal(const ByteString& signature)
+{
+	ByteString digest;
+	try
+	{
+		if (mechanismHashes(currentMechanism))
+		{
+			digest.resize(mechanismCoordinateBytes(currentMechanism));
+			hash->final(digest.byte_str());
+		}
+		else
+		{
+			digest = rawInput;
+		}
+	}
+	catch (...)
+	{
+		AsymmetricAlgorithm::verifyFinal(ByteString());
+		return false;
+	}
+
+	BotanGOST2012PublicKey* publicKey =
+		static_cast<BotanGOST2012PublicKey*>(currentPublicKey);
+	const size_t coordinateBytes = mechanismCoordinateBytes(currentMechanism);
+	const bool result = verifyDigest(publicKey, coordinateBytes, digest, signature);
+	// The base class clears the operation; its own return says nothing about
+	// whether the signature was good, so it must not overwrite the verdict.
+	AsymmetricAlgorithm::verifyFinal(ByteString());
 	rawInput.wipe();
 	hash.reset();
 	return result;
@@ -268,9 +458,9 @@ bool BotanGOST2012Signer::decrypt(PrivateKey*, const ByteString&, ByteString&,
 	                              const AsymMech::Type, const MechanismParam*) { return false; }
 bool BotanGOST2012Signer::generateKeyPair(AsymmetricKeyPair**, AsymmetricParameters*, RNG*) { return false; }
 unsigned long BotanGOST2012Signer::getMinKeySize() { return 256; }
-unsigned long BotanGOST2012Signer::getMaxKeySize() { return 256; }
+unsigned long BotanGOST2012Signer::getMaxKeySize() { return 512; }
 bool BotanGOST2012Signer::reconstructKeyPair(AsymmetricKeyPair**, ByteString&) { return false; }
 bool BotanGOST2012Signer::reconstructPublicKey(PublicKey**, ByteString&) { return false; }
 bool BotanGOST2012Signer::reconstructPrivateKey(PrivateKey**, ByteString&) { return false; }
-PublicKey* BotanGOST2012Signer::newPublicKey() { return NULL; }
+PublicKey* BotanGOST2012Signer::newPublicKey() { return new BotanGOST2012PublicKey(); }
 PrivateKey* BotanGOST2012Signer::newPrivateKey() { return new BotanGOST2012PrivateKey(); }
