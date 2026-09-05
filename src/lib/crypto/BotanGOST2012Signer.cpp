@@ -232,7 +232,10 @@ bool BotanGOST2012PrivateKey::deserialise(ByteString& serialised)
 ByteString BotanGOST2012PrivateKey::PKCS8Encode()
 {
 	ByteString result;
-	if (ec.size() == 0 || d.size() != 32) return result;
+	// The scalar size is what distinguishes the two variants; everything
+	// below - the algorithm OID and the digest parameter set - follows it.
+	if (ec.size() == 0 || (d.size() != 32 && d.size() != 64)) return result;
+	const bool is512 = d.size() == 64;
 	std::vector<uint8_t> scalar;
 
 	try
@@ -242,9 +245,15 @@ ByteString BotanGOST2012PrivateKey::PKCS8Encode()
 		Botan::DER_Encoder parameterEncoder;
 		parameterEncoder.start_cons(Botan::SEQUENCE).encode(curve);
 		const std::string curveName = curve.to_string();
-		if (curveName.find("1.2.643.2.2.35.") == 0 ||
-		    curveName == "1.2.643.2.2.36.0" ||
-		    curveName == "1.2.643.2.2.36.1")
+		if (is512)
+		{
+			// The 512-bit curves name no digest of their own, so the digest
+			// parameter set is always spelled out.
+			parameterEncoder.encode(Botan::OID("1.2.643.7.1.1.2.3"));
+		}
+		else if (curveName.find("1.2.643.2.2.35.") == 0 ||
+		         curveName == "1.2.643.2.2.36.0" ||
+		         curveName == "1.2.643.2.2.36.1")
 			parameterEncoder.encode(Botan::OID("1.2.643.7.1.1.2.2"));
 		const Botan::secure_vector<uint8_t> encodedParameters =
 			parameterEncoder.end_cons().get_contents();
@@ -252,8 +261,9 @@ ByteString BotanGOST2012PrivateKey::PKCS8Encode()
 
 		scalar.assign(d.const_byte_str(), d.const_byte_str() + d.size());
 		std::reverse(scalar.begin(), scalar.end());
+		// id-tc26-gost3410-12-256 and id-tc26-gost3410-12-512.
 		const Botan::AlgorithmIdentifier algorithm(
-			Botan::OID("1.2.643.7.1.1.1.1"), parameters);
+			Botan::OID(is512 ? "1.2.643.7.1.1.1.2" : "1.2.643.7.1.1.1.1"), parameters);
 		const Botan::secure_vector<uint8_t> encoded = Botan::DER_Encoder()
 			.start_cons(Botan::SEQUENCE)
 				.encode(static_cast<size_t>(0))
@@ -266,7 +276,7 @@ ByteString BotanGOST2012PrivateKey::PKCS8Encode()
 	}
 	catch (const std::exception& exception)
 	{
-		ERROR_MSG("GOST R 34.10-2012/256 PKCS #8 encoding failed: %s", exception.what());
+		ERROR_MSG("GOST R 34.10-2012 PKCS #8 encoding failed: %s", exception.what());
 		result.wipe();
 	}
 	std::fill(scalar.begin(), scalar.end(), 0);

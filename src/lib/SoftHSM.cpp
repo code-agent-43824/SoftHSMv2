@@ -8730,13 +8730,23 @@ CK_RV SoftHSM::exportPrivateKey
 	{
 		// The lightweight GOST-2012 implementation is created below.
 	}
+#ifdef WITH_GOST_3410_2012_512
+	else if (keyType == CKK_GOSTR3410_512)
+	{
+		// Same implementation; the scalar size tells the two apart.
+	}
+#endif
 #endif
 	else
 		return CKR_KEY_TYPE_INCONSISTENT;
 
 	AsymmetricAlgorithm* asymCrypto = NULL;
 #if defined(WITH_GOST_3410_2012_256) && !defined(WITH_GOST)
-	if (keyType == CKK_GOSTR3410)
+	if (keyType == CKK_GOSTR3410
+#ifdef WITH_GOST_3410_2012_512
+	    || keyType == CKK_GOSTR3410_512
+#endif
+	   )
 		asymCrypto = new (std::nothrow) BotanGOST2012Signer();
 	else
 #endif
