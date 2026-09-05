@@ -170,20 +170,24 @@ sends it to both; until this release it refused every parameter, which put
 GOST signing out of reach of such software. GOST verification,
 MAC, key agreement, CMS construction, and other GOST mechanisms are not enabled.
 
-The 512-bit variants are partly available. GOST R 34.11-2012/512 works in full
+The 512-bit variants work the same way. GOST R 34.11-2012/512 is available
 through CKM_GOSTR3411_12_512, one-shot and multipart, and takes its own
 parameter set 1.2.643.7.1.1.2.3 - each mechanism accepts only its own, because
 the two OIDs differ in one byte and a mix-up would hash with the wrong
-function. GOST R 34.10-2012/512 key pairs can be generated with
+function. GOST R 34.10-2012/512 key pairs are generated with
 CKM_GOSTR3410_512_KEY_PAIR_GEN on paramSetA, 1.2.643.7.1.2.1.2.1: the public
 CKA_VALUE is 128 bytes of little-endian X||Y and the private scalar is 64.
 paramSetB and paramSetC are refused rather than quietly replaced by paramSetA,
-because their domain parameters are not in this build.
+because their domain parameters are not in this build. Those keys sign a
+precomputed 64-byte digest with CKM_GOSTR3410_512, or hash and sign with
+CKM_GOSTR3410_WITH_GOSTR3411_12_512, producing 128 bytes.
 
-Signing, verification and PKCS #8 export for 512-bit keys are NOT implemented
-yet: those mechanisms are advertised by the profile, as the reference device
-advertises them, and calling one fails with CKR_MECHANISM_INVALID. A 512-bit
-key can be generated and stored today, and not yet used.
+Signature verification is available for both key sizes, through C_VerifyInit
+and C_Verify with the same mechanisms used to sign. Earlier releases could
+produce a GOST signature and not check one.
+
+softhsm2-export takes --type gost512 for the 512-bit private key, alongside
+the existing rsa, ec and gost.
 
 RSA and GOST public/private key objects can be imported separately with the
 standard C_CreateObject function. Private RSA components and the GOST private
