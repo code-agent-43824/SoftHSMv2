@@ -4776,14 +4776,12 @@ CK_RV SoftHSM::C_DecryptFinal(CK_SESSION_HANDLE hSession, CK_BYTE_PTR pData, CK_
 }
 
 // Initialise digesting using the specified mechanism in the specified session
-#ifdef WITH_GOST_3411_2012
+#if defined(WITH_GOST_3411_2012) || defined(WITH_GOST_3410_2012_256)
 namespace
 {
 	// DER object identifier of the GOST R 34.11-2012/256 parameter set,
 	// 1.2.643.7.1.1.2.2. Applications written against Aktiv's library pass the
-	// OID of the digest they are asking for as the mechanism parameter. When
-	// Streebog-512 is implemented its parameter set is 1.2.643.7.1.1.2.3,
-	// which differs only in the last byte, 0x03.
+	// OID of the digest they are asking for as the mechanism parameter.
 	const CK_BYTE GOSTR3411_2012_256_PARAMSET_OID[] = {
 		0x06, 0x08, 0x2A, 0x85, 0x03, 0x07, 0x01, 0x01, 0x02, 0x02
 	};
@@ -4792,6 +4790,12 @@ namespace
 	// OID of its own parameter set. Anything else is a different parameter set
 	// than the one we would compute, and saying so beats hashing with the
 	// wrong one.
+	//
+	// This applies to the joint sign-and-hash mechanisms just as much as to
+	// the digest ones: the hash they compute internally is the same hash, and
+	// the software that sends the OID to C_DigestInit sends it to C_SignInit
+	// as well. Refusing it there made GOST signing unreachable for exactly the
+	// applications this fork exists to serve.
 	bool gostParamsetAccepted(CK_MECHANISM_PTR pMechanism, const CK_BYTE* oid, size_t oidLen)
 	{
 		if (pMechanism->pParameter == NULL_PTR && pMechanism->ulParameterLen == 0)
@@ -5618,7 +5622,10 @@ CK_RV SoftHSM::AsymSignInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMechan
 			isGOST = true;
 			break;
 		case CKM_GOSTR3410_WITH_GOSTR3411_2012_256:
-			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
+			// The parameter set of the hash this mechanism computes, sent by
+			// every Rutoken-aware application; absence is equally accepted.
+			if (!gostParamsetAccepted(pMechanism, GOSTR3411_2012_256_PARAMSET_OID,
+			                          sizeof(GOSTR3411_2012_256_PARAMSET_OID)))
 				return CKR_MECHANISM_PARAM_INVALID;
 			mechanism = AsymMech::GOST_GOST;
 			bAllowMultiPartOp = true;

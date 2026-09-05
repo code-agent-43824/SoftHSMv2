@@ -1402,6 +1402,47 @@ static void verifyGOST2012Signing(Module& module, CK_SESSION_HANDLE session,
                  [&] { return module->C_SignInit(session, &invalid, keyPair.privateKey); }),
           CKR_MECHANISM_PARAM_INVALID, "C_SignInit(non-empty GOST parameters)");
 
+    // The parameter every Rutoken-aware application actually sends: the DER
+    // OID of the parameter set of the hash this mechanism computes. It used to
+    // be refused here while C_DigestInit accepted it, which put GOST signing
+    // out of reach of the software this fork exists for. Absence stays
+    // acceptable, and a parameter set that is not ours stays refused - the
+    // point is to reject a different hash, not to reject a parameter.
+    Bytes paramset256 = bytesFromHex("06082a85030701010202");
+    CK_MECHANISM withParamset{CKM_GOSTR3410_WITH_GOSTR3411_2012_256,
+                              paramset256.data(),
+                              static_cast<CK_ULONG>(paramset256.size())};
+    callOk("C_SignInit", "pMechanism={CKM_GOSTR3410_WITH_GOSTR3411_2012_256, "
+           "pParameter=DER OID 1.2.643.7.1.1.2.2}",
+           [&] { return module->C_SignInit(session, &withParamset, keyPair.privateKey); });
+    Bytes paramsetSignature(64, 0);
+    CK_ULONG paramsetSignatureLength = static_cast<CK_ULONG>(paramsetSignature.size());
+    callOk("C_Sign", "the signature made with the parameter-set OID",
+           [&] { return module->C_Sign(session, const_cast<unsigned char*>(message.data()),
+                                       static_cast<CK_ULONG>(message.size()),
+                                       paramsetSignature.data(), &paramsetSignatureLength); });
+    if (paramsetSignatureLength != 64)
+        fail("signing with the parameter-set OID produced a signature of " +
+             std::to_string(paramsetSignatureLength) + " bytes");
+
+    Bytes foreignParamset = bytesFromHex("06082a85030701010203");
+    CK_MECHANISM wrongParamset{CKM_GOSTR3410_WITH_GOSTR3411_2012_256,
+                               foreignParamset.data(),
+                               static_cast<CK_ULONG>(foreignParamset.size())};
+    check(invoke("C_SignInit", "pMechanism={CKM_GOSTR3410_WITH_GOSTR3411_2012_256, "
+                 "pParameter=the 512-bit parameter set}",
+                 [&] { return module->C_SignInit(session, &wrongParamset, keyPair.privateKey); }),
+          CKR_MECHANISM_PARAM_INVALID, "C_SignInit(a parameter set that is not this hash)");
+
+    Bytes truncatedParamset = bytesFromHex("06082a850307010102");
+    CK_MECHANISM shortParamset{CKM_GOSTR3410_WITH_GOSTR3411_2012_256,
+                               truncatedParamset.data(),
+                               static_cast<CK_ULONG>(truncatedParamset.size())};
+    check(invoke("C_SignInit", "pMechanism={CKM_GOSTR3410_WITH_GOSTR3411_2012_256, "
+                 "pParameter=a truncated OID}",
+                 [&] { return module->C_SignInit(session, &shortParamset, keyPair.privateKey); }),
+          CKR_MECHANISM_PARAM_INVALID, "C_SignInit(a truncated parameter set)");
+
     CK_MECHANISM rawMechanism{CKM_GOSTR3410, nullptr, 0};
     callOk("C_SignInit", "hSession=" + std::to_string(session) +
            ", pMechanism={mechanism=CKM_GOSTR3410, pParameter=NULL_PTR, ulParameterLen=0}, hKey=" +
