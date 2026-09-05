@@ -93,6 +93,7 @@ cmake -S $RootDir -B $BuildDir -A $CMakeArch `
     -DWITH_CRYPTO_BACKEND=openssl `
     -DENABLE_GOST_3411_2012=ON `
     -DENABLE_GOST_3410_2012_256=ON `
+    -DENABLE_GOST_3410_2012_512=ON `
     "-DBOTAN_GOST_INCLUDE_DIR=$(Join-Path $BotanBuild 'build/include')" `
     "-DBOTAN_GOST_LIBRARY=$($BotanLibrary.FullName)" `
     "-DOPENSSL_ROOT_DIR=$OpenSSLPrefix"

@@ -70,6 +70,7 @@ for arch in arm64 x86_64; do
     -DWITH_CRYPTO_BACKEND=openssl \
     -DENABLE_GOST_3411_2012=ON \
     -DENABLE_GOST_3410_2012_256=ON \
+    -DENABLE_GOST_3410_2012_512=ON \
     -DBOTAN_GOST_INCLUDE_DIR="$work_dir/botan-build-$arch/build/include" \
     -DBOTAN_GOST_LIBRARY="$work_dir/botan-build-$arch/libbotan-2.a" \
     -DOPENSSL_ROOT_DIR="$work_dir/openssl-install-$arch"

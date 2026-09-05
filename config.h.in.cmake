@@ -169,6 +169,12 @@
 /* Compile with C_GenerateKeyPair-only GOST R 34.10-2012/256 support through Botan */
 #cmakedefine WITH_GOST_3410_2012_256 @WITH_GOST_3410_2012_256@
 
+/* Compile with digest-only GOST R 34.11-2012/512 support through Botan */
+#cmakedefine WITH_GOST_3411_2012_512 @WITH_GOST_3411_2012_512@
+
+/* Compile with GOST R 34.10-2012/512 key and signature support through Botan */
+#cmakedefine WITH_GOST_3410_2012_512 @WITH_GOST_3410_2012_512@
+
 /* Compile with OpenSSL support */
 #cmakedefine WITH_OPENSSL @WITH_OPENSSL@
 

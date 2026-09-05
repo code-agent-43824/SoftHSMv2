@@ -505,7 +505,8 @@ endif()
 
 # The narrowly scoped GOST 2012 extensions use a separately supplied,
 # statically linkable Botan build even when the rest of SoftHSM uses OpenSSL.
-if(ENABLE_GOST_3411_2012 OR ENABLE_GOST_3410_2012_256)
+if(ENABLE_GOST_3411_2012 OR ENABLE_GOST_3410_2012_256 OR
+   ENABLE_GOST_3411_2012_512 OR ENABLE_GOST_3410_2012_512)
     find_path(BOTAN_GOST_INCLUDE_DIR
               NAMES botan/hash.h
               DOC "Botan include directory for the GOST 2012 extensions")
@@ -529,6 +530,17 @@ endif()
 
 if(ENABLE_GOST_3410_2012_256)
     set(WITH_GOST_3410_2012_256 1)
+endif()
+
+if(ENABLE_GOST_3411_2012_512)
+    set(WITH_GOST_3411_2012_512 1)
+endif()
+
+# The 512-bit signature mechanisms hash with Streebog-512, so the digest comes
+# with them rather than being an independent choice.
+if(ENABLE_GOST_3410_2012_512)
+    set(WITH_GOST_3410_2012_512 1)
+    set(WITH_GOST_3411_2012_512 1)
 endif()
 
 # Find SQLite3

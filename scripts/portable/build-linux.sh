@@ -51,6 +51,7 @@ cmake -S "$root_dir" -B "$build_dir" \
   -DWITH_CRYPTO_BACKEND=openssl \
   -DENABLE_GOST_3411_2012=ON \
   -DENABLE_GOST_3410_2012_256=ON \
+  -DENABLE_GOST_3410_2012_512=ON \
   -DBOTAN_GOST_INCLUDE_DIR="$botan_build/build/include" \
   -DBOTAN_GOST_LIBRARY="$botan_build/libbotan-2.a" \
   -DOPENSSL_ROOT_DIR="$openssl_prefix"
