@@ -77,6 +77,7 @@ static const char* rvName(CK_RV rv)
         case CKR_ARGUMENTS_BAD: return "CKR_ARGUMENTS_BAD";
         case CKR_ATTRIBUTE_READ_ONLY: return "CKR_ATTRIBUTE_READ_ONLY";
         case CKR_ATTRIBUTE_SENSITIVE: return "CKR_ATTRIBUTE_SENSITIVE";
+        case CKR_SIGNATURE_INVALID: return "CKR_SIGNATURE_INVALID";
         case CKR_ATTRIBUTE_TYPE_INVALID: return "CKR_ATTRIBUTE_TYPE_INVALID";
         case CKR_ATTRIBUTE_VALUE_INVALID: return "CKR_ATTRIBUTE_VALUE_INVALID";
         case CKR_DATA_INVALID: return "CKR_DATA_INVALID";
@@ -652,6 +653,7 @@ static std::string keyTypeName(CK_KEY_TYPE value)
     if (value == CKK_RSA) return "CKK_RSA";
     if (value == CKK_GOSTR3410) return "CKK_GOSTR3410";
     if (value == CKK_MAGMA_TWIN_KEY) return "CKK_MAGMA_TWIN_KEY";
+    if (value == CKK_GOSTR3410_512) return "CKK_GOSTR3410_512";
     return "CKK_<unknown>(" + hexNumber(value) + ")";
 }
 
@@ -730,6 +732,9 @@ static const char* mechanismName(CK_MECHANISM_TYPE mechanism)
         case CKM_GOSTR3410_WITH_GOSTR3411_2012_256: return "CKM_GOSTR3410_WITH_GOSTR3411_2012_256";
         case CKM_GOSTR3411_2012_256: return "CKM_GOSTR3411_2012_256";
         case CKM_GOSTR3411_12_512: return "CKM_GOSTR3411_12_512";
+        case CKM_GOSTR3410_512: return "CKM_GOSTR3410_512";
+        case CKM_GOSTR3410_512_KEY_PAIR_GEN: return "CKM_GOSTR3410_512_KEY_PAIR_GEN";
+        case CKM_GOSTR3410_WITH_GOSTR3411_12_512: return "CKM_GOSTR3410_WITH_GOSTR3411_12_512";
         case CKM_GOST_KEG: return "CKM_GOST_KEG";
         case CKM_GOST28147_ECB: return "CKM_GOST28147_ECB";
         case CKM_KUZNECHIK_ECB: return "CKM_KUZNECHIK_ECB";
@@ -1560,6 +1565,183 @@ static void requireBooleanAttribute(Module& module, CK_SESSION_HANDLE session,
         fail(std::string(attributeName(type)) + " has an unexpected value");
 }
 
+// GOST R 34.10-2012 with a 512-bit key: generation, signing, verification and
+// the search by key type that tells the two sizes apart. There can be no
+// known-answer test for the signature itself - GOST signing is randomised - so
+// the weight is carried by verification, including the cases that must fail.
+static void verifyGOST2012_512(Module& module, CK_SESSION_HANDLE session)
+{
+    // id-tc26-gost-3410-2012-512-paramSetA, the only 512-bit curve this build
+    // carries; paramSetB and paramSetC are refused rather than substituted.
+    const Bytes curve = bytesFromHex("06092a8503070102010201");
+    const Bytes curveB = bytesFromHex("06092a8503070102010202");
+    const Bytes digestParam = bytesFromHex("06082a85030701010203");
+    const Bytes digestParam256 = bytesFromHex("06082a85030701010202");
+
+    CK_OBJECT_CLASS publicClass = CKO_PUBLIC_KEY;
+    CK_OBJECT_CLASS privateClass = CKO_PRIVATE_KEY;
+    CK_KEY_TYPE keyType = CKK_GOSTR3410_512;
+    CK_BBOOL yes = CK_TRUE;
+    CK_BBOOL no = CK_FALSE;
+    const std::string label = "portable-ci-gost2012-512";
+    Bytes objectId = bytesFromHex("504f525441424c4535");
+
+    CK_ATTRIBUTE publicTemplate[] = {
+        {CKA_CLASS, &publicClass, sizeof(publicClass)},
+        {CKA_KEY_TYPE, &keyType, sizeof(keyType)},
+        {CKA_TOKEN, &no, sizeof(no)},
+        {CKA_VERIFY, &yes, sizeof(yes)},
+        {CKA_GOSTR3410_PARAMS, const_cast<unsigned char*>(curve.data()),
+                               static_cast<CK_ULONG>(curve.size())},
+        {CKA_LABEL, const_cast<char*>(label.data()), static_cast<CK_ULONG>(label.size())},
+        {CKA_ID, objectId.data(), static_cast<CK_ULONG>(objectId.size())}
+    };
+    CK_ATTRIBUTE privateTemplate[] = {
+        {CKA_CLASS, &privateClass, sizeof(privateClass)},
+        {CKA_KEY_TYPE, &keyType, sizeof(keyType)},
+        {CKA_TOKEN, &no, sizeof(no)},
+        {CKA_PRIVATE, &yes, sizeof(yes)},
+        {CKA_SIGN, &yes, sizeof(yes)},
+        {CKA_LABEL, const_cast<char*>(label.data()), static_cast<CK_ULONG>(label.size())},
+        {CKA_ID, objectId.data(), static_cast<CK_ULONG>(objectId.size())}
+    };
+
+    CK_MECHANISM generation{CKM_GOSTR3410_512_KEY_PAIR_GEN, nullptr, 0};
+    CK_OBJECT_HANDLE publicKey = CK_INVALID_HANDLE;
+    CK_OBJECT_HANDLE privateKey = CK_INVALID_HANDLE;
+    traceTemplate("GOST R 34.10-2012/512 public-key template", publicTemplate, 7);
+    callOk("C_GenerateKeyPair", "CKM_GOSTR3410_512_KEY_PAIR_GEN on paramSetA",
+           [&] { return module->C_GenerateKeyPair(session, &generation,
+                                                  publicTemplate, 7,
+                                                  privateTemplate, 7,
+                                                  &publicKey, &privateKey); });
+
+    const Bytes publicPoint = attribute(module, session, publicKey, CKA_VALUE);
+    if (publicPoint.size() != 128)
+        fail("a 512-bit GOST public key is " + std::to_string(publicPoint.size()) +
+             " bytes where 128 are expected");
+    if (ulongAttribute(module, session, privateKey, CKA_KEY_TYPE) != CKK_GOSTR3410_512 ||
+        ulongAttribute(module, session, publicKey, CKA_KEY_TYPE) != CKK_GOSTR3410_512)
+        fail("a 512-bit GOST key pair does not report CKK_GOSTR3410_512");
+    if (attribute(module, session, publicKey, CKA_GOSTR3411_PARAMS) != digestParam)
+        fail("a 512-bit GOST key did not default to the 512-bit digest parameter set");
+
+    // paramSetB has no domain parameters in this build, and answering with a
+    // key on paramSetA instead would be worse than refusing.
+    CK_ATTRIBUTE refusedTemplate[] = {
+        {CKA_CLASS, &publicClass, sizeof(publicClass)},
+        {CKA_KEY_TYPE, &keyType, sizeof(keyType)},
+        {CKA_TOKEN, &no, sizeof(no)},
+        {CKA_GOSTR3410_PARAMS, const_cast<unsigned char*>(curveB.data()),
+                               static_cast<CK_ULONG>(curveB.size())}
+    };
+    CK_OBJECT_HANDLE refusedPublic = CK_INVALID_HANDLE;
+    CK_OBJECT_HANDLE refusedPrivate = CK_INVALID_HANDLE;
+    check(invoke("C_GenerateKeyPair", "512-bit paramSetB, which this build does not carry",
+                 [&] { return module->C_GenerateKeyPair(session, &generation,
+                                                        refusedTemplate, 4,
+                                                        privateTemplate, 5,
+                                                        &refusedPublic, &refusedPrivate); }),
+          CKR_ATTRIBUTE_VALUE_INVALID, "C_GenerateKeyPair(512-bit paramSetB)");
+
+    // Sign the way Rutoken-aware software does: the joint mechanism with the
+    // parameter-set OID of the hash it computes.
+    const Bytes message = bytesFromHex(
+        "3031323334353637383930313233343536373839303132333435363738393031"
+        "32333435363738393031323334353637383930313233343536373839303132");
+    CK_MECHANISM joint{CKM_GOSTR3410_WITH_GOSTR3411_12_512,
+                       const_cast<unsigned char*>(digestParam.data()),
+                       static_cast<CK_ULONG>(digestParam.size())};
+    callOk("C_SignInit", "CKM_GOSTR3410_WITH_GOSTR3411_12_512 with its parameter set",
+           [&] { return module->C_SignInit(session, &joint, privateKey); });
+    Bytes signature(128, 0);
+    CK_ULONG signatureLength = static_cast<CK_ULONG>(signature.size());
+    callOk("C_Sign", "the 512-bit signature",
+           [&] { return module->C_Sign(session, const_cast<unsigned char*>(message.data()),
+                                       static_cast<CK_ULONG>(message.size()),
+                                       signature.data(), &signatureLength); });
+    if (signatureLength != 128)
+        fail("a 512-bit GOST signature is " + std::to_string(signatureLength) +
+             " bytes where 128 are expected");
+
+    callOk("C_VerifyInit", "CKM_GOSTR3410_WITH_GOSTR3411_12_512",
+           [&] { return module->C_VerifyInit(session, &joint, publicKey); });
+    callOk("C_Verify", "the signature just produced",
+           [&] { return module->C_Verify(session, const_cast<unsigned char*>(message.data()),
+                                         static_cast<CK_ULONG>(message.size()),
+                                         signature.data(), signatureLength); });
+
+    // The half that matters: verification has to refuse as well as accept.
+    Bytes damaged = signature;
+    damaged[0] ^= 0xFF;
+    callOk("C_VerifyInit", "the same key, a damaged signature",
+           [&] { return module->C_VerifyInit(session, &joint, publicKey); });
+    check(invoke("C_Verify", "a signature with one bit flipped",
+                 [&] { return module->C_Verify(session, const_cast<unsigned char*>(message.data()),
+                                               static_cast<CK_ULONG>(message.size()),
+                                               damaged.data(), signatureLength); }),
+          CKR_SIGNATURE_INVALID, "C_Verify(damaged 512-bit signature)");
+
+    Bytes otherMessage = message;
+    otherMessage[0] ^= 0xFF;
+    callOk("C_VerifyInit", "the same key and signature, a different message",
+           [&] { return module->C_VerifyInit(session, &joint, publicKey); });
+    check(invoke("C_Verify", "a different message",
+                 [&] { return module->C_Verify(session, otherMessage.data(),
+                                               static_cast<CK_ULONG>(otherMessage.size()),
+                                               signature.data(), signatureLength); }),
+          CKR_SIGNATURE_INVALID, "C_Verify(512-bit signature over another message)");
+
+    // The 256-bit parameter set names a different hash and must be refused.
+    CK_MECHANISM crossed{CKM_GOSTR3410_WITH_GOSTR3411_12_512,
+                         const_cast<unsigned char*>(digestParam256.data()),
+                         static_cast<CK_ULONG>(digestParam256.size())};
+    check(invoke("C_SignInit", "the 512-bit mechanism with the 256-bit parameter set",
+                 [&] { return module->C_SignInit(session, &crossed, privateKey); }),
+          CKR_MECHANISM_PARAM_INVALID, "C_SignInit(512 mechanism, 256 parameter set)");
+
+    // A key of the other size must not be usable with this mechanism.
+    CK_MECHANISM raw512{CKM_GOSTR3410_512, nullptr, 0};
+    Bytes precomputed(64, 0x31);
+    callOk("C_SignInit", "CKM_GOSTR3410_512 over a precomputed 64-byte digest",
+           [&] { return module->C_SignInit(session, &raw512, privateKey); });
+    Bytes rawSignature(128, 0);
+    CK_ULONG rawLength = static_cast<CK_ULONG>(rawSignature.size());
+    callOk("C_Sign", "the raw 512-bit signature",
+           [&] { return module->C_Sign(session, precomputed.data(),
+                                       static_cast<CK_ULONG>(precomputed.size()),
+                                       rawSignature.data(), &rawLength); });
+    callOk("C_VerifyInit", "CKM_GOSTR3410_512",
+           [&] { return module->C_VerifyInit(session, &raw512, publicKey); });
+    callOk("C_Verify", "the raw 512-bit signature",
+           [&] { return module->C_Verify(session, precomputed.data(),
+                                         static_cast<CK_ULONG>(precomputed.size()),
+                                         rawSignature.data(), rawLength); });
+
+    // Search by key type: the two sizes share an object class, so this is what
+    // separates them for an application enumerating keys.
+    CK_ATTRIBUTE search[] = {
+        {CKA_CLASS, &privateClass, sizeof(privateClass)},
+        {CKA_KEY_TYPE, &keyType, sizeof(keyType)}
+    };
+    std::vector<CK_OBJECT_HANDLE> found(8);
+    CK_ULONG foundCount = 0;
+    callOk("C_FindObjectsInit", "private keys of type CKK_GOSTR3410_512",
+           [&] { return module->C_FindObjectsInit(session, search, 2); });
+    callOk("C_FindObjects", "up to eight 512-bit private keys",
+           [&] { return module->C_FindObjects(session, found.data(),
+                                              static_cast<CK_ULONG>(found.size()), &foundCount); });
+    callOk("C_FindObjectsFinal", "hSession=session",
+           [&] { return module->C_FindObjectsFinal(session); });
+    if (foundCount == 0)
+        fail("a search by CKK_GOSTR3410_512 did not find the key just generated");
+
+    destroyObject(module, session, privateKey);
+    destroyObject(module, session, publicKey);
+    trace("REFERENCE", "GOST R 34.10-2012/512 generated, signed, verified, and "
+                       "rejected a damaged signature");
+}
+
 static void verifyGOSTCreateObjectRoundTrip(Module& module, CK_SESSION_HANDLE session)
 {
     CK_OBJECT_CLASS publicClass = CKO_PUBLIC_KEY;
@@ -2159,6 +2341,7 @@ static void prepare(const fs::path& modulePath, const fs::path& work)
     {
         verifyGOSTCreateObjectRoundTrip(module, session);
         verifyGOSTKEG(module, session);
+        verifyGOST2012_512(module, session);
     }
     else
     {
