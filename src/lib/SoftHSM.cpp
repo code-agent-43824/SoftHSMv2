@@ -1288,6 +1288,9 @@ void SoftHSM::prepareSupportedMechanisms(std::map<std::string, CK_MECHANISM_TYPE
 #ifdef WITH_GOST_3411_2012
 	t["CKM_GOSTR3411_2012_256"] = CKM_GOSTR3411_2012_256;
 #endif
+#ifdef WITH_GOST_3411_2012_512
+	t["CKM_GOSTR3411_12_512"] = CKM_GOSTR3411_12_512;
+#endif
 	t["CKM_GOST28147_KEY_GEN"] = CKM_GOST28147_KEY_GEN;
 	t["CKM_KUZNECHIK_KEY_GEN"] = CKM_KUZNECHIK_KEY_GEN;
 	t["CKM_MAGMA_KEY_GEN"] = CKM_MAGMA_KEY_GEN;
@@ -2046,6 +2049,14 @@ CK_RV SoftHSM::C_GetMechanismInfo(CK_SLOT_ID slotID, CK_MECHANISM_TYPE type, CK_
 #endif
 #ifdef WITH_GOST_3411_2012
 		case CKM_GOSTR3411_2012_256:
+			// Key size is not in use
+			pInfo->ulMinKeySize = 0;
+			pInfo->ulMaxKeySize = 0;
+			pInfo->flags = CKF_DIGEST;
+			break;
+#endif
+#ifdef WITH_GOST_3411_2012_512
+		case CKM_GOSTR3411_12_512:
 			// Key size is not in use
 			pInfo->ulMinKeySize = 0;
 			pInfo->ulMaxKeySize = 0;
@@ -4786,6 +4797,14 @@ namespace
 		0x06, 0x08, 0x2A, 0x85, 0x03, 0x07, 0x01, 0x01, 0x02, 0x02
 	};
 
+	// 1.2.643.7.1.1.2.3, the 512-bit parameter set. It differs from the one
+	// above in the last byte only, which is exactly why each mechanism is
+	// checked against its own: sending one where the other belongs asks for a
+	// different hash, and that has to be refused rather than quietly ignored.
+	const CK_BYTE GOSTR3411_2012_512_PARAMSET_OID[] = {
+		0x06, 0x08, 0x2A, 0x85, 0x03, 0x07, 0x01, 0x01, 0x02, 0x03
+	};
+
 	// A GOST 2012 mechanism may be given no parameter at all, or exactly the
 	// OID of its own parameter set. Anything else is a different parameter set
 	// than the one we would compute, and saying so beats hashing with the
@@ -4858,6 +4877,14 @@ CK_RV SoftHSM::C_DigestInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMechan
 						  sizeof(GOSTR3411_2012_256_PARAMSET_OID)))
 				return CKR_MECHANISM_PARAM_INVALID;
 			algo = HashAlgo::GOST2012_256;
+			break;
+#endif
+#ifdef WITH_GOST_3411_2012_512
+		case CKM_GOSTR3411_12_512:
+			if (!gostParamsetAccepted(pMechanism, GOSTR3411_2012_512_PARAMSET_OID,
+						  sizeof(GOSTR3411_2012_512_PARAMSET_OID)))
+				return CKR_MECHANISM_PARAM_INVALID;
+			algo = HashAlgo::GOST2012_512;
 			break;
 #endif
 		default:

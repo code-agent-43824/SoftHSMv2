@@ -49,6 +49,9 @@
 #ifdef WITH_GOST_3411_2012
 #include "BotanStreebog256.h"
 #endif
+#ifdef WITH_GOST_3411_2012_512
+#include "BotanStreebog512.h"
+#endif
 #include "OSSLCMAC.h"
 #include "OSSLHMAC.h"
 #include "OSSLRSA.h"
@@ -409,6 +412,10 @@ HashAlgorithm* OSSLCryptoFactory::getHashAlgorithm(HashAlgo::Type algorithm)
 #ifdef WITH_GOST_3411_2012
 		case HashAlgo::GOST2012_256:
 			return new BotanStreebog256();
+#endif
+#ifdef WITH_GOST_3411_2012_512
+		case HashAlgo::GOST2012_512:
+			return new BotanStreebog512();
 #endif
 #ifdef WITH_GOST
 		case HashAlgo::GOST:

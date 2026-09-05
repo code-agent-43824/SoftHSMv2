@@ -729,6 +729,7 @@ static const char* mechanismName(CK_MECHANISM_TYPE mechanism)
         case CKM_GOSTR3410: return "CKM_GOSTR3410";
         case CKM_GOSTR3410_WITH_GOSTR3411_2012_256: return "CKM_GOSTR3410_WITH_GOSTR3411_2012_256";
         case CKM_GOSTR3411_2012_256: return "CKM_GOSTR3411_2012_256";
+        case CKM_GOSTR3411_12_512: return "CKM_GOSTR3411_12_512";
         case CKM_GOST_KEG: return "CKM_GOST_KEG";
         case CKM_GOST28147_ECB: return "CKM_GOST28147_ECB";
         case CKM_KUZNECHIK_ECB: return "CKM_KUZNECHIK_ECB";
@@ -934,6 +935,56 @@ static void verifyStreebog256(Module& module, CK_SESSION_HANDLE session)
     if (multipart != expected)
         fail("multipart GOST R 34.11-2012/256 digest does not match RFC 6986");
     trace("REFERENCE", "multipart GOST R 34.11-2012/256 matches RFC 6986 section 10.1.2");
+
+    // The 512-bit hash of the same message, RFC 6986 section 10.1.1, in the
+    // same byte-API order. Cross-checked before it was written down: reversing
+    // the RFC's printed 256-bit result reproduces the value above, so the same
+    // reversal applied to its printed 512-bit result is trustworthy.
+    const Bytes expected512 = bytesFromHex(
+        "1b54d01a4af5b9d5cc3d86d68d285462b19abc2475222f35c085122be4ba1ffa"
+        "00ad30f8767b3a82384c6574f024c311e2a481332b08ef7f41797891c1646f48");
+
+    CK_MECHANISM invalid512{CKM_GOSTR3411_12_512, &invalidParameter, 1};
+    check(invoke("C_DigestInit", "pMechanism={CKM_GOSTR3411_12_512, pParameter=byte[1]}",
+                 [&] { return module->C_DigestInit(session, &invalid512); }),
+          CKR_MECHANISM_PARAM_INVALID, "C_DigestInit(a parameter that is not an OID)");
+
+    // Each mechanism takes its own parameter set and only its own. The two
+    // OIDs differ in the last byte, so a mix-up would otherwise hash with the
+    // wrong one and be noticed by nobody.
+    Bytes paramset256 = bytesFromHex("06082a85030701010202");
+    CK_MECHANISM crossed{CKM_GOSTR3411_12_512, paramset256.data(),
+                         static_cast<CK_ULONG>(paramset256.size())};
+    check(invoke("C_DigestInit", "pMechanism={CKM_GOSTR3411_12_512, pParameter=the 256-bit set}",
+                 [&] { return module->C_DigestInit(session, &crossed); }),
+          CKR_MECHANISM_PARAM_INVALID, "C_DigestInit(512 with the 256 parameter set)");
+
+    Bytes paramset512 = bytesFromHex("06082a85030701010203");
+    CK_MECHANISM own512{CKM_GOSTR3411_12_512, paramset512.data(),
+                        static_cast<CK_ULONG>(paramset512.size())};
+    callOk("C_DigestInit", "pMechanism={CKM_GOSTR3411_12_512, pParameter=DER OID 1.2.643.7.1.1.2.3}",
+           [&] { return module->C_DigestInit(session, &own512); });
+    Bytes withParamset(expected512.size(), 0);
+    CK_ULONG withParamsetLength = static_cast<CK_ULONG>(withParamset.size());
+    callOk("C_Digest", "the 512-bit digest asked for with its parameter set",
+           [&] { return module->C_Digest(session, const_cast<unsigned char*>(message.data()),
+                                         static_cast<CK_ULONG>(message.size()),
+                                         withParamset.data(), &withParamsetLength); });
+    withParamset.resize(withParamsetLength);
+    if (withParamset != expected512)
+        fail("GOST R 34.11-2012/512 with its parameter set does not match RFC 6986");
+
+    const Bytes oneShot512 = digest(module, session, CKM_GOSTR3411_12_512,
+                                    message, expected512.size());
+    if (oneShot512 != expected512)
+        fail("one-shot GOST R 34.11-2012/512 digest does not match RFC 6986");
+    trace("REFERENCE", "one-shot GOST R 34.11-2012/512 matches RFC 6986 section 10.1.1");
+
+    const Bytes multipart512 = digestMultipart(module, session, CKM_GOSTR3411_12_512,
+                                               message, {1, 7, 13, 42}, expected512.size());
+    if (multipart512 != expected512)
+        fail("multipart GOST R 34.11-2012/512 digest does not match RFC 6986");
+    trace("REFERENCE", "multipart GOST R 34.11-2012/512 matches RFC 6986 section 10.1.1");
 }
 
 static CK_ULONG ulongAttribute(Module& module, CK_SESSION_HANDLE session,

@@ -48,7 +48,8 @@ struct HashAlgo
 		SHA384,
 		SHA512,
 		GOST,
-		GOST2012_256
+		GOST2012_256,
+		GOST2012_512
 	};
 };
 

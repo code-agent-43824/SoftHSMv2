@@ -113,6 +113,10 @@ if(WITH_GOST_3411_2012)
     list(APPEND SOURCES BotanStreebog256.cpp)
 endif(WITH_GOST_3411_2012)
 
+if(WITH_GOST_3411_2012_512)
+    list(APPEND SOURCES BotanStreebog512.cpp)
+endif(WITH_GOST_3411_2012_512)
+
 if(WITH_GOST_3410_2012_256)
     list(APPEND SOURCES BotanGOST2012KEG.cpp
                         BotanGOST2012KeyGenerator.cpp
