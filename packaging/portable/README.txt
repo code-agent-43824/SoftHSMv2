@@ -164,8 +164,26 @@ mechanism accepts anyway. The Rutoken per-key vendor attributes 0x80002000 to
 
 Those keys can sign a precomputed 32-byte digest with CKM_GOSTR3410, or hash
 and sign one-shot or multipart input with the TC26
-CKM_GOSTR3410_WITH_GOSTR3411_2012_256 mechanism. GOST verification,
+CKM_GOSTR3410_WITH_GOSTR3411_2012_256 mechanism. That mechanism accepts the
+same parameter-set OID the digest mechanism does, since Rutoken-aware software
+sends it to both; until this release it refused every parameter, which put
+GOST signing out of reach of such software. GOST verification,
 MAC, key agreement, CMS construction, and other GOST mechanisms are not enabled.
+
+The 512-bit variants are partly available. GOST R 34.11-2012/512 works in full
+through CKM_GOSTR3411_12_512, one-shot and multipart, and takes its own
+parameter set 1.2.643.7.1.1.2.3 - each mechanism accepts only its own, because
+the two OIDs differ in one byte and a mix-up would hash with the wrong
+function. GOST R 34.10-2012/512 key pairs can be generated with
+CKM_GOSTR3410_512_KEY_PAIR_GEN on paramSetA, 1.2.643.7.1.2.1.2.1: the public
+CKA_VALUE is 128 bytes of little-endian X||Y and the private scalar is 64.
+paramSetB and paramSetC are refused rather than quietly replaced by paramSetA,
+because their domain parameters are not in this build.
+
+Signing, verification and PKCS #8 export for 512-bit keys are NOT implemented
+yet: those mechanisms are advertised by the profile, as the reference device
+advertises them, and calling one fails with CKR_MECHANISM_INVALID. A 512-bit
+key can be generated and stored today, and not yet used.
 
 RSA and GOST public/private key objects can be imported separately with the
 standard C_CreateObject function. Private RSA components and the GOST private
