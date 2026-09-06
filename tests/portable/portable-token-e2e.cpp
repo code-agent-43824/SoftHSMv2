@@ -1437,6 +1437,112 @@ static Bytes gostSignMultipart(Module& module, CK_SESSION_HANDLE session, CK_OBJ
     return signature;
 }
 
+// The parameter-set policy, checked as a table rather than case by case,
+// because the rule is one rule: a GOST 2012 mechanism takes no parameter or
+// exactly the DER OID of its own hash parameter set, and nothing else. The two
+// OIDs differ in their last byte, so accepting the neighbour's would hash with
+// the wrong function and hand back a plausible wrong signature.
+//
+// Applications written against Aktiv's library send that OID to the joint
+// sign-and-hash mechanisms as readily as to the digest ones, which is why
+// C_SignInit and C_VerifyInit are covered here beside C_DigestInit.
+static void verifyGOSTParameterSetPolicy(Module& module, CK_SESSION_HANDLE session,
+                                         const std::string& sizeName,
+                                         CK_MECHANISM_TYPE digestMechanism,
+                                         CK_MECHANISM_TYPE jointMechanism,
+                                         CK_MECHANISM_TYPE rawMechanism,
+                                         const Bytes& ownParamset,
+                                         const Bytes& otherParamset,
+                                         CK_OBJECT_HANDLE publicKey,
+                                         CK_OBJECT_HANDLE privateKey,
+                                         size_t digestBytes)
+{
+    // Same length as a parameter set, different content.
+    Bytes wrongContent = ownParamset;
+    wrongContent[wrongContent.size() - 2] ^= 0xFF;
+    Bytes truncated(ownParamset.begin(), ownParamset.end() - 1);
+    Bytes overlong = ownParamset;
+    overlong.push_back(0x00);
+
+    struct Case { const char* name; const Bytes* parameter; CK_RV expected; };
+    const Bytes empty;
+    const Case cases[] = {
+        {"no parameter",                   nullptr,         CKR_OK},
+        {"its own parameter set",          &ownParamset,    CKR_OK},
+        {"the other size's parameter set", &otherParamset,  CKR_MECHANISM_PARAM_INVALID},
+        {"a truncated OID",                &truncated,      CKR_MECHANISM_PARAM_INVALID},
+        {"an over-long OID",               &overlong,       CKR_MECHANISM_PARAM_INVALID},
+        {"the right length, wrong bytes",  &wrongContent,   CKR_MECHANISM_PARAM_INVALID}
+    };
+    const size_t caseCount = sizeof(cases) / sizeof(cases[0]);
+
+    const Bytes payload(48, 0x5A);
+    Bytes signature(256, 0);
+
+    for (size_t i = 0; i < caseCount; ++i)
+    {
+        const Bytes* parameter = cases[i].parameter;
+        CK_MECHANISM mechanism{digestMechanism,
+                               parameter ? const_cast<unsigned char*>(parameter->data()) : nullptr,
+                               parameter ? static_cast<CK_ULONG>(parameter->size()) : 0};
+        const std::string what = sizeName + " digest, " + cases[i].name;
+        check(invoke("C_DigestInit", what,
+                     [&] { return module->C_DigestInit(session, &mechanism); }),
+              cases[i].expected, ("C_DigestInit(" + what + ")").c_str());
+        if (cases[i].expected == CKR_OK)
+        {
+            // Finish it, or the session carries an operation into the next case.
+            Bytes digestValue(digestBytes, 0);
+            CK_ULONG digestLength = static_cast<CK_ULONG>(digestValue.size());
+            callOk("C_Digest", what + " - completing the operation",
+                   [&] { return module->C_Digest(session,
+                                                 const_cast<unsigned char*>(payload.data()),
+                                                 static_cast<CK_ULONG>(payload.size()),
+                                                 digestValue.data(), &digestLength); });
+        }
+
+        mechanism.mechanism = jointMechanism;
+        const std::string signWhat = sizeName + " sign, " + cases[i].name;
+        check(invoke("C_SignInit", signWhat,
+                     [&] { return module->C_SignInit(session, &mechanism, privateKey); }),
+              cases[i].expected, ("C_SignInit(" + signWhat + ")").c_str());
+        CK_ULONG signatureLength = static_cast<CK_ULONG>(signature.size());
+        if (cases[i].expected == CKR_OK)
+            callOk("C_Sign", signWhat + " - completing the operation",
+                   [&] { return module->C_Sign(session,
+                                               const_cast<unsigned char*>(payload.data()),
+                                               static_cast<CK_ULONG>(payload.size()),
+                                               signature.data(), &signatureLength); });
+
+        const std::string verifyWhat = sizeName + " verify, " + cases[i].name;
+        check(invoke("C_VerifyInit", verifyWhat,
+                     [&] { return module->C_VerifyInit(session, &mechanism, publicKey); }),
+              cases[i].expected, ("C_VerifyInit(" + verifyWhat + ")").c_str());
+        if (cases[i].expected == CKR_OK)
+            callOk("C_Verify", verifyWhat + " - completing the operation",
+                   [&] { return module->C_Verify(session,
+                                                 const_cast<unsigned char*>(payload.data()),
+                                                 static_cast<CK_ULONG>(payload.size()),
+                                                 signature.data(), signatureLength); });
+    }
+
+    // The mechanism that signs a precomputed digest computes no hash, so no
+    // parameter set describes it and it takes none. Recorded here so the
+    // boundary is deliberate rather than an oversight: no trace shows software
+    // sending an OID to it, and inventing an acceptance would be guessing.
+    CK_MECHANISM raw{rawMechanism,
+                     const_cast<unsigned char*>(ownParamset.data()),
+                     static_cast<CK_ULONG>(ownParamset.size())};
+    check(invoke("C_SignInit", sizeName + " raw sign, its size's parameter set",
+                 [&] { return module->C_SignInit(session, &raw, privateKey); }),
+          CKR_MECHANISM_PARAM_INVALID, "C_SignInit(raw with a parameter set)");
+    check(invoke("C_VerifyInit", sizeName + " raw verify, its size's parameter set",
+                 [&] { return module->C_VerifyInit(session, &raw, publicKey); }),
+          CKR_MECHANISM_PARAM_INVALID, "C_VerifyInit(raw with a parameter set)");
+
+    trace("REFERENCE", sizeName + " parameter-set policy holds for digest, sign and verify");
+}
+
 static void verifyGOST2012Signing(Module& module, CK_SESSION_HANDLE session,
                                   const GOST2012KeyPair& keyPair)
 {
@@ -1490,14 +1596,14 @@ static void verifyGOST2012Signing(Module& module, CK_SESSION_HANDLE session,
                  [&] { return module->C_SignInit(session, &wrongParamset, keyPair.privateKey); }),
           CKR_MECHANISM_PARAM_INVALID, "C_SignInit(a parameter set that is not this hash)");
 
-    Bytes truncatedParamset = bytesFromHex("06082a850307010102");
-    CK_MECHANISM shortParamset{CKM_GOSTR3410_WITH_GOSTR3411_2012_256,
-                               truncatedParamset.data(),
-                               static_cast<CK_ULONG>(truncatedParamset.size())};
-    check(invoke("C_SignInit", "pMechanism={CKM_GOSTR3410_WITH_GOSTR3411_2012_256, "
-                 "pParameter=a truncated OID}",
-                 [&] { return module->C_SignInit(session, &shortParamset, keyPair.privateKey); }),
-          CKR_MECHANISM_PARAM_INVALID, "C_SignInit(a truncated parameter set)");
+    // The whole policy, as a table, so the 256-bit and 512-bit paths are held
+    // to the same rule in the same shape.
+    verifyGOSTParameterSetPolicy(module, session, "GOST 2012/256",
+                                 CKM_GOSTR3411_2012_256,
+                                 CKM_GOSTR3410_WITH_GOSTR3411_2012_256,
+                                 CKM_GOSTR3410,
+                                 paramset256, foreignParamset,
+                                 keyPair.publicKey, keyPair.privateKey, 32);
 
     CK_MECHANISM rawMechanism{CKM_GOSTR3410, nullptr, 0};
     callOk("C_SignInit", "hSession=" + std::to_string(session) +
@@ -1717,6 +1823,13 @@ static void verifyGOST2012_512(Module& module, CK_SESSION_HANDLE session)
            [&] { return module->C_Verify(session, precomputed.data(),
                                          static_cast<CK_ULONG>(precomputed.size()),
                                          rawSignature.data(), rawLength); });
+
+    verifyGOSTParameterSetPolicy(module, session, "GOST 2012/512",
+                                 CKM_GOSTR3411_12_512,
+                                 CKM_GOSTR3410_WITH_GOSTR3411_12_512,
+                                 CKM_GOSTR3410_512,
+                                 digestParam, digestParam256,
+                                 publicKey, privateKey, 64);
 
     // Search by key type: the two sizes share an object class, so this is what
     // separates them for an application enumerating keys.

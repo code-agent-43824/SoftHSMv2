@@ -4817,12 +4817,12 @@ CK_RV SoftHSM::C_DecryptFinal(CK_SESSION_HANDLE hSession, CK_BYTE_PTR pData, CK_
 }
 
 // Initialise digesting using the specified mechanism in the specified session
-#if defined(WITH_GOST_3411_2012) || defined(WITH_GOST_3410_2012_256)
+#if defined(WITH_GOST_3411_2012) || defined(WITH_GOST_3410_2012_256) || \
+    defined(WITH_GOST_3411_2012_512) || defined(WITH_GOST_3410_2012_512)
 namespace
 {
 	// DER object identifier of the GOST R 34.11-2012/256 parameter set,
-	// 1.2.643.7.1.1.2.2. Applications written against Aktiv's library pass the
-	// OID of the digest they are asking for as the mechanism parameter.
+	// 1.2.643.7.1.1.2.2.
 	const CK_BYTE GOSTR3411_2012_256_PARAMSET_OID[] = {
 		0x06, 0x08, 0x2A, 0x85, 0x03, 0x07, 0x01, 0x01, 0x02, 0x02
 	};
@@ -4835,23 +4835,56 @@ namespace
 		0x06, 0x08, 0x2A, 0x85, 0x03, 0x07, 0x01, 0x01, 0x02, 0x03
 	};
 
-	// A GOST 2012 mechanism may be given no parameter at all, or exactly the
-	// OID of its own parameter set. Anything else is a different parameter set
-	// than the one we would compute, and saying so beats hashing with the
-	// wrong one.
+	// The parameter policy for the GOST R 34.10/34.11-2012 mechanisms, written
+	// once and applied from C_DigestInit, C_SignInit and C_VerifyInit alike.
+	// It used to be spelled out at each of those call sites, with the expected
+	// OID named again every time - which is how the joint signature
+	// mechanisms came to refuse a parameter the digest mechanism accepted.
 	//
-	// This applies to the joint sign-and-hash mechanisms just as much as to
-	// the digest ones: the hash they compute internally is the same hash, and
-	// the software that sends the OID to C_DigestInit sends it to C_SignInit
-	// as well. Refusing it there made GOST signing unreachable for exactly the
-	// applications this fork exists to serve.
-	bool gostParamsetAccepted(CK_MECHANISM_PTR pMechanism, const CK_BYTE* oid, size_t oidLen)
+	// Applications written against Aktiv's library pass the DER OID of a hash
+	// parameter set as the mechanism parameter, and they pass it to the joint
+	// sign-and-hash mechanisms as readily as to the digest ones: the hash
+	// computed inside is the same hash, and the same OID names it.
+	//
+	// A mechanism takes no parameter at all, or exactly the OID of its own
+	// parameter set, and nothing else. Accepting a foreign one would mean
+	// hashing with a function the caller did not ask for and returning a
+	// plausible wrong signature; the two OIDs differ in one byte, so the
+	// mix-up is easy to make and invisible afterwards.
+	//
+	// Call this only for the mechanisms named below. The mechanisms that sign
+	// a precomputed digest compute no hash, so no parameter set describes them
+	// and they take none - that is the default arm.
+	CK_RV gostMechanismParameterAccepted(CK_MECHANISM_PTR pMechanism)
 	{
+		const CK_BYTE* oid = NULL_PTR;
+		size_t oidLen = 0;
+
+		switch (pMechanism->mechanism)
+		{
+			case CKM_GOSTR3411_2012_256:
+			case CKM_GOSTR3410_WITH_GOSTR3411_2012_256:
+				oid = GOSTR3411_2012_256_PARAMSET_OID;
+				oidLen = sizeof(GOSTR3411_2012_256_PARAMSET_OID);
+				break;
+			case CKM_GOSTR3411_12_512:
+			case CKM_GOSTR3410_WITH_GOSTR3411_12_512:
+				oid = GOSTR3411_2012_512_PARAMSET_OID;
+				oidLen = sizeof(GOSTR3411_2012_512_PARAMSET_OID);
+				break;
+			default:
+				break;
+		}
+
 		if (pMechanism->pParameter == NULL_PTR && pMechanism->ulParameterLen == 0)
-			return true;
+			return CKR_OK;
+		if (oid == NULL_PTR)
+			return CKR_MECHANISM_PARAM_INVALID;
 		if (pMechanism->pParameter == NULL_PTR || pMechanism->ulParameterLen != oidLen)
-			return false;
-		return memcmp(pMechanism->pParameter, oid, oidLen) == 0;
+			return CKR_MECHANISM_PARAM_INVALID;
+		if (memcmp(pMechanism->pParameter, oid, oidLen) != 0)
+			return CKR_MECHANISM_PARAM_INVALID;
+		return CKR_OK;
 	}
 }
 #endif
@@ -4899,22 +4932,23 @@ CK_RV SoftHSM::C_DigestInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMechan
 #endif
 #ifdef WITH_GOST_3411_2012
 		case CKM_GOSTR3411_2012_256:
+		{
 			// Aktiv's own library takes the parameter-set OID here and every
 			// Rutoken-aware application passes it, so refusing it broke every
-			// GOST digest such an application asked for. Accept the one OID
-			// that names this mechanism's parameter set, and nothing else.
-			if (!gostParamsetAccepted(pMechanism, GOSTR3411_2012_256_PARAMSET_OID,
-						  sizeof(GOSTR3411_2012_256_PARAMSET_OID)))
-				return CKR_MECHANISM_PARAM_INVALID;
+			// GOST digest such an application asked for.
+			const CK_RV parameterCheck = gostMechanismParameterAccepted(pMechanism);
+			if (parameterCheck != CKR_OK) return parameterCheck;
 			algo = HashAlgo::GOST2012_256;
+		}
 			break;
 #endif
 #ifdef WITH_GOST_3411_2012_512
 		case CKM_GOSTR3411_12_512:
-			if (!gostParamsetAccepted(pMechanism, GOSTR3411_2012_512_PARAMSET_OID,
-						  sizeof(GOSTR3411_2012_512_PARAMSET_OID)))
-				return CKR_MECHANISM_PARAM_INVALID;
+		{
+			const CK_RV parameterCheck = gostMechanismParameterAccepted(pMechanism);
+			if (parameterCheck != CKR_OK) return parameterCheck;
 			algo = HashAlgo::GOST2012_512;
+		}
 			break;
 #endif
 		default:
@@ -5672,8 +5706,8 @@ CK_RV SoftHSM::AsymSignInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMechan
 #endif
 #if defined(WITH_GOST_3410_2012_256) && !defined(WITH_GOST)
 		case CKM_GOSTR3410:
-			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
-				return CKR_MECHANISM_PARAM_INVALID;
+			rv = gostMechanismParameterAccepted(pMechanism);
+			if (rv != CKR_OK) return rv;
 			mechanism = AsymMech::GOST;
 			bAllowMultiPartOp = false;
 			isGOST = true;
@@ -5681,9 +5715,8 @@ CK_RV SoftHSM::AsymSignInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMechan
 		case CKM_GOSTR3410_WITH_GOSTR3411_2012_256:
 			// The parameter set of the hash this mechanism computes, sent by
 			// every Rutoken-aware application; absence is equally accepted.
-			if (!gostParamsetAccepted(pMechanism, GOSTR3411_2012_256_PARAMSET_OID,
-			                          sizeof(GOSTR3411_2012_256_PARAMSET_OID)))
-				return CKR_MECHANISM_PARAM_INVALID;
+			rv = gostMechanismParameterAccepted(pMechanism);
+			if (rv != CKR_OK) return rv;
 			mechanism = AsymMech::GOST_GOST;
 			bAllowMultiPartOp = true;
 			isGOST = true;
@@ -5691,16 +5724,15 @@ CK_RV SoftHSM::AsymSignInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMechan
 #endif
 #ifdef WITH_GOST_3410_2012_512
 		case CKM_GOSTR3410_512:
-			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
-				return CKR_MECHANISM_PARAM_INVALID;
+			rv = gostMechanismParameterAccepted(pMechanism);
+			if (rv != CKR_OK) return rv;
 			mechanism = AsymMech::GOST_512;
 			bAllowMultiPartOp = false;
 			isGOST = true;
 			break;
 		case CKM_GOSTR3410_WITH_GOSTR3411_12_512:
-			if (!gostParamsetAccepted(pMechanism, GOSTR3411_2012_512_PARAMSET_OID,
-			                          sizeof(GOSTR3411_2012_512_PARAMSET_OID)))
-				return CKR_MECHANISM_PARAM_INVALID;
+			rv = gostMechanismParameterAccepted(pMechanism);
+			if (rv != CKR_OK) return rv;
 			mechanism = AsymMech::GOST_GOST_512;
 			bAllowMultiPartOp = true;
 			isGOST = true;
@@ -6838,16 +6870,15 @@ CK_RV SoftHSM::AsymVerifyInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMech
 		// Until now this dispatch had no GOST 2012 case at all, so verifying a
 		// signature this module had just produced was impossible.
 		case CKM_GOSTR3410:
-			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
-				return CKR_MECHANISM_PARAM_INVALID;
+			rv = gostMechanismParameterAccepted(pMechanism);
+			if (rv != CKR_OK) return rv;
 			mechanism = AsymMech::GOST;
 			bAllowMultiPartOp = false;
 			isGOST = true;
 			break;
 		case CKM_GOSTR3410_WITH_GOSTR3411_2012_256:
-			if (!gostParamsetAccepted(pMechanism, GOSTR3411_2012_256_PARAMSET_OID,
-			                          sizeof(GOSTR3411_2012_256_PARAMSET_OID)))
-				return CKR_MECHANISM_PARAM_INVALID;
+			rv = gostMechanismParameterAccepted(pMechanism);
+			if (rv != CKR_OK) return rv;
 			mechanism = AsymMech::GOST_GOST;
 			bAllowMultiPartOp = true;
 			isGOST = true;
@@ -6855,16 +6886,15 @@ CK_RV SoftHSM::AsymVerifyInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMech
 #endif
 #ifdef WITH_GOST_3410_2012_512
 		case CKM_GOSTR3410_512:
-			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
-				return CKR_MECHANISM_PARAM_INVALID;
+			rv = gostMechanismParameterAccepted(pMechanism);
+			if (rv != CKR_OK) return rv;
 			mechanism = AsymMech::GOST_512;
 			bAllowMultiPartOp = false;
 			isGOST = true;
 			break;
 		case CKM_GOSTR3410_WITH_GOSTR3411_12_512:
-			if (!gostParamsetAccepted(pMechanism, GOSTR3411_2012_512_PARAMSET_OID,
-			                          sizeof(GOSTR3411_2012_512_PARAMSET_OID)))
-				return CKR_MECHANISM_PARAM_INVALID;
+			rv = gostMechanismParameterAccepted(pMechanism);
+			if (rv != CKR_OK) return rv;
 			mechanism = AsymMech::GOST_GOST_512;
 			bAllowMultiPartOp = true;
 			isGOST = true;
