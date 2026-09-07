@@ -94,21 +94,91 @@ void kuzLInv(unsigned char x[16])
 	for (size_t i = 0; i < 16; ++i) kuzRInv(x);
 }
 
-void kuzS(unsigned char x[16])
+// Kuznechik's linear transformation is sixteen rounds of a GF(2^8) dot product,
+// which the plain implementation above spends 256 field multiplications on for
+// every block of every round - the reason this cipher ran an order of magnitude
+// slower than Magma here.  L is linear over GF(2)^128, so L(x) is the XOR of
+// its action on each byte taken alone, and that fits in a table.
+//
+// The tables are built by calling the functions above rather than transcribed,
+// so they cannot disagree with the definition.  They live in a function-local
+// static, whose initialisation C++11 makes thread-safe.
+//
+// Each entry is one 128-bit block held as two uint64_t, so combining the
+// sixteen of them costs two XORs apiece instead of sixteen.  The halves are
+// filled by memcpy from the byte block and read back the same way, which keeps
+// the result independent of byte order.
+struct KuznechikTables
 {
-	for (size_t i = 0; i < 16; ++i) x[i] = kuzPi[x[i]];
+	uint64_t ls[16][256][2];         // L(S(byte b at position i))
+	uint64_t linv[16][256][2];       // L^-1(byte b at position i)
+	unsigned char constants[32][16]; // C_i = L(Vec_128(i)), the key schedule's
+	unsigned char sinv[256];         // the inverse substitution
+
+	static void pack(uint64_t half[2], const unsigned char block[16])
+	{
+		memcpy(&half[0], block, 8);
+		memcpy(&half[1], block + 8, 8);
+	}
+
+	KuznechikTables()
+	{
+		for (size_t i = 0; i < 256; ++i) sinv[kuzPi[i]] = (unsigned char)i;
+		for (size_t position = 0; position < 16; ++position)
+			for (size_t value = 0; value < 256; ++value)
+			{
+				unsigned char unit[16] = {0};
+				unit[position] = kuzPi[value];
+				kuzLTransform(unit);
+				pack(ls[position][value], unit);
+
+				memset(unit, 0, sizeof(unit));
+				unit[position] = (unsigned char)value;
+				kuzLInv(unit);
+				pack(linv[position][value], unit);
+			}
+		for (size_t i = 1; i <= 32; ++i)
+		{
+			unsigned char c[16] = {0};
+			c[15] = (unsigned char)i;
+			kuzLTransform(c);
+			memcpy(constants[i - 1], c, 16);
+		}
+	}
+};
+
+const KuznechikTables& kuznechikTables()
+{
+	static const KuznechikTables tables;
+	return tables;
 }
 
-void kuzSInv(unsigned char x[16])
+// x <- L(S(x)), one table lookup and two 64-bit XORs per byte.
+void kuzLS(unsigned char x[16], const KuznechikTables& t)
 {
-	static unsigned char inv[256];
-	static bool initialized = false;
-	if (!initialized)
+	uint64_t low = 0, high = 0;
+	for (size_t i = 0; i < 16; ++i)
 	{
-		for (size_t i = 0; i < 256; ++i) inv[kuzPi[i]] = (unsigned char)i;
-		initialized = true;
+		low ^= t.ls[i][x[i]][0];
+		high ^= t.ls[i][x[i]][1];
 	}
-	for (size_t i = 0; i < 16; ++i) x[i] = inv[x[i]];
+	memcpy(x, &low, 8);
+	memcpy(x + 8, &high, 8);
+}
+
+// x <- L^-1(x).  The inverse substitution stays a separate byte-wise pass
+// because it is applied after L^-1, and a non-linear step cannot be folded
+// into the linear table that precedes it.
+void kuzLInvTabled(unsigned char x[16], const KuznechikTables& t)
+{
+	uint64_t low = 0, high = 0;
+	for (size_t i = 0; i < 16; ++i)
+	{
+		low ^= t.linv[i][x[i]][0];
+		high ^= t.linv[i][x[i]][1];
+	}
+	memcpy(x, &low, 8);
+	memcpy(x + 8, &high, 8);
 }
 
 void xorBlock(unsigned char* a, const unsigned char* b, size_t n)
@@ -394,20 +464,17 @@ void GOSTSymmetric::decryptBlock(const unsigned char* in, unsigned char* out) co
 
 void GOSTSymmetric::expandKuznechikKey(const unsigned char* key)
 {
+	const KuznechikTables& tables = kuznechikTables();
 	memcpy(kuzRoundKeys[0], key, 16);
 	memcpy(kuzRoundKeys[1], key + 16, 16);
-	unsigned char a[16], b[16], c[16], t[16];
+	unsigned char a[16], b[16], t[16];
 	memcpy(a, key, 16);
 	memcpy(b, key + 16, 16);
 	for (size_t i = 1; i <= 32; ++i)
 	{
-		memset(c, 0, sizeof(c));
-		c[15] = (unsigned char)i;
-		kuzLTransform(c);
 		memcpy(t, a, sizeof(t));
-		xorBlock(t, c, sizeof(t));
-		kuzS(t);
-		kuzLTransform(t);
+		xorBlock(t, tables.constants[i - 1], sizeof(t));
+		kuzLS(t, tables);
 		xorBlock(t, b, sizeof(t));
 		memcpy(b, a, sizeof(b));
 		memcpy(a, t, sizeof(a));
@@ -419,19 +486,18 @@ void GOSTSymmetric::expandKuznechikKey(const unsigned char* key)
 	}
 	memset(a, 0, sizeof(a));
 	memset(b, 0, sizeof(b));
-	memset(c, 0, sizeof(c));
 	memset(t, 0, sizeof(t));
 }
 
 void GOSTSymmetric::encryptKuznechik(const unsigned char* in, unsigned char* out) const
 {
+	const KuznechikTables& tables = kuznechikTables();
 	unsigned char x[16];
 	memcpy(x, in, sizeof(x));
 	for (size_t i = 0; i < 9; ++i)
 	{
 		xorBlock(x, kuzRoundKeys[i], sizeof(x));
-		kuzS(x);
-		kuzLTransform(x);
+		kuzLS(x, tables);
 	}
 	xorBlock(x, kuzRoundKeys[9], sizeof(x));
 	memcpy(out, x, sizeof(x));
@@ -440,13 +506,14 @@ void GOSTSymmetric::encryptKuznechik(const unsigned char* in, unsigned char* out
 
 void GOSTSymmetric::decryptKuznechik(const unsigned char* in, unsigned char* out) const
 {
+	const KuznechikTables& tables = kuznechikTables();
 	unsigned char x[16];
 	memcpy(x, in, sizeof(x));
 	xorBlock(x, kuzRoundKeys[9], sizeof(x));
 	for (size_t i = 9; i != 0; --i)
 	{
-		kuzLInv(x);
-		kuzSInv(x);
+		kuzLInvTabled(x, tables);
+		for (size_t j = 0; j < 16; ++j) x[j] = tables.sinv[x[j]];
 		xorBlock(x, kuzRoundKeys[i - 1], sizeof(x));
 	}
 	memcpy(out, x, sizeof(x));
