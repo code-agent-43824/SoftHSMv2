@@ -9,6 +9,16 @@ unsigned long loadBE32(const unsigned char* p)
 }
 }
 
+// The CTR-ACPKM section length N is carried in the mechanism parameter as a
+// number of BITS, which is how the reference Rutoken ECP reads it: given the
+// field 512 the device rekeys after 64 bytes, and its ciphertext then matches
+// ours byte for byte over 16 KB for both ciphers.  Reading the field as bytes
+// made the section eight times too long and the two diverged at byte 65.
+size_t GOSTSymmetricAlgorithm::sectionBytes(unsigned long periodBits)
+{
+	return (size_t)(periodBits / 8);
+}
+
 GOSTSymmetricAlgorithm::GOSTSymmetricAlgorithm(GOSTSymmetric::Cipher cipher) :
 	cipherType(cipher), encrypting(false) {}
 GOSTSymmetricAlgorithm::~GOSTSymmetricAlgorithm()
@@ -39,8 +49,13 @@ bool GOSTSymmetricAlgorithm::init(const SymmetricKey* key, SymMode::Type mode,
 	if (mode == SymMode::CTR_ACPKM)
 	{
 		if (params.size() != 4 + getBlockSize() / 2) return false;
+		// Zero means the key is never changed; the device accepts that too.
+		// Any other value has to name a whole number of blocks, counted in
+		// bits.  Р 1323565.1.017-2018 requires it; the device was never given
+		// an invalid period, so this rule is the standard's, not a reading.
 		const unsigned long period = loadBE32(params.const_byte_str());
-		if (period != 0 && (period < getBlockSize() || period % getBlockSize() != 0)) return false;
+		const unsigned long blockBits = (unsigned long)getBlockSize() * 8;
+		if (period != 0 && (period < blockBits || period % blockBits != 0)) return false;
 	}
 	if (mode == SymMode::MGM &&
 	    (params.size() != getBlockSize() || (params.const_byte_str()[0] & 0x80) != 0 ||
@@ -144,7 +159,7 @@ void GOSTSymmetricAlgorithm::meshKey(GOSTSymmetric& cipher, unsigned char key[32
 bool GOSTSymmetricAlgorithm::processCTRACPKM(ByteString& out)
 {
 	const size_t block = getBlockSize();
-	const unsigned long period = loadBE32(parameters.const_byte_str());
+	const size_t section = sectionBytes(loadBE32(parameters.const_byte_str()));
 	unsigned char key[32], counter[16], gamma[16];
 	memcpy(key, currentKey->getKeyBits().const_byte_str(), 32); memset(counter, 0, sizeof(counter));
 	memcpy(counter, parameters.const_byte_str() + 4, block / 2);
@@ -152,7 +167,7 @@ bool GOSTSymmetricAlgorithm::processCTRACPKM(ByteString& out)
 	out.resize(input.size());
 	for (size_t offset = 0; offset < input.size(); offset += block)
 	{
-		if (period != 0 && offset != 0 && offset % period == 0) meshKey(cipher, key);
+		if (section != 0 && offset != 0 && offset % section == 0) meshKey(cipher, key);
 		cipher.encryptBlock(counter, gamma);
 		const size_t take = input.size() - offset < block ? input.size() - offset : block;
 		for (size_t i = 0; i < take; ++i) out[offset + i] = input[offset + i] ^ gamma[i];

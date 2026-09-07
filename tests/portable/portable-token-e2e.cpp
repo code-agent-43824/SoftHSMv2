@@ -3392,6 +3392,166 @@ static void verifyOneShot(Module& module, CK_SESSION_HANDLE session,
                          static_cast<CK_ULONG>(signature.size())); });
 }
 
+// A digest of a large buffer, without the argument dump the shared helper
+// writes: the inputs here are 16 KB and would bury the trace.
+static Bytes digestQuietly(Module& module, CK_SESSION_HANDLE session,
+                           CK_MECHANISM_TYPE mechanismType, const Bytes& data,
+                           const std::string& what)
+{
+    CK_MECHANISM mechanism{mechanismType, nullptr, 0};
+    callOk("C_DigestInit", what,
+           [&] { return module->C_DigestInit(session, &mechanism); });
+    CK_ULONG length = 0;
+    callOk("C_Digest", what + " - length query",
+           [&] { return module->C_Digest(session, const_cast<unsigned char*>(data.data()),
+                         static_cast<CK_ULONG>(data.size()), nullptr, &length); });
+    Bytes result(length);
+    callOk("C_Digest", what,
+           [&] { return module->C_Digest(session, const_cast<unsigned char*>(data.data()),
+                         static_cast<CK_ULONG>(data.size()), result.data(), &length); });
+    result.resize(length);
+    return result;
+}
+
+// The CTR-ACPKM section length travels in the mechanism parameter as a number
+// of BITS.  Measured on a Rutoken ECP, firmware 26.2, serial 3cbc56f9, through
+// its own rtPKCS11ECP.dll 2.19: given the field 512 the device changes the key
+// after 64 bytes, and its ciphertext then matches ours on all 16384 bytes for
+// both ciphers.  Read as bytes the section came out eight times too long and
+// the two streams parted at byte 65 - which is what this pins down.
+//
+// The key is imported with a known CKA_VALUE rather than generated, so the
+// comparison is against the device's own answer and not against ourselves.
+static void verifyCTRACPKMPeriodIsInBits(Module& module, CK_SESSION_HANDLE session)
+{
+    const Bytes deviceKey = bytesFromHex(
+        "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
+    const Bytes plain(16384, 0x00);
+
+    struct Case
+    {
+        const char* name;
+        CK_KEY_TYPE keyType;
+        CK_MECHANISM_TYPE mechanism;
+        const char* iv;
+        unsigned long blockBits;
+        const char* devicePrefix;   // the first 128 bytes, read off the device
+        const char* deviceSHA256;   // SHA-256 of all 16384, read off the device
+    };
+    const Case cases[] = {
+        {"Magma", CKK_MAGMA, CKM_MAGMA_CTR_ACPKM, "21222324", 64,
+         "e1a9d015d3a6dcc6586b70ad58d6dcce3da112be14abf1da09bea90a348d60b3"
+         "fec3f35feb0b7746d1f22a114be36f74957fdbec8b37b4b5880a5435e759f7b1"
+         "9aa529b57581166e605d6991ed117c4253c3af8286f312905b1475b35246d49d"
+         "24fc06df9ce841546fa2cf75a464d0866dc06adb861c145909456add7637c9c3",
+         "8101962994c0f962c07caada0063f6338e0d795b63357271e7dfac81d4babda3"},
+        {"Kuznechik", CKK_KUZNECHIK, CKM_KUZNECHIK_CTR_ACPKM, "2122232425262728", 128,
+         "78d14d1c9fec93b945820509822003630d35e6b240ec9a55a77985370c5eac9b"
+         "1ac3591196348b23baaff8afa4f8aad139efa2045198ed8768cd56210197ef84"
+         "41f628c3d636a85bed20470783cb5fdcb41d9f10d4de78444f60f981348eea65"
+         "3b282ef85642e6a392743542f3c5fb683ec3aefe9870d64ca00b48465d2dbe4b",
+         "6004afaf2e06b364662cc082327318e00d123f3cf1da3e08f444d1125a3cf34d"}
+    };
+
+    for (size_t c = 0; c < sizeof(cases) / sizeof(cases[0]); ++c)
+    {
+        const Case& item = cases[c];
+        const std::string name = item.name;
+        const CK_OBJECT_HANDLE key = createGOSTSecret(module, session, item.keyType, deviceKey);
+        const Bytes iv = bytesFromHex(item.iv);
+
+        // period || IV, the period big-endian in the leading four bytes.
+        auto parameterFor = [&](unsigned long periodBits) {
+            Bytes p(4 + iv.size());
+            p[0] = static_cast<unsigned char>(periodBits >> 24);
+            p[1] = static_cast<unsigned char>(periodBits >> 16);
+            p[2] = static_cast<unsigned char>(periodBits >> 8);
+            p[3] = static_cast<unsigned char>(periodBits);
+            std::copy(iv.begin(), iv.end(), p.begin() + 4);
+            return p;
+        };
+
+        Bytes deviceParameter = parameterFor(512);
+        CK_MECHANISM deviceMechanism{item.mechanism, deviceParameter.data(),
+                                     static_cast<CK_ULONG>(deviceParameter.size())};
+        const Bytes produced = encryptOneShot(module, session, key, deviceMechanism, plain);
+        if (produced.size() != plain.size())
+            fail(name + " CTR-ACPKM produced the wrong length");
+        const Bytes prefix(produced.begin(), produced.begin() + 128);
+        if (prefix != bytesFromHex(item.devicePrefix))
+            fail(name + " CTR-ACPKM with period 512 does not match the device: got "
+                 + hexBytes(prefix.data(), prefix.size()));
+        const Bytes wholeDigest = digestQuietly(module, session, CKM_SHA256, produced,
+                                                name + " CTR-ACPKM 16 KB ciphertext");
+        if (wholeDigest != bytesFromHex(item.deviceSHA256))
+            fail(name + " CTR-ACPKM diverges from the device somewhere past byte 128: SHA-256 "
+                 + hexBytes(wholeDigest.data(), wholeDigest.size()));
+        if (decryptOneShot(module, session, key, deviceMechanism, produced) != plain)
+            fail(name + " CTR-ACPKM does not decrypt its own output");
+        trace("REFERENCE", name + " CTR-ACPKM with period 512 matches the reference device "
+                                  "on all 16384 bytes");
+
+        // The same section length written the old way - 512 bytes - is now the
+        // field 4096.  Both streams share their first section and part exactly
+        // at byte 64, which is where the device capture recorded the split.
+        Bytes byteReading = parameterFor(512 * 8);
+        CK_MECHANISM byteMechanism{item.mechanism, byteReading.data(),
+                                   static_cast<CK_ULONG>(byteReading.size())};
+        const Bytes longSection = encryptOneShot(module, session, key, byteMechanism, plain);
+        if (!std::equal(produced.begin(), produced.begin() + 64, longSection.begin()))
+            fail(name + " CTR-ACPKM streams differ before the first key change");
+        if (produced[64] == longSection[64])
+            fail(name + " CTR-ACPKM ignores the period: a 64-byte and a 512-byte section "
+                        "produced the same byte 64");
+
+        // Rejected: a period that is not a whole number of blocks counted in
+        // bits.  Р 1323565.1.017-2018 requires it.  The device was never handed
+        // an invalid period, so this rule is the standard's and not a reading.
+        //
+        // The refusal arrives as CKR_MECHANISM_INVALID, not the
+        // CKR_MECHANISM_PARAM_INVALID the name would suggest: a cipher whose
+        // init fails is reported that way for every mechanism in this module,
+        // and that mapping predates the period rule.  Pinned as it is rather
+        // than changed, because changing it is a separate decision about every
+        // symmetric mechanism at once.
+        const unsigned long refused[] = {
+            1, item.blockBits / 2, item.blockBits - 1, item.blockBits + 1,
+            item.blockBits + item.blockBits / 2, 16
+        };
+        for (size_t i = 0; i < sizeof(refused) / sizeof(refused[0]); ++i)
+        {
+            if (refused[i] == item.blockBits || refused[i] % item.blockBits == 0) continue;
+            Bytes bad = parameterFor(refused[i]);
+            CK_MECHANISM badMechanism{item.mechanism, bad.data(),
+                                      static_cast<CK_ULONG>(bad.size())};
+            const std::string what = name + " CTR-ACPKM period " + std::to_string(refused[i]);
+            check(invoke("C_EncryptInit", what,
+                         [&] { return module->C_EncryptInit(session, &badMechanism, key); }),
+                  CKR_MECHANISM_INVALID, ("C_EncryptInit(" + what + ")").c_str());
+            check(invoke("C_DecryptInit", what,
+                         [&] { return module->C_DecryptInit(session, &badMechanism, key); }),
+                  CKR_MECHANISM_INVALID, ("C_DecryptInit(" + what + ")").c_str());
+        }
+
+        // Accepted: no key change at all, one block, and a longer whole number
+        // of blocks.  Each is finished so the session carries no operation on.
+        const unsigned long accepted[] = {0, item.blockBits, item.blockBits * 4, 512};
+        const Bytes shortPlain(96, 0x5A);
+        for (size_t i = 0; i < sizeof(accepted) / sizeof(accepted[0]); ++i)
+        {
+            Bytes good = parameterFor(accepted[i]);
+            CK_MECHANISM goodMechanism{item.mechanism, good.data(),
+                                       static_cast<CK_ULONG>(good.size())};
+            const Bytes text = encryptOneShot(module, session, key, goodMechanism, shortPlain);
+            if (decryptOneShot(module, session, key, goodMechanism, text) != shortPlain)
+                fail(name + " CTR-ACPKM round trip failed for period " +
+                     std::to_string(accepted[i]));
+        }
+        trace("REFERENCE", name + " CTR-ACPKM accepts 0 and whole blocks in bits, "
+                                  "and refuses everything else");
+    }
+}
+
 static void verifyGOSTSymmetric(Module& module, CK_SESSION_HANDLE session)
 {
     generateGOSTSecret(module, session, CKM_GOST28147_KEY_GEN, CKK_GOST28147);
@@ -3463,7 +3623,10 @@ static void verifyGOSTSymmetric(Module& module, CK_SESSION_HANDLE session)
         decryptOneShot(module, session, kuz, kuzMgm, kuzMgmCipher) != kuzMgmPlain)
         fail("CKM_KUZNECHIK_MGM does not match RFC 9058");
 
-    Bytes acpkmParams = bytesFromHex("000000100102030405060708");
+    // 0x80 bits is one Kuznechik block, so the 33-byte payload below crosses
+    // two key changes.  It used to read 0x10, which under the field's real
+    // units - bits - is a quarter of a block and no longer allowed.
+    Bytes acpkmParams = bytesFromHex("000000800102030405060708");
     CK_MECHANISM acpkm{CKM_KUZNECHIK_CTR_ACPKM, acpkmParams.data(),
                        static_cast<CK_ULONG>(acpkmParams.size())};
     const Bytes streamPlain = bytesFromHex(
@@ -3471,6 +3634,8 @@ static void verifyGOSTSymmetric(Module& module, CK_SESSION_HANDLE session)
     const Bytes streamCipher = encryptOneShot(module, session, kuz, acpkm, streamPlain);
     if (decryptOneShot(module, session, kuz, acpkm, streamCipher) != streamPlain)
         fail("CKM_KUZNECHIK_CTR_ACPKM round trip failed");
+
+    verifyCTRACPKMPeriodIsInBits(module, session);
 
     const Bytes kuzMacData = bytesFromHex(
         "1122334455667700ffeeddccbbaa998800112233445566778899aabbcceeff0a"

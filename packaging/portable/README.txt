@@ -186,6 +186,17 @@ Signature verification is available for both key sizes, through C_VerifyInit
 and C_Verify with the same mechanisms used to sign. Earlier releases could
 produce a GOST signature and not check one.
 
+CKM_MAGMA_CTR_ACPKM and CKM_KUZNECHIK_CTR_ACPKM take a mechanism parameter of
+the section length followed by a half-block initialisation vector: four bytes
+big-endian, then four bytes for Magma or eight for Kuznechik. The section
+length is a number of BITS, which is how the reference device reads it - given
+512 it changes the key after 64 bytes, not 512. Releases before this one read
+that field as bytes, so their ciphertext parted from the device at byte 65;
+anything encrypted by an earlier release with a non-zero section length has to
+be decrypted by that release, or by passing eight times the value here. Zero
+still means the key is never changed, and any other value must be a whole
+number of blocks in bits - 64 for Magma, 128 for Kuznechik.
+
 softhsm2-export takes --type gost512 for the 512-bit private key, alongside
 the existing rsa, ec and gost.
 

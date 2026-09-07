@@ -31,6 +31,7 @@ private:
 	bool processMGM(ByteString&, bool);
 	void meshKey(GOSTSymmetric&, unsigned char[32]) const;
 	static void incrementCounter(unsigned char*, size_t);
+	static size_t sectionBytes(unsigned long periodBits);
 	GOSTSymmetric::Cipher cipherType;
 	ByteString input;
 	ByteString parameters;
