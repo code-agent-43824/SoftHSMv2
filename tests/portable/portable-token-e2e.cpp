@@ -4078,6 +4078,36 @@ static void verifyRutokenProfile(const fs::path& modulePath)
     std::cout << "Rutoken ECP compatibility profile verified\n";
 }
 
+// The packaged README promises the token directory appears beside the per-user
+// configuration.  The module already kept that promise - ObjectStore makes the
+// directory when it opens - and this pins that half on every platform, since
+// every other scenario runs on a store some earlier step has already created.
+//
+// It is not the guard for the defect this was written alongside.  There the
+// utilities were the broken half: they open the directory without going
+// through ObjectStore, so on a machine that had never run the module they
+// failed with "Failed to enumerate object store". What guards that is the
+// utility step in ci.yml, which no longer creates the directory first.
+static void verifyFirstRunCreatesTokenDirectory(const fs::path& modulePath,
+                                                const std::string& expectedTokenDirectory)
+{
+    if (fs::exists(expectedTokenDirectory))
+        fail("the token directory already exists, so this run proves nothing about a "
+             "machine that has never run the module: " + expectedTokenDirectory);
+    trace("FILESYSTEM", "token directory absent before loading: " + expectedTokenDirectory);
+
+    {
+        Module module(modulePath);
+        const std::vector<CK_SLOT_ID> present = slots(module, CK_FALSE);
+        if (present.empty()) fail("a first run enumerated no slots at all");
+        trace("OUTPUT", "first run enumerated " + std::to_string(present.size()) + " slots");
+    }
+
+    if (!fs::is_directory(expectedTokenDirectory))
+        fail("loading the module did not create the token directory: " + expectedTokenDirectory);
+    std::cout << "first run created the token directory and enumerated slots\n";
+}
+
 int main(int argc, char** argv)
 {
     try
@@ -4087,6 +4117,11 @@ int main(int argc, char** argv)
             Module module(fs::absolute(argv[2]));
             (void)slots(module, CK_FALSE);
             std::cout << "PKCS #11 module initialized and enumerated successfully\n";
+            return 0;
+        }
+        if (argc == 4 && std::string(argv[1]) == "first-run")
+        {
+            verifyFirstRunCreatesTokenDirectory(fs::absolute(argv[2]), argv[3]);
             return 0;
         }
         if (argc == 3 && std::string(argv[1]) == "rutoken-profile")
@@ -4117,6 +4152,7 @@ int main(int argc, char** argv)
         }
         std::cerr << "usage:\n"
                   << "  portable-token-e2e probe <module>\n"
+                  << "  portable-token-e2e first-run <module> <expected-token-directory>\n"
                   << "  portable-token-e2e rutoken-profile <module>\n"
                   << "  portable-token-e2e prepare <module> <work>\n"
                   << "  portable-token-e2e finish <module> <work> <leaf.der> <ca.der> <payload> <cms.der>\n"

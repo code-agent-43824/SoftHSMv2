@@ -44,13 +44,18 @@ The module uses one standard configuration per operating-system user:
   macOS:    ~/softhsm/softhsm.conf
 
 On first use the module creates a safe default user configuration if that exact
-file does not exist. Every later load uses only that user file, so modules
-extracted into different directories and 32/64-bit processes see the same token
-store. The default relative
-directories.tokendir = tokens creates the token directory beside the user
+file does not exist, and creates the token directory the configuration names.
+Every later load uses only that user file, so modules extracted into different
+directories and 32/64-bit processes see the same token store. The default
+relative directories.tokendir = tokens puts the token directory beside the user
 configuration; no token directory is copied from or created beside the module.
 Relative paths are resolved from the active configuration file, not from the
 application's working directory.
+
+softhsm2-util and softhsm2-export create it as well. Until this release only
+the module did, so on a machine where the module had never been loaded the two
+utilities failed with "Failed to enumerate object store" and needed the
+directory made by hand. Nothing has to be created by hand now.
 
 The portable module deliberately ignores SOFTHSM2_CONF, adjacent configuration
 files, the process working directory, and system configuration paths. Editing

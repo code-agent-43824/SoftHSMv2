@@ -519,6 +519,25 @@ bool SimpleConfigLoader::loadConfiguration()
 
 	fclose(fp);
 
+#ifdef SOFTHSM2_PORTABLE_USER_CONFIG
+	// The portable module owns its per-user configuration and store, and the
+	// packaged README promises the token directory appears beside the
+	// configuration.  It did not: the configuration was written and the
+	// directory was not, so the first call on a machine that had never run the
+	// module failed to enumerate the object store.  Anyone who worked around
+	// it with mkdir never saw the defect again, which is how it survived.
+	//
+	// Only the portable regime does this.  An ordinary build takes its token
+	// directory from an administrator, and creating a mistyped path there
+	// would hide the mistake rather than fix anything.
+	const std::string tokenDirectory = Configuration::i()->getString("directories.tokendir", "");
+	if (!tokenDirectory.empty() && !createDirectory(tokenDirectory))
+	{
+		ERROR_MSG("Could not create the token directory: %s", tokenDirectory.c_str());
+		return false;
+	}
+#endif
+
 	return true;
 }
 

@@ -48,7 +48,12 @@ jobs:
           set -euo pipefail
           export HOME="$GITHUB_WORKSPACE/utility-gate-home"
           export SOFTHSM2_CONF="$GITHUB_WORKSPACE/ignored-utility.conf"
-          mkdir -p "$HOME/softhsm/tokens" utility-gate-work
+          # No mkdir of the token directory on purpose. This step is the only
+          # place the utilities meet a machine that has never run the module,
+          # and the mkdir that used to stand here is what kept them failing
+          # there unnoticed: the module makes the directory itself, so every
+          # other gate loads the module first and never sees it missing.
+          mkdir -p "$HOME" utility-gate-work
           util="$GITHUB_WORKSPACE/portable-product/softhsm2-util"
           exporter="$GITHUB_WORKSPACE/portable-product/softhsm2-export"
           test "$($util --show-config default-pkcs11-lib)" = \
@@ -88,6 +93,13 @@ jobs:
           c++ -std=c++17 -O2 -Wall -Wextra -Werror -static-libstdc++ -static-libgcc \
             -I src/lib/pkcs11 tests/portable/portable-token-e2e.cpp \
             -ldl -o portable-token-e2e
+      - name: Verify a cold start creates the token directory
+        run: |
+          export HOME="$GITHUB_WORKSPACE/first-run-home"
+          mkdir -p "$HOME"
+          ./portable-token-e2e first-run \
+            "$GITHUB_WORKSPACE/portable-product/libsofthsm2.so" \
+            "$HOME/softhsm/tokens"
       - name: Verify the Rutoken ECP compatibility profile
         run: |
           export HOME="$GITHUB_WORKSPACE/profile-gate-home"
