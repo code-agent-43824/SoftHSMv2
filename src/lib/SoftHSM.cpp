@@ -578,6 +578,7 @@ SoftHSM::SoftHSM()
 	isInitialised = false;
 	isRemovable = false;
 	fakeRutokenECP = false;
+	forceSensitive = false;
 	sessionObjectStore = NULL;
 	objectStore = NULL;
 	slotManager = NULL;
@@ -733,6 +734,12 @@ CK_RV SoftHSM::C_Initialize(CK_VOID_PTR pInitArgs)
 	}
 
 	fakeRutokenECP = Configuration::i()->getBool("FAKE_RUTOKEN_ECP", false);
+	// A generated private key that hands back its own material is the plainest
+	// way this module stops looking like a device: a real Rutoken answers
+	// CKR_ATTRIBUTE_SENSITIVE. Under the profile that is the default; without
+	// it, off, so ordinary SoftHSM behaviour does not move unless the setting
+	// is written out by name.
+	forceSensitive = Configuration::i()->getBool("RUTOKEN_FORCE_SENSITIVE", fakeRutokenECP);
 
 	// Configure the log level
 	if (!setLogLevel(Configuration::i()->getString("log.level", DEFAULT_LOG_LEVEL)))
@@ -7638,6 +7645,52 @@ CK_RV SoftHSM::C_DecryptVerifyUpdate(CK_SESSION_HANDLE hSession, CK_BYTE_PTR /*p
 
 // Generate a secret key or a domain parameter set using the specified mechanism
 
+namespace
+{
+	// RUTOKEN_FORCE_SENSITIVE fills in what a generation template left out, and
+	// only that. A template that names CKA_SENSITIVE or CKA_EXTRACTABLE keeps
+	// what it named, whichever way round - the setting supplies a missing
+	// default, it does not overrule the caller, and asking for a readable key
+	// is not an error.
+	//
+	// The two CK_BBOOLs are members so the appended attributes point at storage
+	// that outlives the call; do not copy this after apply().
+	struct ForcedSensitivity
+	{
+		CK_BBOOL yes;
+		CK_BBOOL no;
+		std::vector<CK_ATTRIBUTE> attributes;
+
+		ForcedSensitivity() : yes(CK_TRUE), no(CK_FALSE) {}
+
+		void apply(CK_ATTRIBUTE_PTR pTemplate, CK_ULONG ulCount)
+		{
+			bool hasSensitive = false;
+			bool hasExtractable = false;
+			for (CK_ULONG i = 0; i < ulCount; ++i)
+			{
+				if (pTemplate[i].type == CKA_SENSITIVE) hasSensitive = true;
+				if (pTemplate[i].type == CKA_EXTRACTABLE) hasExtractable = true;
+			}
+			if (hasSensitive && hasExtractable) return;
+
+			if (ulCount != 0) attributes.assign(pTemplate, pTemplate + ulCount);
+			if (!hasSensitive)
+			{
+				const CK_ATTRIBUTE sensitive = {CKA_SENSITIVE, &yes, sizeof(yes)};
+				attributes.push_back(sensitive);
+			}
+			if (!hasExtractable)
+			{
+				const CK_ATTRIBUTE extractable = {CKA_EXTRACTABLE, &no, sizeof(no)};
+				attributes.push_back(extractable);
+			}
+		}
+
+		bool changed() const { return !attributes.empty(); }
+	};
+}
+
 CK_RV SoftHSM::C_GenerateKey(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMechanism, CK_ATTRIBUTE_PTR pTemplate, CK_ULONG ulCount, CK_OBJECT_HANDLE_PTR phKey)
 {
 	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;
@@ -7753,6 +7806,19 @@ CK_RV SoftHSM::C_GenerateKey(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMecha
 			INFO_MSG("Session is read-only");
 
 		return rv;
+	}
+
+	// Fill in the sensitivity the caller left unsaid, before any of the
+	// per-algorithm paths below reads the template.
+	ForcedSensitivity forced;
+	if (forceSensitive)
+	{
+		forced.apply(pTemplate, ulCount);
+		if (forced.changed())
+		{
+			pTemplate = &forced.attributes[0];
+			ulCount = static_cast<CK_ULONG>(forced.attributes.size());
+		}
 	}
 
 	// Generate DSA domain parameters
@@ -7948,6 +8014,20 @@ CK_RV SoftHSM::C_GenerateKeyPair
 			INFO_MSG("Session is read-only");
 
 		return rv;
+	}
+
+	// Fill in the sensitivity the private-key template left unsaid, before any
+	// of the per-algorithm paths below reads it. Only the private half: a
+	// public key has neither attribute.
+	ForcedSensitivity forced;
+	if (forceSensitive)
+	{
+		forced.apply(pPrivateKeyTemplate, ulPrivateKeyAttributeCount);
+		if (forced.changed())
+		{
+			pPrivateKeyTemplate = &forced.attributes[0];
+			ulPrivateKeyAttributeCount = static_cast<CK_ULONG>(forced.attributes.size());
+		}
 	}
 
 	// Generate RSA keys

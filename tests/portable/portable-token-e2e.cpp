@@ -2954,6 +2954,163 @@ static void verifySilentTemplateKeyIsReadable(Module& module, CK_SESSION_HANDLE 
           CKR_ATTRIBUTE_READ_ONLY, "C_SetAttributeValue(CKA_EXTRACTABLE false to true)");
 }
 
+static CK_OBJECT_HANDLE createGOSTSecret(Module& module, CK_SESSION_HANDLE session,
+                                         CK_KEY_TYPE type, const Bytes& value,
+                                         bool wrap, bool unwrap);
+
+// RUTOKEN_FORCE_SENSITIVE, on by default under the profile. A private key a
+// real Rutoken generates does not hand back its own material; this module's
+// did, through plain C_GetAttributeValue, because a template that says nothing
+// about sensitivity got SoftHSM's readable defaults.
+//
+// The setting fills in what the template left out and nothing more. What the
+// caller states, the caller gets - either way round, and asking for a readable
+// key is not an error. Each attribute is considered on its own, so naming only
+// one of the pair leaves the other to the setting; the two cases below say
+// exactly what that produces, because the combination is easy to be surprised
+// by.
+static void verifyForcedSensitiveDefaults(Module& module, CK_SESSION_HANDLE session)
+{
+    CK_OBJECT_CLASS secretClass = CKO_SECRET_KEY;
+    CK_KEY_TYPE aes = CKK_AES;
+    CK_BBOOL no = CK_FALSE, yes = CK_TRUE;
+    CK_ULONG valueLen = 32;
+    CK_MECHANISM aesGen{CKM_AES_KEY_GEN, nullptr, 0};
+    std::vector<CK_BYTE> buffer(64, 0);
+
+    auto valueIsRefused = [&](CK_OBJECT_HANDLE key, const std::string& what) {
+        CK_ATTRIBUTE read = {CKA_VALUE, buffer.data(), static_cast<CK_ULONG>(buffer.size())};
+        check(invoke("C_GetAttributeValue", "CKA_VALUE of " + what,
+                     [&] { return module->C_GetAttributeValue(session, key, &read, 1); }),
+              CKR_ATTRIBUTE_SENSITIVE, ("C_GetAttributeValue(" + what + ")").c_str());
+    };
+    auto valueIsReadable = [&](CK_OBJECT_HANDLE key, const std::string& what) {
+        CK_ATTRIBUTE read = {CKA_VALUE, buffer.data(), static_cast<CK_ULONG>(buffer.size())};
+        callOk("C_GetAttributeValue", "CKA_VALUE of " + what,
+               [&] { return module->C_GetAttributeValue(session, key, &read, 1); });
+        if (read.ulValueLen == 0 || read.ulValueLen == CK_UNAVAILABLE_INFORMATION)
+            fail(what + " was supposed to return its value and returned nothing");
+    };
+
+    // Says nothing: the setting supplies both, and the key keeps its secret.
+    {
+        CK_ATTRIBUTE silent[] = {
+            {CKA_CLASS, &secretClass, sizeof(secretClass)},
+            {CKA_KEY_TYPE, &aes, sizeof(aes)},
+            {CKA_TOKEN, &no, sizeof(no)},
+            {CKA_VALUE_LEN, &valueLen, sizeof(valueLen)}
+        };
+        CK_OBJECT_HANDLE key = CK_INVALID_HANDLE;
+        callOk("C_GenerateKey", "template silent about sensitivity, profile on",
+               [&] { return module->C_GenerateKey(session, &aesGen, silent, 4, &key); });
+        requireBooleanAttribute(module, session, key, CKA_SENSITIVE, CK_TRUE);
+        requireBooleanAttribute(module, session, key, CKA_EXTRACTABLE, CK_FALSE);
+        requireBooleanAttribute(module, session, key, CKA_ALWAYS_SENSITIVE, CK_TRUE);
+        requireBooleanAttribute(module, session, key, CKA_NEVER_EXTRACTABLE, CK_TRUE);
+        valueIsRefused(key, "a key generated from a silent template");
+    }
+
+    // Says both, the readable way: the caller wins and generation succeeds.
+    {
+        CK_ATTRIBUTE open[] = {
+            {CKA_CLASS, &secretClass, sizeof(secretClass)},
+            {CKA_KEY_TYPE, &aes, sizeof(aes)},
+            {CKA_TOKEN, &no, sizeof(no)},
+            {CKA_VALUE_LEN, &valueLen, sizeof(valueLen)},
+            {CKA_SENSITIVE, &no, sizeof(no)},
+            {CKA_EXTRACTABLE, &yes, sizeof(yes)}
+        };
+        CK_OBJECT_HANDLE key = CK_INVALID_HANDLE;
+        callOk("C_GenerateKey", "template asking for a readable key, profile on",
+               [&] { return module->C_GenerateKey(session, &aesGen, open, 6, &key); });
+        requireBooleanAttribute(module, session, key, CKA_SENSITIVE, CK_FALSE);
+        requireBooleanAttribute(module, session, key, CKA_EXTRACTABLE, CK_TRUE);
+        valueIsReadable(key, "a key explicitly asked to be readable");
+    }
+
+    // Names only CKA_SENSITIVE. That value stands; CKA_EXTRACTABLE is the one
+    // the setting fills in, and false there is enough to keep the value in.
+    {
+        CK_ATTRIBUTE half[] = {
+            {CKA_CLASS, &secretClass, sizeof(secretClass)},
+            {CKA_KEY_TYPE, &aes, sizeof(aes)},
+            {CKA_TOKEN, &no, sizeof(no)},
+            {CKA_VALUE_LEN, &valueLen, sizeof(valueLen)},
+            {CKA_SENSITIVE, &no, sizeof(no)}
+        };
+        CK_OBJECT_HANDLE key = CK_INVALID_HANDLE;
+        callOk("C_GenerateKey", "template naming only CKA_SENSITIVE=CK_FALSE",
+               [&] { return module->C_GenerateKey(session, &aesGen, half, 5, &key); });
+        requireBooleanAttribute(module, session, key, CKA_SENSITIVE, CK_FALSE);
+        requireBooleanAttribute(module, session, key, CKA_EXTRACTABLE, CK_FALSE);
+        valueIsRefused(key, "a key that named only CKA_SENSITIVE");
+    }
+
+    // Names only CKA_EXTRACTABLE. Same rule the other way round.
+    {
+        CK_ATTRIBUTE half[] = {
+            {CKA_CLASS, &secretClass, sizeof(secretClass)},
+            {CKA_KEY_TYPE, &aes, sizeof(aes)},
+            {CKA_TOKEN, &no, sizeof(no)},
+            {CKA_VALUE_LEN, &valueLen, sizeof(valueLen)},
+            {CKA_EXTRACTABLE, &yes, sizeof(yes)}
+        };
+        CK_OBJECT_HANDLE key = CK_INVALID_HANDLE;
+        callOk("C_GenerateKey", "template naming only CKA_EXTRACTABLE=CK_TRUE",
+               [&] { return module->C_GenerateKey(session, &aesGen, half, 5, &key); });
+        requireBooleanAttribute(module, session, key, CKA_SENSITIVE, CK_TRUE);
+        requireBooleanAttribute(module, session, key, CKA_EXTRACTABLE, CK_TRUE);
+        valueIsRefused(key, "a key that named only CKA_EXTRACTABLE");
+    }
+
+    // A generated private key is what this is really for.
+    {
+        const Bytes curve = bytesFromHex("06072a850302022301");
+        CK_OBJECT_CLASS publicClass = CKO_PUBLIC_KEY, privateClass = CKO_PRIVATE_KEY;
+        CK_KEY_TYPE gost = CKK_GOSTR3410;
+        CK_MECHANISM gostGen{CKM_GOSTR3410_KEY_PAIR_GEN, nullptr, 0};
+        CK_ATTRIBUTE publicTemplate[] = {
+            {CKA_CLASS, &publicClass, sizeof(publicClass)},
+            {CKA_KEY_TYPE, &gost, sizeof(gost)},
+            {CKA_TOKEN, &no, sizeof(no)},
+            {CKA_VERIFY, &yes, sizeof(yes)},
+            {CKA_GOSTR3410_PARAMS, const_cast<unsigned char*>(curve.data()),
+             static_cast<CK_ULONG>(curve.size())}
+        };
+        CK_ATTRIBUTE privateTemplate[] = {
+            {CKA_CLASS, &privateClass, sizeof(privateClass)},
+            {CKA_KEY_TYPE, &gost, sizeof(gost)},
+            {CKA_TOKEN, &no, sizeof(no)},
+            {CKA_SIGN, &yes, sizeof(yes)}
+        };
+        CK_OBJECT_HANDLE publicKey = CK_INVALID_HANDLE, privateKey = CK_INVALID_HANDLE;
+        callOk("C_GenerateKeyPair", "GOST pair, private template silent about sensitivity",
+               [&] { return module->C_GenerateKeyPair(session, &gostGen,
+                           publicTemplate, 5, privateTemplate, 4, &publicKey, &privateKey); });
+        requireBooleanAttribute(module, session, privateKey, CKA_SENSITIVE, CK_TRUE);
+        requireBooleanAttribute(module, session, privateKey, CKA_EXTRACTABLE, CK_FALSE);
+        valueIsRefused(privateKey, "a generated GOST private key");
+        // The public half has no such attributes and must still be readable.
+        CK_ATTRIBUTE readPublic = {CKA_VALUE, buffer.data(),
+                                   static_cast<CK_ULONG>(buffer.size())};
+        callOk("C_GetAttributeValue", "CKA_VALUE of the public half",
+               [&] { return module->C_GetAttributeValue(session, publicKey, &readPublic, 1); });
+    }
+
+    // Import is untouched: the setting is about generated keys, and the whole
+    // point of importing a known value is being able to check it afterwards.
+    {
+        const Bytes known = bytesFromHex(
+            "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
+        const CK_OBJECT_HANDLE imported =
+            createGOSTSecret(module, session, CKK_KUZNECHIK, known, false, false);
+        if (attribute(module, session, imported, CKA_VALUE) != known)
+            fail("an imported key did not return the value it was given");
+    }
+
+    trace("REFERENCE", "RUTOKEN_FORCE_SENSITIVE fills in only what the template omitted");
+}
+
 // Behaviour that has nothing to do with the Rutoken profile and has to hold
 // with it switched off. Run against a token this mode initializes itself.
 static void verifyCoreBehaviour(const fs::path& modulePath)
@@ -3303,12 +3460,20 @@ static CK_OBJECT_HANDLE generateGOSTSecret(Module& module, CK_SESSION_HANDLE ses
 {
     CK_OBJECT_CLASS keyClass = CKO_SECRET_KEY;
     CK_BBOOL no = CK_FALSE;
+    CK_BBOOL yes = CK_TRUE;
     CK_MECHANISM mechanism{mechanismType, nullptr, 0};
+    // CKA_SENSITIVE and CKA_EXTRACTABLE are stated, not left out, because the
+    // check below reads the key back to see it is 256 bits. Under the profile
+    // RUTOKEN_FORCE_SENSITIVE would otherwise fill them in the other way and
+    // the key would rightly refuse - what the caller says still wins, and this
+    // caller says it wants to look.
     std::vector<CK_ATTRIBUTE> attributes = {
         {CKA_CLASS, &keyClass, sizeof(keyClass)},
         {CKA_KEY_TYPE, &type, sizeof(type)},
         {CKA_TOKEN, &no, sizeof(no)},
-        {CKA_PRIVATE, &no, sizeof(no)}
+        {CKA_PRIVATE, &no, sizeof(no)},
+        {CKA_SENSITIVE, &no, sizeof(no)},
+        {CKA_EXTRACTABLE, &yes, sizeof(yes)}
     };
     Bytes gostParameters;
     if (type == CKK_GOST28147)
@@ -4096,6 +4261,7 @@ static void verifyRutokenProfile(const fs::path& modulePath)
         {
             login(module, session, CKU_USER, userPin);
             verifyGOSTSymmetric(module, session);
+            verifyForcedSensitiveDefaults(module, session);
             logout(module, session, "CKU_USER");
         }
 

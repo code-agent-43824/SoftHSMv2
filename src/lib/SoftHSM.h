@@ -235,6 +235,12 @@ private:
 	std::list<CK_MECHANISM_TYPE> supportedMechanisms;
 	CK_ULONG nrSupportedMechanisms;
 
+	// RUTOKEN_FORCE_SENSITIVE: a generated key whose template says nothing
+	// about CKA_SENSITIVE or CKA_EXTRACTABLE is made unreadable, as a real
+	// device makes it. Defaults to the state of FAKE_RUTOKEN_ECP, so the
+	// ordinary SoftHSM mode is untouched unless it is switched on by name.
+	bool forceSensitive;
+
 	// The Rutoken profile's slot layout: index is the facade slot the caller
 	// sees, value is the SoftHSM slot standing behind it. Initialized tokens
 	// come first, oldest to newest, then the spare uninitialized token. Never

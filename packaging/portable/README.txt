@@ -223,6 +223,24 @@ scalar can be returned by C_GetAttributeValue for keys that are not sensitive
 and are extractable. Public key components are readable as required by the
 PKCS #11 object model.
 
+RUTOKEN_FORCE_SENSITIVE controls whether a generated key keeps its own
+material to itself. With FAKE_RUTOKEN_ECP on it defaults to on, because that is
+what the device does: C_GetAttributeValue for the private material answers
+CKR_ATTRIBUTE_SENSITIVE. With the profile off it defaults to off and ordinary
+SoftHSM behaviour is unchanged. Write it in the configuration file by name to
+override either default.
+
+While it is on, keys from C_GenerateKey and C_GenerateKeyPair get
+CKA_SENSITIVE = CK_TRUE and CKA_EXTRACTABLE = CK_FALSE - but only where the
+template did not say. Whatever the template states is kept, either way round,
+and asking for a readable key is not an error. The two attributes are handled
+separately, so a template that names only CKA_SENSITIVE = CK_FALSE keeps that
+and still gets CKA_EXTRACTABLE = CK_FALSE, which is enough on its own to keep
+the value in; name both to get a readable key. CKA_ALWAYS_SENSITIVE and
+CKA_NEVER_EXTRACTABLE follow the values that end up on the key. Keys imported
+with C_CreateObject are not affected, and softhsm2-export still exports a
+sensitive key, since that is what it is for.
+
 Read this next paragraph before storing anything you care about.
 
 A key whose template says nothing about CKA_SENSITIVE or CKA_EXTRACTABLE is
