@@ -62,6 +62,18 @@ files, the process working directory, and system configuration paths. Editing
 the one file above changes the mode for every portable module copy used by that
 operating-system account.
 
+Each token appears on its own slot. The profile shows fifteen readers, as the
+reference device does. Initialized tokens occupy the first of them, one each,
+oldest first by the moment the token was created; the spare uninitialized token
+SoftHSM always keeps takes the slot after them, so softhsm2-util --init-token
+--free works through the profile; the rest are empty readers. The order is the
+same on every run, and adding a token does not move the ones already placed.
+Removing a token from the middle does shift the ones after it - a slot is held
+by the order, not by a stored token-to-slot map - so an application that pins
+itself to slot 0 rather than enumerating slots can end up on a different token.
+Tokens created by releases before this one carry no creation time, are not
+given one, and sort ahead of the rest.
+
 Rutoken ECP compatibility profile
 ---------------------------------
 

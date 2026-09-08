@@ -111,6 +111,14 @@
 #include <unistd.h>
 #endif
 
+namespace
+{
+	// The reference device presents fifteen readers, and so does the profile.
+	// Read off the owner's device; the owner's decision of 13 August 2026 fixes
+	// it, so it does not change without a new reading.
+	const size_t FAKE_RUTOKEN_SLOT_COUNT = 15;
+}
+
 #ifdef HAVE_CXX11
 #include <condition_variable>
 #include <deque>
@@ -861,7 +869,21 @@ CK_RV SoftHSM::C_GetSlotList(CK_BBOOL tokenPresent, CK_SLOT_ID_PTR pSlotList, CK
 	if (fakeRutokenECP)
 	{
 		if (pulCount == NULL_PTR) return CKR_ARGUMENTS_BAD;
-		const CK_ULONG count = tokenPresent == CK_TRUE ? 1 : 15;
+		// SoftHSM keeps exactly one uninitialized token in reserve, and tops it
+		// back up in the size-query form of its own getSlotList. The profile
+		// used to answer without ever going there, so once that spare was
+		// filled no new one appeared until the library was reloaded. Ask for
+		// the size and throw it away: the rule for replenishing stays in one
+		// place, and the layout below then sees the fresh spare.
+		CK_ULONG replenish = 0;
+		(void)slotManager->getSlotList(objectStore, CK_FALSE, NULL_PTR, &replenish);
+
+		// Every slot the layout fills holds a token - the initialized ones and
+		// the one spare, which a real reader also reports as present. The rest
+		// are empty readers.
+		const CK_ULONG count = tokenPresent == CK_TRUE ?
+			static_cast<CK_ULONG>(fakeRutokenLayout().size()) :
+			static_cast<CK_ULONG>(FAKE_RUTOKEN_SLOT_COUNT);
 		if (pSlotList == NULL_PTR) { *pulCount = count; return CKR_OK; }
 		if (*pulCount < count) { *pulCount = count; return CKR_BUFFER_TOO_SMALL; }
 		for (CK_ULONG i = 0; i < count; ++i) pSlotList[i] = i;
@@ -879,17 +901,31 @@ CK_RV SoftHSM::C_GetSlotInfo(CK_SLOT_ID slotID, CK_SLOT_INFO_PTR pInfo)
 	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;
 	if (fakeRutokenECP)
 	{
-		if (slotID >= 15) return CKR_SLOT_ID_INVALID;
+		if (slotID >= FAKE_RUTOKEN_SLOT_COUNT) return CKR_SLOT_ID_INVALID;
 		if (pInfo == NULL_PTR) return CKR_ARGUMENTS_BAD;
 		memset(pInfo->slotDescription, ' ', sizeof(pInfo->slotDescription));
 		memset(pInfo->manufacturerID, ' ', sizeof(pInfo->manufacturerID));
-		if (slotID == 0)
+		const bool occupied = slotID < fakeRutokenLayout().size();
+		if (occupied)
 		{
-			memcpy(pInfo->slotDescription, "Aktiv Rutoken ECP 0", 19);
+			// "Aktiv Rutoken ECP 0" is what the reference device reports, and
+			// the trailing number is its reader index. Only one reader was ever
+			// read, so the numbering of the rest is inferred from that one, not
+			// measured. An occupied slot with no description at all would be
+			// plainly wrong, which is why this is filled in rather than left.
+			char description[64];
+			const int written = snprintf(description, sizeof(description),
+			                             "Aktiv Rutoken ECP %lu", (unsigned long)slotID);
+			if (written > 0)
+			{
+				size_t length = (size_t)written;
+				if (length > sizeof(pInfo->slotDescription)) length = sizeof(pInfo->slotDescription);
+				memcpy(pInfo->slotDescription, description, length);
+			}
 			memcpy(pInfo->manufacturerID, "Aktiv Co.", 9);
 		}
 		pInfo->flags = CKF_HW_SLOT | CKF_REMOVABLE_DEVICE;
-		if (slotID == 0) pInfo->flags |= CKF_TOKEN_PRESENT;
+		if (occupied) pInfo->flags |= CKF_TOKEN_PRESENT;
 		pInfo->hardwareVersion.major = 60;
 		pInfo->hardwareVersion.minor = 1;
 		pInfo->firmwareVersion.major = 30;
@@ -919,9 +955,9 @@ CK_RV SoftHSM::C_GetSlotInfo(CK_SLOT_ID slotID, CK_SLOT_INFO_PTR pInfo)
 CK_RV SoftHSM::C_GetTokenInfo(CK_SLOT_ID slotID, CK_TOKEN_INFO_PTR pInfo)
 {
 	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;
-	if (fakeRutokenECP && slotID != 0)
+	if (fakeRutokenECP && slotID >= fakeRutokenLayout().size())
 	{
-		return slotID < 15 ? CKR_TOKEN_NOT_PRESENT : CKR_SLOT_ID_INVALID;
+		return slotID < FAKE_RUTOKEN_SLOT_COUNT ? CKR_TOKEN_NOT_PRESENT : CKR_SLOT_ID_INVALID;
 	}
 
 	Slot* slot = fakeRutokenECP ? fakeRutokenSlot(slotID) : slotManager->getSlot(slotID);
@@ -1164,7 +1200,17 @@ CK_RV SoftHSM::C_EX_GetTokenName(CK_SESSION_HANDLE hSession, CK_CHAR_PTR pLabel,
 	// caller reads there are always the same string, including the placeholder
 	// the profile reports for a token that was never labelled.
 	CK_TOKEN_INFO tokenInfo;
-	rv = C_GetTokenInfo(fakeRutokenECP ? 0 : sessionInfo.slotID, &tokenInfo);
+	// session->getInfo reports the SoftHSM slot behind the session, not the
+	// facade slot the caller opened, so it has to be mapped back. Asking about
+	// slot 0 regardless - which is what this did - named the wrong token as
+	// soon as the profile carried more than one.
+	CK_SLOT_ID slotID = sessionInfo.slotID;
+	if (fakeRutokenECP)
+	{
+		slotID = fakeRutokenFacadeSlotID(slotID);
+		if (slotID == CK_UNAVAILABLE_INFORMATION) return CKR_TOKEN_NOT_PRESENT;
+	}
+	rv = C_GetTokenInfo(slotID, &tokenInfo);
 	if (rv != CKR_OK) return rv;
 
 	// CK_TOKEN_INFO.label is a fixed 32 bytes padded with spaces; the name is
@@ -1513,21 +1559,105 @@ void SoftHSM::prepareFakeRutokenMechanisms()
 	nrSupportedMechanisms = supportedMechanisms.size();
 }
 
-CK_SLOT_ID SoftHSM::fakeRutokenBackingSlotID()
+namespace
 {
+	// One token as the layout sees it. SoftHSM's own slot ID is derived from
+	// the token serial, which comes from a random UUID, so it says nothing
+	// about age and cannot be the order.
+	struct FakeRutokenPlacement
+	{
+		ByteString created;  // big-endian microseconds since the Unix epoch
+		bool hasCreated;     // false for a token stored before the attribute existed
+		ByteString serial;
+		CK_SLOT_ID backingSlotID;
+	};
+
+	// ByteString carries no ordering of its own, and this order has to be the
+	// same on every run and every platform: plain lexicographic. The creation
+	// stamp is big-endian, so comparing its bytes compares the times.
+	bool bytesAreLower(const ByteString& left, const ByteString& right)
+	{
+		const size_t shared = left.size() < right.size() ? left.size() : right.size();
+		const int difference = shared == 0 ? 0 :
+			memcmp(left.const_byte_str(), right.const_byte_str(), shared);
+		if (difference != 0) return difference < 0;
+		return left.size() < right.size();
+	}
+
+	// Oldest first. A token with no creation time sorts before every token
+	// that has one: it was written by an earlier build, so it is older than
+	// anything this build could have stamped. Serial breaks a tie, and the
+	// backing slot ID breaks that, so the order is total and repeats exactly
+	// from one run to the next.
+	bool olderFirst(const FakeRutokenPlacement& left, const FakeRutokenPlacement& right)
+	{
+		if (left.hasCreated != right.hasCreated) return !left.hasCreated;
+		if (left.hasCreated && left.created != right.created)
+			return bytesAreLower(left.created, right.created);
+		if (left.serial != right.serial) return bytesAreLower(left.serial, right.serial);
+		return left.backingSlotID < right.backingSlotID;
+	}
+}
+
+std::vector<CK_SLOT_ID> SoftHSM::fakeRutokenLayout()
+{
+	std::vector<FakeRutokenPlacement> initialized;
+	CK_SLOT_ID spare = CK_UNAVAILABLE_INFORMATION;
+	bool haveSpare = false;
+
 	SlotMap slots = slotManager->getSlots();
 	for (SlotMap::iterator it = slots.begin(); it != slots.end(); ++it)
 	{
 		Token* token = it->second->getToken();
-		if (token != NULL && token->isInitialized()) return it->first;
+		if (token == NULL) continue;
+		if (!token->isInitialized())
+		{
+			// SoftHSM keeps exactly one of these. Showing it is what makes
+			// softhsm2-util --init-token --free work through the profile, and
+			// it is the event C_WaitForSlotEvent has to report.
+			if (!haveSpare) { spare = it->first; haveSpare = true; }
+			continue;
+		}
+
+		FakeRutokenPlacement placement;
+		placement.hasCreated = token->getCreationTime(placement.created);
+		if (!token->getSerial(placement.serial)) placement.serial.wipe();
+		placement.backingSlotID = it->first;
+		initialized.push_back(placement);
 	}
-	return slots.empty() ? CK_UNAVAILABLE_INFORMATION : slots.begin()->first;
+
+	std::sort(initialized.begin(), initialized.end(), olderFirst);
+
+	std::vector<CK_SLOT_ID> layout;
+	for (size_t i = 0; i < initialized.size() && layout.size() < FAKE_RUTOKEN_SLOT_COUNT; ++i)
+	{
+		layout.push_back(initialized[i].backingSlotID);
+	}
+	if (haveSpare && layout.size() < FAKE_RUTOKEN_SLOT_COUNT) layout.push_back(spare);
+
+	return layout;
+}
+
+CK_SLOT_ID SoftHSM::fakeRutokenBackingSlotID(CK_SLOT_ID externalSlotID)
+{
+	const std::vector<CK_SLOT_ID> layout = fakeRutokenLayout();
+	if (externalSlotID >= layout.size()) return CK_UNAVAILABLE_INFORMATION;
+	return layout[externalSlotID];
+}
+
+CK_SLOT_ID SoftHSM::fakeRutokenFacadeSlotID(CK_SLOT_ID backingSlotID)
+{
+	const std::vector<CK_SLOT_ID> layout = fakeRutokenLayout();
+	for (size_t i = 0; i < layout.size(); ++i)
+	{
+		if (layout[i] == backingSlotID) return static_cast<CK_SLOT_ID>(i);
+	}
+	return CK_UNAVAILABLE_INFORMATION;
 }
 
 Slot* SoftHSM::fakeRutokenSlot(CK_SLOT_ID externalSlotID)
 {
-	if (externalSlotID != 0) return NULL;
-	const CK_SLOT_ID backing = fakeRutokenBackingSlotID();
+	const CK_SLOT_ID backing = fakeRutokenBackingSlotID(externalSlotID);
 	if (backing == CK_UNAVAILABLE_INFORMATION) return NULL;
 	return slotManager->getSlot(backing);
 }
@@ -1538,8 +1668,8 @@ CK_RV SoftHSM::C_GetMechanismList(CK_SLOT_ID slotID, CK_MECHANISM_TYPE_PTR pMech
 	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;
 	if (pulCount == NULL_PTR) return CKR_ARGUMENTS_BAD;
 
-	if (fakeRutokenECP && slotID >= 15) return CKR_SLOT_ID_INVALID;
-	Slot* slot = fakeRutokenECP ? fakeRutokenSlot(0) : slotManager->getSlot(slotID);
+	if (fakeRutokenECP && slotID >= FAKE_RUTOKEN_SLOT_COUNT) return CKR_SLOT_ID_INVALID;
+	Slot* slot = fakeRutokenECP ? fakeRutokenSlot(slotID) : slotManager->getSlot(slotID);
 	if (slot == NULL)
 	{
 		return CKR_SLOT_ID_INVALID;
@@ -1595,8 +1725,8 @@ CK_RV SoftHSM::C_GetMechanismInfo(CK_SLOT_ID slotID, CK_MECHANISM_TYPE type, CK_
 	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;
 	if (pInfo == NULL_PTR) return CKR_ARGUMENTS_BAD;
 
-	if (fakeRutokenECP && slotID >= 15) return CKR_SLOT_ID_INVALID;
-	Slot* slot = fakeRutokenECP ? fakeRutokenSlot(0) : slotManager->getSlot(slotID);
+	if (fakeRutokenECP && slotID >= FAKE_RUTOKEN_SLOT_COUNT) return CKR_SLOT_ID_INVALID;
+	Slot* slot = fakeRutokenECP ? fakeRutokenSlot(slotID) : slotManager->getSlot(slotID);
 	if (slot == NULL)
 	{
 		return CKR_SLOT_ID_INVALID;
@@ -2150,9 +2280,9 @@ CK_RV SoftHSM::C_GetMechanismInfo(CK_SLOT_ID slotID, CK_MECHANISM_TYPE type, CK_
 CK_RV SoftHSM::C_InitToken(CK_SLOT_ID slotID, CK_UTF8CHAR_PTR pPin, CK_ULONG ulPinLen, CK_UTF8CHAR_PTR pLabel)
 {
 	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;
-	if (fakeRutokenECP && slotID != 0)
-		return slotID < 15 ? CKR_TOKEN_NOT_PRESENT : CKR_SLOT_ID_INVALID;
-	const CK_SLOT_ID backingSlotID = fakeRutokenECP ? fakeRutokenBackingSlotID() : slotID;
+	if (fakeRutokenECP && slotID >= fakeRutokenLayout().size())
+		return slotID < FAKE_RUTOKEN_SLOT_COUNT ? CKR_TOKEN_NOT_PRESENT : CKR_SLOT_ID_INVALID;
+	const CK_SLOT_ID backingSlotID = fakeRutokenECP ? fakeRutokenBackingSlotID(slotID) : slotID;
 
 	Slot* slot = fakeRutokenECP ? fakeRutokenSlot(slotID) : slotManager->getSlot(slotID);
 	if (slot == NULL)
@@ -2262,9 +2392,9 @@ CK_RV SoftHSM::C_SetPIN(CK_SESSION_HANDLE hSession, CK_UTF8CHAR_PTR pOldPin, CK_
 CK_RV SoftHSM::C_OpenSession(CK_SLOT_ID slotID, CK_FLAGS flags, CK_VOID_PTR pApplication, CK_NOTIFY notify, CK_SESSION_HANDLE_PTR phSession)
 {
 	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;
-	if (fakeRutokenECP && slotID != 0)
-		return slotID < 15 ? CKR_TOKEN_NOT_PRESENT : CKR_SLOT_ID_INVALID;
-	const CK_SLOT_ID backingSlotID = fakeRutokenECP ? fakeRutokenBackingSlotID() : slotID;
+	if (fakeRutokenECP && slotID >= fakeRutokenLayout().size())
+		return slotID < FAKE_RUTOKEN_SLOT_COUNT ? CKR_TOKEN_NOT_PRESENT : CKR_SLOT_ID_INVALID;
+	const CK_SLOT_ID backingSlotID = fakeRutokenECP ? fakeRutokenBackingSlotID(slotID) : slotID;
 
 	Slot* slot = fakeRutokenECP ? fakeRutokenSlot(slotID) : slotManager->getSlot(slotID);
 
@@ -2304,9 +2434,9 @@ CK_RV SoftHSM::C_CloseSession(CK_SESSION_HANDLE hSession)
 CK_RV SoftHSM::C_CloseAllSessions(CK_SLOT_ID slotID)
 {
 	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;
-	if (fakeRutokenECP && slotID != 0)
-		return slotID < 15 ? CKR_TOKEN_NOT_PRESENT : CKR_SLOT_ID_INVALID;
-	const CK_SLOT_ID backingSlotID = fakeRutokenECP ? fakeRutokenBackingSlotID() : slotID;
+	if (fakeRutokenECP && slotID >= fakeRutokenLayout().size())
+		return slotID < FAKE_RUTOKEN_SLOT_COUNT ? CKR_TOKEN_NOT_PRESENT : CKR_SLOT_ID_INVALID;
+	const CK_SLOT_ID backingSlotID = fakeRutokenECP ? fakeRutokenBackingSlotID(slotID) : slotID;
 
 	// Get the slot
 	Slot* slot = fakeRutokenECP ? fakeRutokenSlot(slotID) : slotManager->getSlot(slotID);
@@ -2339,7 +2469,14 @@ CK_RV SoftHSM::C_GetSessionInfo(CK_SESSION_HANDLE hSession, CK_SESSION_INFO_PTR 
 	if (session == NULL) return CKR_SESSION_HANDLE_INVALID;
 
 	CK_RV rv = session->getInfo(pInfo);
-	if (rv == CKR_OK && fakeRutokenECP && pInfo != NULL_PTR) pInfo->slotID = 0;
+	if (rv == CKR_OK && fakeRutokenECP && pInfo != NULL_PTR)
+	{
+		// The session was opened on a facade slot and has to be reported on
+		// that one, not on the SoftHSM slot standing behind it - and not on
+		// slot 0, which is where this used to send every session.
+		const CK_SLOT_ID facade = fakeRutokenFacadeSlotID(pInfo->slotID);
+		if (facade != CK_UNAVAILABLE_INFORMATION) pInfo->slotID = facade;
+	}
 	return rv;
 }
 
@@ -7500,6 +7637,7 @@ CK_RV SoftHSM::C_DecryptVerifyUpdate(CK_SESSION_HANDLE hSession, CK_BYTE_PTR /*p
 }
 
 // Generate a secret key or a domain parameter set using the specified mechanism
+
 CK_RV SoftHSM::C_GenerateKey(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMechanism, CK_ATTRIBUTE_PTR pTemplate, CK_ULONG ulCount, CK_OBJECT_HANDLE_PTR phKey)
 {
 	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;

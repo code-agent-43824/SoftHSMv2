@@ -74,6 +74,12 @@ public:
 	// Retrieve the token serial
 	virtual bool getTokenSerial(ByteString& serial) = 0;
 
+	// Retrieve when the token was created: eight bytes, big-endian
+	// microseconds since the Unix epoch. False when the token carries no
+	// creation time - it was written by a build from before the attribute
+	// existed, and is not given one now.
+	virtual bool getTokenCreationTime(ByteString& created) = 0;
+
 	// Retrieve objects
 	virtual std::set<OSObject*> getObjects() = 0;
 

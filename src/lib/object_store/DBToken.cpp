@@ -52,8 +52,47 @@
 #include <map>
 #include <list>
 #include <cstdio>
+#include <stdint.h>
 #include <sys/stat.h>
 #include <errno.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <sys/time.h>
+#endif
+
+namespace
+{
+	// Microseconds since the Unix epoch, eight bytes big-endian. Written into
+	// the token object once, at creation, as the key the Rutoken profile orders
+	// its slots by. Bytes rather than a CK_ULONG because CK_ULONG is 32 bits on
+	// 32-bit Windows and microseconds do not fit; big-endian so the comparison
+	// is a plain byte comparison on every platform.
+	ByteString tokenCreationStamp()
+	{
+		uint64_t microseconds;
+#ifdef _WIN32
+		FILETIME fileTime;
+		GetSystemTimeAsFileTime(&fileTime);
+		// FILETIME counts 100-nanosecond ticks from 1601-01-01.
+		const uint64_t ticks = ((uint64_t)fileTime.dwHighDateTime << 32) |
+		                       (uint64_t)fileTime.dwLowDateTime;
+		microseconds = (ticks - UINT64_C(116444736000000000)) / 10;
+#else
+		struct timeval now;
+		gettimeofday(&now, NULL);
+		microseconds = (uint64_t)now.tv_sec * UINT64_C(1000000) + (uint64_t)now.tv_usec;
+#endif
+		ByteString stamp;
+		stamp.resize(8);
+		for (size_t i = 0; i < 8; ++i)
+		{
+			stamp[i] = (unsigned char)((microseconds >> (8 * (7 - i))) & 0xFF);
+		}
+		return stamp;
+	}
+}
+
 
 #ifdef _WIN32
 #include <direct.h>
@@ -146,9 +185,13 @@ DBToken::DBToken(const std::string &baseDir, const std::string &tokenName, int u
 	OSAttribute tokenLabel(label);
 	OSAttribute tokenSerial(serial);
 	OSAttribute tokenFlags(flags);
+	// Stamped once, here, so the database backend orders identically to the
+	// file backend. See OSToken::createToken.
+	OSAttribute tokenCreated(tokenCreationStamp());
 
 	if (!tokenObject.setAttribute(CKA_OS_TOKENLABEL, tokenLabel) ||
 		!tokenObject.setAttribute(CKA_OS_TOKENSERIAL, tokenSerial) ||
+		!tokenObject.setAttribute(CKA_OS_TOKENCREATED, tokenCreated) ||
 		!tokenObject.setAttribute(CKA_OS_TOKENFLAGS, tokenFlags))
 	{
 		_connection->close();
@@ -538,6 +581,39 @@ bool DBToken::getTokenSerial(ByteString& serial)
 
 	tokenObject.commitTransaction();
 	serial = tokenObject.getAttribute(CKA_OS_TOKENSERIAL).getByteStringValue();
+	return true;
+}
+
+// Retrieve when the token was created
+bool DBToken::getTokenCreationTime(ByteString& created)
+{
+	if (_connection == NULL) return false;
+
+	DBObject tokenObject(_connection);
+
+	if (!tokenObject.startTransaction(DBObject::ReadOnly))
+	{
+		ERROR_MSG("Unable to start a transaction for getting the TOKENCREATED from token database at \"%s\"", _connection->dbpath().c_str());
+		return false;
+	}
+
+	if (!tokenObject.find(DBTOKEN_OBJECT_TOKENINFO))
+	{
+		ERROR_MSG("Token object not found in token database at \"%s\"", _connection->dbpath().c_str());
+		tokenObject.abortTransaction();
+		return false;
+	}
+
+	if (!tokenObject.attributeExists(CKA_OS_TOKENCREATED))
+	{
+		// Written by a build from before this attribute existed. Not an error,
+		// and nothing is added to the stored token.
+		tokenObject.abortTransaction();
+		return false;
+	}
+
+	tokenObject.commitTransaction();
+	created = tokenObject.getAttribute(CKA_OS_TOKENCREATED).getByteStringValue();
 	return true;
 }
 

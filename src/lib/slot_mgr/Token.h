@@ -83,6 +83,13 @@ public:
 	// Retrieve token information for the token
 	CK_RV getTokenInfo(CK_TOKEN_INFO_PTR info);
 
+	// How the Rutoken profile orders tokens across its slots: when the token
+	// was created, as big-endian microseconds since the Unix epoch, and its
+	// serial to break a tie. False from the first when the stored token carries
+	// no creation time - written by a build from before the attribute existed.
+	bool getCreationTime(ByteString& created);
+	bool getSerial(ByteString& serial);
+
 	// Create object
 	OSObject *createObject();
 

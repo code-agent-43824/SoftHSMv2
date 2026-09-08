@@ -88,6 +88,9 @@ public:
 	// Retrieve the token serial
 	virtual bool getTokenSerial(ByteString& serial);
 
+	// Retrieve when the token was created (big-endian microseconds)
+	virtual bool getTokenCreationTime(ByteString& created);
+
 	// Retrieve objects
 	virtual std::set<OSObject*> getObjects();
 

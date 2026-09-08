@@ -45,6 +45,18 @@
 #define CKA_OS_TOKENFLAGS	(CKA_VENDOR_SOFTHSM + 3)
 #define CKA_OS_SOPIN		(CKA_VENDOR_SOFTHSM + 4)
 #define CKA_OS_USERPIN		(CKA_VENDOR_SOFTHSM + 5)
+// When the token object was created: microseconds since the Unix epoch, eight
+// bytes big-endian, so it compares as plain bytes and does not depend on the
+// width of CK_ULONG. Written once, when the token is created, and never
+// updated - re-initialising a token keeps the object, so it keeps its creation
+// time. The Rutoken profile orders tokens across its slots by this, so that
+// adding a token does not move the ones already placed. Microseconds rather
+// than seconds because two tokens made by one script land in the same second,
+// and then the order would fall through to the serial, which comes from a
+// random UUID - a new token could displace one already placed. Tokens written
+// by builds before this attribute existed do not carry it and are not given
+// one; they sort as the oldest.
+#define CKA_OS_TOKENCREATED	(CKA_VENDOR_SOFTHSM + 6)
 
 #endif // !_SOFTHSM_V2_OSATTRIBUTES_H
 

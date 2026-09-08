@@ -458,6 +458,22 @@ CK_RV Token::createToken(ObjectStore* objectStore, ByteString& soPIN, CK_UTF8CHA
 	return CKR_OK;
 }
 
+// When the token was created, for the Rutoken profile's slot order
+bool Token::getCreationTime(ByteString& created)
+{
+	if (token == NULL) return false;
+
+	return token->getTokenCreationTime(created);
+}
+
+// The token serial, the tiebreak of that same order
+bool Token::getSerial(ByteString& serial)
+{
+	if (token == NULL) return false;
+
+	return token->getTokenSerial(serial);
+}
+
 // Retrieve token information for the token
 CK_RV Token::getTokenInfo(CK_TOKEN_INFO_PTR info)
 {

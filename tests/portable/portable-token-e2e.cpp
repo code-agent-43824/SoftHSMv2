@@ -4078,6 +4078,201 @@ static void verifyRutokenProfile(const fs::path& modulePath)
     std::cout << "Rutoken ECP compatibility profile verified\n";
 }
 
+// One reading of the profile's slot layout: which facade slot carries which
+// token label, and where the spare uninitialized token sits.
+struct SlotLayout
+{
+    std::vector<std::string> labels;   // one per occupied slot, in slot order
+    std::vector<CK_SLOT_ID> present;   // what C_GetSlotList(tokenPresent) returned
+};
+
+static SlotLayout readSlotLayout(Module& module)
+{
+    SlotLayout layout;
+    const std::vector<CK_SLOT_ID> all = slots(module, CK_FALSE);
+    if (all.size() != 15)
+        fail("the profile must always show fifteen readers, saw " + std::to_string(all.size()));
+    layout.present = slots(module, CK_TRUE);
+
+    for (size_t i = 0; i < all.size(); ++i)
+    {
+        CK_SLOT_INFO info{};
+        callOk("C_GetSlotInfo", "slotID=" + std::to_string(all[i]),
+               [&] { return module->C_GetSlotInfo(all[i], &info); });
+        const bool occupied = (info.flags & CKF_TOKEN_PRESENT) != 0;
+        const bool listed = std::find(layout.present.begin(), layout.present.end(),
+                                      all[i]) != layout.present.end();
+        if (occupied != listed)
+            fail("slot " + std::to_string(all[i]) + " disagrees with itself: CKF_TOKEN_PRESENT " +
+                 (occupied ? "set" : "clear") + " but C_GetSlotList(tokenPresent) " +
+                 (listed ? "listed" : "did not list") + " it");
+        if (!occupied)
+        {
+            // An empty reader answers about no token at all.
+            CK_TOKEN_INFO ignored{};
+            check(invoke("C_GetTokenInfo", "slotID=" + std::to_string(all[i]) + " (empty reader)",
+                         [&] { return module->C_GetTokenInfo(all[i], &ignored); }),
+                  CKR_TOKEN_NOT_PRESENT, "C_GetTokenInfo(empty reader)");
+            continue;
+        }
+        if (layout.labels.size() != i)
+            fail("slot " + std::to_string(all[i]) + " holds a token but slot " +
+                 std::to_string(i - 1) + " does not: the occupied slots must be contiguous "
+                 "from zero");
+        const CK_TOKEN_INFO token = tokenInfo(module, all[i]);
+        layout.labels.push_back(paddedText(token.label, sizeof(token.label)));
+    }
+
+    // Every reader beyond the fifteenth is not a reader at all.
+    CK_SLOT_INFO beyond{};
+    check(invoke("C_GetSlotInfo", "slotID=15 (past the last reader)",
+                 [&] { return module->C_GetSlotInfo(15, &beyond); }),
+          CKR_SLOT_ID_INVALID, "C_GetSlotInfo(slot 15)");
+    CK_TOKEN_INFO beyondToken{};
+    check(invoke("C_GetTokenInfo", "slotID=15 (past the last reader)",
+                 [&] { return module->C_GetTokenInfo(15, &beyondToken); }),
+          CKR_SLOT_ID_INVALID, "C_GetTokenInfo(slot 15)");
+
+    trace("LAYOUT", "occupied slots 0.." + std::to_string(layout.labels.size() - 1) +
+                    ", last of them \"" + layout.labels.back() + "\"");
+    return layout;
+}
+
+// Before this, the profile showed one slot and picked the token behind it by
+// walking SoftHSM's slots in ascending order and taking the first initialized
+// one. That number comes from the token serial, which comes from a random
+// UUID, so which token answered was effectively a coin toss: a second token was
+// unreachable, adding one could silently swap the one in use, and the spare
+// uninitialized token was hidden, which is what stopped --init-token --free
+// from working through the profile.
+static void verifyMultipleTokens(const fs::path& modulePath)
+{
+    const std::string soPin = environment("P11_TEST_SO_PIN", true);
+    const std::vector<std::string> wanted = {"layout one", "layout two", "layout three"};
+
+    std::vector<std::string> placed;
+    {
+        Module module(modulePath);
+        SlotLayout layout = readSlotLayout(module);
+        if (layout.labels.size() != 1)
+            fail("this scenario wants a store holding nothing but the spare token; it has " +
+                 std::to_string(layout.labels.size()) + " occupied slots");
+
+        for (size_t i = 0; i < wanted.size(); ++i)
+        {
+            // The spare always sits at the end of the occupied run, and
+            // initializing it is exactly what --init-token --free does.
+            const CK_SLOT_ID spare = static_cast<CK_SLOT_ID>(layout.labels.size() - 1);
+            std::array<CK_UTF8CHAR, 32> label{};
+            label.fill(' ');
+            std::copy(wanted[i].begin(), wanted[i].end(), label.begin());
+            callOk("C_InitToken", "slotID=" + std::to_string(spare) + " (the spare), label=\"" +
+                   wanted[i] + "\"",
+                   [&] { return module->C_InitToken(spare,
+                               reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(soPin.data())),
+                               static_cast<CK_ULONG>(soPin.size()), label.data()); });
+            placed.push_back(wanted[i]);
+
+            layout = readSlotLayout(module);
+            // The new token takes the slot the spare was on, a fresh spare
+            // appears after it, and nothing already placed has moved.
+            if (layout.labels.size() != placed.size() + 1)
+                fail("after initializing " + std::to_string(placed.size()) + " tokens the profile "
+                     "shows " + std::to_string(layout.labels.size()) + " occupied slots");
+            for (size_t k = 0; k < placed.size(); ++k)
+                if (layout.labels[k] != placed[k])
+                    fail("slot " + std::to_string(k) + " moved: expected \"" + placed[k] +
+                         "\", found \"" + layout.labels[k] + "\"");
+            trace("LAYOUT", "\"" + wanted[i] + "\" took slot " + std::to_string(placed.size() - 1) +
+                            " and moved nothing before it");
+        }
+    }
+
+    // A separate load of the library, so the order cannot be an artefact of
+    // anything held in memory.
+    {
+        Module module(modulePath);
+        const SlotLayout layout = readSlotLayout(module);
+        if (layout.labels.size() != placed.size() + 1)
+            fail("a fresh load sees a different number of tokens");
+        for (size_t k = 0; k < placed.size(); ++k)
+            if (layout.labels[k] != placed[k])
+                fail("a fresh load put \"" + layout.labels[k] + "\" on slot " + std::to_string(k) +
+                     " where \"" + placed[k] + "\" stood before");
+        trace("LAYOUT", "a fresh library load reproduced the same layout");
+
+        // The spare is present but uninitialized: that is what a reader with a
+        // blank token looks like, and it is the slot --init-token --free takes.
+        const CK_SLOT_ID spare = static_cast<CK_SLOT_ID>(placed.size());
+        const CK_TOKEN_INFO spareToken = tokenInfo(module, spare);
+        if ((spareToken.flags & CKF_TOKEN_INITIALIZED) != 0)
+            fail("the slot after the last token should hold the uninitialized spare");
+        trace("LAYOUT", "the spare uninitialized token is present on slot " + std::to_string(spare));
+
+        // Every operation has to answer about the token behind the slot it was
+        // asked on, not about slot 0.
+        auto ex = reinterpret_cast<CK_C_EX_GetFunctionListExtended>(
+            module.symbol("C_EX_GetFunctionListExtended"));
+        if (ex == nullptr) fail("C_EX_GetFunctionListExtended was not exported");
+        CK_FUNCTION_LIST_EXTENDED_PTR extended = nullptr;
+        callOk("C_EX_GetFunctionListExtended", "ppFunctionList=&extendedList",
+               [&] { return ex(&extended); });
+
+        for (size_t k = 0; k < placed.size(); ++k)
+        {
+            const CK_SLOT_ID slot = static_cast<CK_SLOT_ID>(k);
+            const CK_TOKEN_INFO token = tokenInfo(module, slot);
+            if (paddedText(token.label, sizeof(token.label)) != placed[k])
+                fail("C_GetTokenInfo on slot " + std::to_string(slot) + " answered about \"" +
+                     paddedText(token.label, sizeof(token.label)) + "\"");
+
+            CK_ULONG mechanismCount = 0;
+            callOk("C_GetMechanismList", "slotID=" + std::to_string(slot),
+                   [&] { return module->C_GetMechanismList(slot, nullptr, &mechanismCount); });
+            if (mechanismCount != 70)
+                fail("slot " + std::to_string(slot) + " advertises " +
+                     std::to_string(mechanismCount) + " mechanisms, not the device's 70");
+
+            CK_TOKEN_INFO_EXTENDED info{};
+            info.ulSizeofThisStructure = sizeof(info);
+            callOk("C_EX_GetTokenInfoExtended", "slotID=" + std::to_string(slot),
+                   [&] { return extended->C_EX_GetTokenInfoExtended(slot, &info); });
+            if (info.ulTokenType != TOKEN_TYPE_RUTOKEN_ECP)
+                fail("C_EX_GetTokenInfoExtended on slot " + std::to_string(slot) +
+                     " does not report a Rutoken ECP");
+
+            CK_SESSION_HANDLE session = CK_INVALID_HANDLE;
+            callOk("C_OpenSession", "slotID=" + std::to_string(slot),
+                   [&] { return module->C_OpenSession(slot, CKF_SERIAL_SESSION | CKF_RW_SESSION,
+                                                      nullptr, nullptr, &session); });
+            CK_SESSION_INFO sessionInfo{};
+            callOk("C_GetSessionInfo", "hSession on slot " + std::to_string(slot),
+                   [&] { return module->C_GetSessionInfo(session, &sessionInfo); });
+            if (sessionInfo.slotID != slot)
+                fail("a session opened on slot " + std::to_string(slot) + " reports slot " +
+                     std::to_string(sessionInfo.slotID));
+
+            // C_EX_GetTokenName answers from the session, so it is the sharpest
+            // test that the session carries its own token and not slot 0's.
+            std::vector<CK_CHAR> name(64);
+            CK_ULONG nameLength = static_cast<CK_ULONG>(name.size());
+            callOk("C_EX_GetTokenName", "hSession on slot " + std::to_string(slot),
+                   [&] { return extended->C_EX_GetTokenName(session, name.data(), &nameLength); });
+            const std::string reported(name.begin(), name.begin() + nameLength);
+            if (reported != placed[k])
+                fail("C_EX_GetTokenName on slot " + std::to_string(slot) + " said \"" + reported +
+                     "\" where the token is \"" + placed[k] + "\"");
+
+            closeSession(module, session);
+            trace("LAYOUT", "slot " + std::to_string(slot) + " addressed its own token \"" +
+                            placed[k] + "\" through token info, mechanisms, the extension and a "
+                            "session");
+        }
+    }
+
+    std::cout << "the profile lays tokens out across its slots, one each, stably\n";
+}
+
 // The packaged README promises the token directory appears beside the per-user
 // configuration.  The module already kept that promise - ObjectStore makes the
 // directory when it opens - and this pins that half on every platform, since
@@ -4124,6 +4319,11 @@ int main(int argc, char** argv)
             verifyFirstRunCreatesTokenDirectory(fs::absolute(argv[2]), argv[3]);
             return 0;
         }
+        if (argc == 3 && std::string(argv[1]) == "multi-token")
+        {
+            verifyMultipleTokens(fs::absolute(argv[2]));
+            return 0;
+        }
         if (argc == 3 && std::string(argv[1]) == "rutoken-profile")
         {
             verifyRutokenProfile(fs::absolute(argv[2]));
@@ -4153,6 +4353,7 @@ int main(int argc, char** argv)
         std::cerr << "usage:\n"
                   << "  portable-token-e2e probe <module>\n"
                   << "  portable-token-e2e first-run <module> <expected-token-directory>\n"
+                  << "  portable-token-e2e multi-token <module>\n"
                   << "  portable-token-e2e rutoken-profile <module>\n"
                   << "  portable-token-e2e prepare <module> <work>\n"
                   << "  portable-token-e2e finish <module> <work> <leaf.der> <ca.der> <payload> <cms.der>\n"

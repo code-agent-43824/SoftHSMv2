@@ -100,6 +100,17 @@ jobs:
           ./portable-token-e2e first-run \
             "$GITHUB_WORKSPACE/portable-product/libsofthsm2.so" \
             "$HOME/softhsm/tokens"
+      # Several tokens, each on its own facade slot. Needs a store holding
+      # nothing but the spare, so it gets a home of its own.
+      - name: Verify the profile lays tokens out across its slots
+        run: |
+          export HOME="$GITHUB_WORKSPACE/multi-token-home"
+          mkdir -p "$HOME"
+          module="$GITHUB_WORKSPACE/portable-product/libsofthsm2.so"
+          ./portable-token-e2e probe "$module"
+          perl -0pi -e 's/FAKE_RUTOKEN_ECP = false/FAKE_RUTOKEN_ECP = true/' \
+            "$HOME/softhsm/softhsm.conf"
+          P11_TEST_SO_PIN=12345678 ./portable-token-e2e multi-token "$module"
       - name: Verify the Rutoken ECP compatibility profile
         run: |
           export HOME="$GITHUB_WORKSPACE/profile-gate-home"

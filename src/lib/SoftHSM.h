@@ -235,7 +235,14 @@ private:
 	std::list<CK_MECHANISM_TYPE> supportedMechanisms;
 	CK_ULONG nrSupportedMechanisms;
 
-	CK_SLOT_ID fakeRutokenBackingSlotID();
+	// The Rutoken profile's slot layout: index is the facade slot the caller
+	// sees, value is the SoftHSM slot standing behind it. Initialized tokens
+	// come first, oldest to newest, then the spare uninitialized token. Never
+	// longer than the fifteen slots the profile advertises.
+	std::vector<CK_SLOT_ID> fakeRutokenLayout();
+	CK_SLOT_ID fakeRutokenBackingSlotID(CK_SLOT_ID externalSlotID);
+	// The other direction: which facade slot a SoftHSM slot appears on.
+	CK_SLOT_ID fakeRutokenFacadeSlotID(CK_SLOT_ID backingSlotID);
 	Slot* fakeRutokenSlot(CK_SLOT_ID externalSlotID);
 	void prepareFakeRutokenMechanisms();
 

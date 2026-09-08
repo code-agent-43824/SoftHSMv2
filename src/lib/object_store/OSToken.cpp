@@ -49,6 +49,45 @@
 #include <map>
 #include <list>
 #include <stdio.h>
+#include <stdint.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <sys/time.h>
+#endif
+
+namespace
+{
+	// Microseconds since the Unix epoch, eight bytes big-endian. Written into
+	// the token object once, at creation, as the key the Rutoken profile orders
+	// its slots by. Bytes rather than a CK_ULONG because CK_ULONG is 32 bits on
+	// 32-bit Windows and microseconds do not fit; big-endian so the comparison
+	// is a plain byte comparison on every platform.
+	ByteString tokenCreationStamp()
+	{
+		uint64_t microseconds;
+#ifdef _WIN32
+		FILETIME fileTime;
+		GetSystemTimeAsFileTime(&fileTime);
+		// FILETIME counts 100-nanosecond ticks from 1601-01-01.
+		const uint64_t ticks = ((uint64_t)fileTime.dwHighDateTime << 32) |
+		                       (uint64_t)fileTime.dwLowDateTime;
+		microseconds = (ticks - UINT64_C(116444736000000000)) / 10;
+#else
+		struct timeval now;
+		gettimeofday(&now, NULL);
+		microseconds = (uint64_t)now.tv_sec * UINT64_C(1000000) + (uint64_t)now.tv_usec;
+#endif
+		ByteString stamp;
+		stamp.resize(8);
+		for (size_t i = 0; i < 8; ++i)
+		{
+			stamp[i] = (unsigned char)((microseconds >> (8 * (7 - i))) & 0xFF);
+		}
+		return stamp;
+	}
+}
+
 
 // Constructor
 OSToken::OSToken(const std::string inTokenPath, int inUmask)
@@ -110,9 +149,14 @@ OSToken::OSToken(const std::string inTokenPath, int inUmask)
 	OSAttribute tokenLabel(label);
 	OSAttribute tokenSerial(serial);
 	OSAttribute tokenFlags(flags);
+	// Stamped once, here, and never rewritten: resetToken keeps the object, so
+	// re-initialising a token keeps the moment it came into being. The Rutoken
+	// profile orders its slots by this.
+	OSAttribute tokenCreated(tokenCreationStamp());
 
 	if (!tokenObject.setAttribute(CKA_OS_TOKENLABEL, tokenLabel) ||
 	    !tokenObject.setAttribute(CKA_OS_TOKENSERIAL, tokenSerial) ||
+	    !tokenObject.setAttribute(CKA_OS_TOKENCREATED, tokenCreated) ||
 	    !tokenObject.setAttribute(CKA_OS_TOKENFLAGS, tokenFlags))
 	{
 		ERROR_MSG("Failed to set the token attributes");
@@ -278,6 +322,26 @@ bool OSToken::getTokenSerial(ByteString& serial)
 	{
 		return false;
 	}
+}
+
+// Retrieve when the token was created
+bool OSToken::getTokenCreationTime(ByteString& created)
+{
+	if (!valid || !tokenObject->isValid())
+	{
+		return false;
+	}
+
+	if (!tokenObject->attributeExists(CKA_OS_TOKENCREATED))
+	{
+		// Written by a build from before this attribute existed. Say so rather
+		// than inventing a time; nothing is added to the stored token.
+		return false;
+	}
+
+	created = tokenObject->getAttribute(CKA_OS_TOKENCREATED).getByteStringValue();
+
+	return true;
 }
 
 // Get the token flags
