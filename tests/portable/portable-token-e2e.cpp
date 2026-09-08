@@ -3833,10 +3833,32 @@ static void verifyRutokenProfile(const fs::path& modulePath)
 
     const std::vector<CK_SLOT_ID> allSlots = slots(module, CK_FALSE);
     const std::vector<CK_SLOT_ID> presentSlots = slots(module, CK_TRUE);
-    if (allSlots.size() != 15 || presentSlots != std::vector<CK_SLOT_ID>{0})
-        fail("Rutoken profile must expose slots 0..14 with a token only in slot 0");
+    if (allSlots.size() != 15)
+        fail("Rutoken profile must expose fifteen readers, saw " + std::to_string(allSlots.size()));
     for (size_t i = 0; i < allSlots.size(); ++i)
         if (allSlots[i] != static_cast<CK_SLOT_ID>(i)) fail("Rutoken slot IDs are not contiguous 0..14");
+
+    // The occupied slots run from zero without a gap: the initialized tokens
+    // first, then the one spare SoftHSM always keeps, which reports present
+    // and uninitialized. This used to insist on a token in slot 0 and nowhere
+    // else, which was the old single-slot facade; the spare was hidden then,
+    // and hiding it is what stopped --init-token --free from working here.
+    if (presentSlots.empty()) fail("Rutoken profile shows no token at all");
+    for (size_t i = 0; i < presentSlots.size(); ++i)
+        if (presentSlots[i] != static_cast<CK_SLOT_ID>(i))
+            fail("the occupied slots must run from zero without a gap; slot " +
+                 std::to_string(i) + " is " + std::to_string(presentSlots[i]));
+    for (size_t i = 0; i < presentSlots.size(); ++i)
+    {
+        const CK_TOKEN_INFO occupant = tokenInfo(module, presentSlots[i]);
+        const bool initialized = (occupant.flags & CKF_TOKEN_INITIALIZED) != 0;
+        const bool last = i + 1 == presentSlots.size();
+        if (initialized == last)
+            fail(std::string("slot ") + std::to_string(i) + " holds " +
+                 (initialized ? "an initialized token" : "the spare") +
+                 ", but it is " + (last ? "the last occupied slot" : "not the last") +
+                 ": the spare belongs after every initialized token");
+    }
 
     CK_SLOT_INFO slot{};
     callOk("C_GetSlotInfo", "slotID=0, pInfo=&slot", [&] { return module->C_GetSlotInfo(0, &slot); });
@@ -3869,9 +3891,13 @@ static void verifyRutokenProfile(const fs::path& modulePath)
         (token.flags & (CKF_SO_PIN_TO_BE_CHANGED | CKF_USER_PIN_TO_BE_CHANGED)) != 0)
         fail("Rutoken token flags differ from the reference device");
 
+    // The first reader past the occupied run is genuinely empty. It used to be
+    // slot 1 always; now it is wherever the tokens end, since the spare is
+    // shown too.
+    const CK_SLOT_ID firstEmpty = static_cast<CK_SLOT_ID>(presentSlots.size());
     CK_TOKEN_INFO absent{};
-    check(invoke("C_GetTokenInfo", "slotID=1, pInfo=&absent",
-                 [&] { return module->C_GetTokenInfo(1, &absent); }),
+    check(invoke("C_GetTokenInfo", "slotID=" + std::to_string(firstEmpty) + ", pInfo=&absent",
+                 [&] { return module->C_GetTokenInfo(firstEmpty, &absent); }),
           CKR_TOKEN_NOT_PRESENT, "C_GetTokenInfo(empty Rutoken slot)");
 
     CK_ULONG mechanismCount = 0;
