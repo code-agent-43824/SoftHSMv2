@@ -4871,7 +4871,19 @@ int main(int argc, char** argv)
                   << "  P11_TEST_SLOT_ID=<optional decimal or 0x-prefixed slot ID>\n"
                   << "  P11_TEST_TOKEN_LABEL=<optional exact token label>\n"
                   << "  P11_TEST_KEY_LABEL=<optional generated-key label>\n"
-                  << "  P11_TEST_OBJECT_ID_HEX=<optional even-length hex CKA_ID>\n";
+                  << "  P11_TEST_OBJECT_ID_HEX=<optional even-length hex CKA_ID>\n"
+                  << "  P11_TEST_STORE_DIR=<optional token directory; enables the\n"
+                  << "                      check that private attributes are not\n"
+                  << "                      stored in the clear>\n"
+                  << "  P11_TEST_REQUIRE_RSA_IMPORT_EXPORT=YES|NO (default YES)\n"
+                  << "  P11_TEST_REQUIRE_GOST_IMPORT_EXPORT=YES|NO (default YES)\n"
+                  << "  P11_TEST_REQUIRE_GOST_SYMMETRIC=YES|NO (default YES)\n"
+                  << "                      turn off what a hardware token may\n"
+                  << "                      legitimately refuse\n"
+                  << "  P11_PROFILE_EXPECTED_LABEL=<label rutoken-profile expects>\n"
+                  << "  P11_28147_EXPECT_RESTRICTED=YES|NO\n"
+                  << "                      what gost28147-modes should expect of\n"
+                  << "                      DISABLE_OTHER_28147_MODES\n";
         return 2;
     }
     catch (const std::exception& error)

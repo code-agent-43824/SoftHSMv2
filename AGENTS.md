@@ -252,7 +252,17 @@ the portable builds compile with warnings-as-errors settings from
   `WITH_GOST_3411_2012` is set, so an OpenSSL-backend build links Botan for
   GOST 2012. See "Settled decisions".
 - `src/lib/crypto/BotanGOST2012{KeyGenerator,Signer}.{cpp,h}`,
-  `BotanStreebog256.{cpp,h}` — GOST R 34.10-2012/256 and Streebog-256.
+  `BotanStreebog{256,512}.{cpp,h}` — GOST R 34.10-2012 in both key sizes and
+  Streebog in both digest sizes. `BotanGOST2012KEG.{cpp,h}` — VKO-2012 and the
+  KDF tree behind `CKM_GOST_KEG`.
+- `src/lib/crypto/GOST28147.{cpp,h}`, `GOST28147{Algorithm,MacAlgorithm}.{cpp,h}`,
+  `GOSTSymmetric{,Algorithm}.{cpp,h}` — the symmetric GOST set: GOST 28147-89,
+  Kuznechik and Magma. Self-contained, no OpenSSL and no Botan, compiled into
+  the portable build unconditionally.
+- `src/bin/export/softhsm2-export.cpp` — the debug exporter. Links the SoftHSM
+  core statically and writes a private key as PKCS #8 whatever
+  `CKA_SENSITIVE`/`CKA_EXTRACTABLE` say; `--type` takes `rsa`, `ec`, `gost` and
+  `gost512`.
 - `src/lib/pkcs11/pkcs11.h` — the TC26 mechanism identifiers.
 - `src/lib/pkcs11/rutoken.h` — the Rutoken `C_EX_*` extension ABI, written from
   the vendor SDK rather than copied from it. `docs/RUTOKEN-EXTENSIONS.md`
@@ -261,15 +271,33 @@ the portable builds compile with warnings-as-errors settings from
 - `scripts/portable/` — per-platform build scripts and OpenSC bundling.
 - `tests/portable/` — the vendor-neutral PKCS #11 client
   (`portable-token-e2e.cpp`), its launchers, and the test kits.
-- `.github/workflows/ci.yml` — one job: build the portable dependency
-  combination and audit the produced archive.
+- `.github/workflows/ci.yml` — one job, but far more than a build: the portable
+  dependency combination, an audit of the produced archive, the autonomous
+  utilities and forced PKCS #8 export on a machine that has never run the
+  module, then the vendor-neutral client through `first-run`, `multi-token`,
+  `gost28147-modes` in three configurations, both `rutoken-profile` runs and
+  `core-behaviour`. Unit tests are still not among them (see below).
 - `.github/workflows/portable-release.yml` — six build jobs, six fresh-runner
   verification jobs that consume the published archives as an outside user
   would, then the release job.
 
 Portable behaviour is gated by the CMake option `ENABLE_PORTABLE` (default OFF)
 and requires the OpenSSL backend. GOST 2012 is gated by
-`ENABLE_GOST_3411_2012` and `ENABLE_GOST_3410_2012_256` (both default OFF).
+`ENABLE_GOST_3411_2012`, `ENABLE_GOST_3410_2012_256`,
+`ENABLE_GOST_3410_2012_512` and `ENABLE_GOST_3411_2012_512` (all default OFF).
+The three portable build scripts turn on the first three;
+`ENABLE_GOST_3410_2012_512` implies `WITH_GOST_3411_2012_512`, which is why
+Streebog-512 is available without the fourth being named. The symmetric GOST
+set - GOST 28147-89, Kuznechik, Magma - is not gated at all and is always
+compiled in. `ENABLE_GOST` is the classic GOST 28147-89/R 34.11-94 path through
+an OpenSSL engine and stays off; it is unrelated to the fork's own
+implementation.
+
+Three configuration keys are the fork's own, all read in `C_Initialize` and all
+described in `packaging/portable/README.txt`: `FAKE_RUTOKEN_ECP` (default
+false), and `RUTOKEN_FORCE_SENSITIVE` and `DISABLE_OTHER_28147_MODES`, which
+both default to whatever `FAKE_RUTOKEN_ECP` is set to and can be overridden by
+name.
 
 ## Settled decisions
 
@@ -362,7 +390,9 @@ and requires the OpenSSL backend. GOST 2012 is gated by
 upstream version and is not bumped by fork work.
 
 Releases are tagged `v2.7.0-portable.N`; `N` increments by one per release and
-is not reused. The current tag is `v2.7.0-portable.29`.
+is not reused. Releases are frequent; `docs/STATUS.md` carries the current tag
+and the evidence it was verified, so that this file does not have to be touched
+for every one of them.
 
 ## Deployment
 

@@ -45,9 +45,27 @@ and multipart forms, and checks all three randomized signatures with a small
 independent implementation of the GOST verification equation in the C++ test.
 For the bundled SoftHSM module the same generic scenario also checks known-answer
 encryption and decryption vectors for GOST 28147-89 ECB/CFB, Kuznechik ECB,
-Magma ECB, and both MGM variants; a Kuznechik CTR-ACPKM round trip; GOST MACs;
-and authenticated KExp15/GOST 28147 key-wrap round trips and rejection of
-tampered tags.
+Magma ECB, and both MGM variants; CTR-ACPKM against the answers read off the
+reference device, at both key sizes and on both sides of a key change; GOST
+MACs; and authenticated KExp15/GOST 28147 key-wrap round trips and rejection of
+tampered tags. It repeats the GOST 28147-89 work on a key marked
+`CKA_PRIVATE = CK_TRUE`, which is how software actually creates one and where
+the cipher was unreachable until September 2026. The 512-bit half of GOST
+2012 - generation on paramSetA, signing, verification, and four cases that must
+fail - runs beside the 256-bit one, and the parameter-set policy of every GOST
+2012 mechanism is checked as a table at both sizes.
+
+Four scenarios exist beside the generic one, all for the bundled module:
+
+| Scenario | What it settles |
+| --- | --- |
+| `first-run` | a cold machine gets its token directory made for it |
+| `multi-token` | the profile puts each token on its own slot, in a stable order |
+| `gost28147-modes` | `DISABLE_OTHER_28147_MODES` accepts and refuses what the device does; run three times, once per configuration |
+| `rutoken-profile` | the whole `FAKE_RUTOKEN_ECP` presentation, plus `RUTOKEN_FORCE_SENSITIVE` |
+
+`portable-token-e2e` with no arguments prints every scenario and every
+environment variable it reads.
 For the bundled SoftHSM module it also generates exportable RSA and GOST pairs,
 reads every private component, imports each pair as separate public and private
 objects with `C_CreateObject`, reads the imported values back, and proves the
