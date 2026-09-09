@@ -16778,7 +16778,26 @@ CK_RV SoftHSM::getSymmetricKey(SymmetricKey* skey, Token* token, OSObject* key)
 
 	skey->setKeyBits(keybits);
 	if (key->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED) == CKK_GOST28147)
-		skey->setAlgorithmParameters(key->getByteStringValue(CKA_GOST28147_PARAMS));
+	{
+		// Every attribute of a private object is stored encrypted, the
+		// parameter set among them. Reading it raw handed GOST28147 a
+		// ciphertext, setParamSet did not recognise it and said so, and the
+		// caller turned that into CKR_MECHANISM_INVALID - which is why GOST
+		// 28147-89 was unusable on any key marked CKA_PRIVATE, through
+		// encryption, decryption, MAC and key wrapping alike. The value has
+		// to come out the same way the key material above does.
+		ByteString parameters;
+		if (isKeyPrivate)
+		{
+			if (!token->decrypt(key->getByteStringValue(CKA_GOST28147_PARAMS), parameters))
+				return CKR_GENERAL_ERROR;
+		}
+		else
+		{
+			parameters = key->getByteStringValue(CKA_GOST28147_PARAMS);
+		}
+		skey->setAlgorithmParameters(parameters);
+	}
 
 	return CKR_OK;
 }

@@ -3717,6 +3717,173 @@ static void verifyCTRACPKMPeriodIsInBits(Module& module, CK_SESSION_HANDLE sessi
     }
 }
 
+// GOST 28147-89 addressed the way software actually holds a key: private.
+//
+// Until this was fixed every one of these failed with CKR_MECHANISM_INVALID.
+// A private object stores all of its attributes encrypted, and getSymmetricKey
+// decrypted the key material but read CKA_GOST28147_PARAMS raw, so the cipher
+// was handed ciphertext where an OID belonged, did not recognise it, and said
+// so. The public-key path worked throughout, which is why the defect could sit
+// behind a passing gate: every check here used CKA_PRIVATE = CK_FALSE.
+//
+// The answers come from the owner's Rutoken ECP, firmware 26.2, through its own
+// rtPKCS11ECP.dll 2.19. CKM_GOST28147 is gaming with feedback (CFB) there,
+// measured rather than assumed.
+static CK_OBJECT_HANDLE createGOST28147Key(Module& module, CK_SESSION_HANDLE session,
+                                           const Bytes& value, const Bytes& paramSet,
+                                           CK_BBOOL isPrivate, CK_RV* outcome = nullptr)
+{
+    CK_OBJECT_CLASS keyClass = CKO_SECRET_KEY;
+    CK_KEY_TYPE keyType = CKK_GOST28147;
+    CK_BBOOL no = CK_FALSE, yes = CK_TRUE;
+    CK_ATTRIBUTE attributes[] = {
+        {CKA_CLASS, &keyClass, sizeof(keyClass)},
+        {CKA_KEY_TYPE, &keyType, sizeof(keyType)},
+        {CKA_TOKEN, &no, sizeof(no)},
+        {CKA_PRIVATE, &isPrivate, sizeof(isPrivate)},
+        {CKA_VALUE, const_cast<unsigned char*>(value.data()),
+         static_cast<CK_ULONG>(value.size())},
+        {CKA_GOST28147_PARAMS, const_cast<unsigned char*>(paramSet.data()),
+         static_cast<CK_ULONG>(paramSet.size())},
+        {CKA_ENCRYPT, &yes, sizeof(yes)},
+        {CKA_DECRYPT, &yes, sizeof(yes)},
+        {CKA_SIGN, &yes, sizeof(yes)},
+        {CKA_VERIFY, &yes, sizeof(yes)},
+        {CKA_WRAP, &yes, sizeof(yes)},
+        {CKA_UNWRAP, &yes, sizeof(yes)},
+        {CKA_SENSITIVE, &no, sizeof(no)},
+        {CKA_EXTRACTABLE, &yes, sizeof(yes)}
+    };
+    const CK_ULONG count = sizeof(attributes) / sizeof(attributes[0]);
+    CK_OBJECT_HANDLE key = CK_INVALID_HANDLE;
+    const std::string what = std::string("GOST 28147-89 key, CKA_PRIVATE=") +
+                             (isPrivate == CK_TRUE ? "CK_TRUE" : "CK_FALSE");
+    if (outcome != nullptr)
+    {
+        *outcome = invoke("C_CreateObject", what,
+                          [&] { return module->C_CreateObject(session, attributes, count, &key); });
+        return key;
+    }
+    callOk("C_CreateObject", what,
+           [&] { return module->C_CreateObject(session, attributes, count, &key); });
+    return key;
+}
+
+// Encrypt a run of zeros and report only the bytes the device was sampled at.
+// On a zero plaintext in CFB every block depends on all the ones before it, so
+// agreeing at byte 1024 settles everything up to it as well.
+static Bytes gostSample(Module& module, CK_SESSION_HANDLE session, CK_OBJECT_HANDLE key,
+                        const Bytes& iv, size_t length, size_t offset)
+{
+    Bytes parameter = iv;
+    CK_MECHANISM mechanism{CKM_GOST28147, parameter.data(),
+                           static_cast<CK_ULONG>(parameter.size())};
+    const Bytes zeros(length, 0x00);
+    const Bytes cipherText = encryptOneShot(module, session, key, mechanism, zeros);
+    if (cipherText.size() != length)
+        fail("CKM_GOST28147 returned " + std::to_string(cipherText.size()) +
+             " bytes for " + std::to_string(length));
+    if (decryptOneShot(module, session, key, mechanism, cipherText) != zeros)
+        fail("CKM_GOST28147 did not decrypt its own output");
+    return Bytes(cipherText.begin() + offset, cipherText.begin() + offset + 8);
+}
+
+static void verifyGOST28147OnPrivateKeys(Module& module, CK_SESSION_HANDLE session)
+{
+    const Bytes key = bytesFromHex(
+        "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
+    const Bytes cryptoProA = bytesFromHex("06072a850302021f01");
+    const Bytes shortIv = bytesFromHex("1112131415161718");
+    const Bytes longIv = bytesFromHex("5152535455565758");
+
+    // The whole of the device's 64-byte answer, on a key marked private.
+    const CK_OBJECT_HANDLE privateKey =
+        createGOST28147Key(module, session, key, cryptoProA, CK_TRUE);
+    Bytes parameter = shortIv;
+    CK_MECHANISM cfb{CKM_GOST28147, parameter.data(),
+                     static_cast<CK_ULONG>(parameter.size())};
+    const Bytes zeros(64, 0x00);
+    const Bytes produced = encryptOneShot(module, session, privateKey, cfb, zeros);
+    if (produced != bytesFromHex(
+            "5a3e88332ef8727b8f6c48835703f5f21d504b00642b2f36c81cb85c2669c950"
+            "82e4f24dde922ad20543b5a97dc9a1a6b755e301ecc8ff5341f12b8b82c4c126"))
+        fail("CKM_GOST28147 on a private key does not match the device: " +
+             hexBytes(produced.data(), produced.size()));
+    if (decryptOneShot(module, session, privateKey, cfb, produced) != zeros)
+        fail("CKM_GOST28147 on a private key did not decrypt its own output");
+
+    // The two sampled points of the 4096-byte answer, which is where CryptoPro
+    // key meshing shows up: it changes the key every 1024 bytes.
+    if (gostSample(module, session, privateKey, longIv, 4096, 0) !=
+        bytesFromHex("4991e95e0439e602"))
+        fail("CKM_GOST28147 over 4096 bytes differs from the device at byte 0");
+    if (gostSample(module, session, privateKey, longIv, 4096, 1024) !=
+        bytesFromHex("9d0f7c83c25419f1"))
+        fail("CKM_GOST28147 over 4096 bytes differs from the device at byte 1024, "
+             "which is where the key is meshed");
+
+    // A public key must produce the same thing. The two used to disagree by
+    // one of them not working at all.
+    const CK_OBJECT_HANDLE publicKey =
+        createGOST28147Key(module, session, key, cryptoProA, CK_FALSE);
+    if (encryptOneShot(module, session, publicKey, cfb, zeros) != produced)
+        fail("a private and a public GOST 28147-89 key encrypt differently");
+
+    // The other three paths that go through getSymmetricKey.
+    CK_MECHANISM ecb{CKM_GOST28147_ECB, nullptr, 0};
+    const Bytes block = bytesFromHex("1020304050607080");
+    const Bytes ecbCipher = encryptOneShot(module, session, privateKey, ecb, block);
+    if (decryptOneShot(module, session, privateKey, ecb, ecbCipher) != block)
+        fail("CKM_GOST28147_ECB does not round trip on a private key");
+    if (encryptOneShot(module, session, publicKey, ecb, block) != ecbCipher)
+        fail("CKM_GOST28147_ECB differs between a private and a public key");
+
+    const Bytes macData = bytesFromHex("b5a1f0e3ce2f021d676194345c41e36e");
+    const Bytes mac = signOneShot(module, session, privateKey, CKM_GOST28147_MAC, macData);
+    if (mac.size() != 4) fail("CKM_GOST28147_MAC on a private key returned " +
+                              std::to_string(mac.size()) + " bytes");
+    verifyOneShot(module, session, privateKey, CKM_GOST28147_MAC, macData, mac);
+    if (signOneShot(module, session, publicKey, CKM_GOST28147_MAC, macData) != mac)
+        fail("CKM_GOST28147_MAC differs between a private and a public key");
+
+    const Bytes carried = bytesFromHex(
+        "ffeeddccbbaa99887766554433221100112233445566778899aabbccddeeff00");
+    const CK_OBJECT_HANDLE carriedKey =
+        createGOST28147Key(module, session, carried, cryptoProA, CK_TRUE);
+    CK_MECHANISM wrap{CKM_GOST28147_KEY_WRAP, nullptr, 0};
+    CK_ULONG wrappedLength = 0;
+    callOk("C_WrapKey", "CKM_GOST28147_KEY_WRAP with a private wrapping key",
+           [&] { return module->C_WrapKey(session, &wrap, privateKey, carriedKey,
+                                          nullptr, &wrappedLength); });
+    Bytes wrapped(wrappedLength);
+    callOk("C_WrapKey", "CKM_GOST28147_KEY_WRAP with a private wrapping key",
+           [&] { return module->C_WrapKey(session, &wrap, privateKey, carriedKey,
+                                          wrapped.data(), &wrappedLength); });
+    CK_OBJECT_CLASS secretClass = CKO_SECRET_KEY;
+    CK_KEY_TYPE gostType = CKK_GOST28147;
+    CK_BBOOL no = CK_FALSE, yes = CK_TRUE;
+    Bytes unwrapParams = cryptoProA;
+    CK_ATTRIBUTE unwrapTemplate[] = {
+        {CKA_CLASS, &secretClass, sizeof(secretClass)},
+        {CKA_KEY_TYPE, &gostType, sizeof(gostType)},
+        {CKA_TOKEN, &no, sizeof(no)},
+        {CKA_PRIVATE, &no, sizeof(no)},
+        {CKA_SENSITIVE, &no, sizeof(no)},
+        {CKA_EXTRACTABLE, &yes, sizeof(yes)},
+        {CKA_GOST28147_PARAMS, unwrapParams.data(),
+         static_cast<CK_ULONG>(unwrapParams.size())}
+    };
+    CK_OBJECT_HANDLE restored = CK_INVALID_HANDLE;
+    callOk("C_UnwrapKey", "CKM_GOST28147_KEY_WRAP with a private unwrapping key",
+           [&] { return module->C_UnwrapKey(session, &wrap, privateKey, wrapped.data(),
+                         static_cast<CK_ULONG>(wrapped.size()), unwrapTemplate,
+                         sizeof(unwrapTemplate) / sizeof(unwrapTemplate[0]), &restored); });
+    if (attribute(module, session, restored, CKA_VALUE) != carried)
+        fail("a key wrapped and unwrapped with a private GOST 28147-89 key came back changed");
+
+    trace("REFERENCE", "GOST 28147-89 works on a private key and matches the device");
+}
+
 static void verifyGOSTSymmetric(Module& module, CK_SESSION_HANDLE session)
 {
     generateGOSTSecret(module, session, CKM_GOST28147_KEY_GEN, CKK_GOST28147);
@@ -3801,6 +3968,7 @@ static void verifyGOSTSymmetric(Module& module, CK_SESSION_HANDLE session)
         fail("CKM_KUZNECHIK_CTR_ACPKM round trip failed");
 
     verifyCTRACPKMPeriodIsInBits(module, session);
+    verifyGOST28147OnPrivateKeys(module, session);
 
     const Bytes kuzMacData = bytesFromHex(
         "1122334455667700ffeeddccbbaa998800112233445566778899aabbcceeff0a"
