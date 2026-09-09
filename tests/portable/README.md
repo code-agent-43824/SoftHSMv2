@@ -240,8 +240,12 @@ PIN values are never printed, but this file stores them as plain text; keep a
 customized copy containing real credentials private. Use `SLOT_ID` or
 `TOKEN_LABEL` when several initialized tokens are visible.
 
-For the bundled SoftHSM, the launcher creates a disposable copy. For an
-alternate library, the launcher loads the original file directly and creates
-only the scenario evidence in a temporary directory. Existing-token mode still
-generates test keys and certificate objects on the selected token; review the
-scenario before pointing it at hardware containing valuable objects.
+The launcher loads the bundled module directly from the extracted test kit and
+an alternate library directly from its original path; it does not make a
+disposable module or token-store copy. In both modes the scenario evidence stays
+under `test-output` in the extracted kit. The bundled portable module uses the
+canonical `~/softhsm` store (`%USERPROFILE%\softhsm` on Windows): `AUTO`
+initializes it only when empty and otherwise reuses it. Existing-token mode
+still generates test keys and certificate objects on the selected token. Use a
+disposable home/profile directory before running if the current store or token
+contains anything valuable.

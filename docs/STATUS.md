@@ -165,7 +165,8 @@
   решено осознанно (см. «Принятые решения» в `AGENTS.md`), однако практический
   вывод остаётся: правка в `src/lib/**/test/**` уезжает в транк непроверенной.
 - **У кода ГОСТ 2012 нет юнит-тестов.** `BotanGOST2012Signer`,
-  `BotanGOST2012KeyGenerator`, `BotanStreebog256` и `BotanGOST2012KEG`
+  `BotanGOST2012KeyGenerator`, `BotanStreebog256`, `BotanStreebog512` и
+  `BotanGOST2012KEG`
   покрыты только сквозным тестом `tests/portable/portable-token-e2e.cpp`.
   Этот тест гоняется в push-CI и в полном релизном workflow, но отдельной
   локализованной цели для каждого криптографического класса нет.
