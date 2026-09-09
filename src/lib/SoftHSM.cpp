@@ -579,6 +579,7 @@ SoftHSM::SoftHSM()
 	isRemovable = false;
 	fakeRutokenECP = false;
 	forceSensitive = false;
+	disableOther28147Modes = false;
 	sessionObjectStore = NULL;
 	objectStore = NULL;
 	slotManager = NULL;
@@ -740,6 +741,10 @@ CK_RV SoftHSM::C_Initialize(CK_VOID_PTR pInitArgs)
 	// it, off, so ordinary SoftHSM behaviour does not move unless the setting
 	// is written out by name.
 	forceSensitive = Configuration::i()->getBool("RUTOKEN_FORCE_SENSITIVE", fakeRutokenECP);
+	// The reference device takes two GOST 28147-89 parameter sets and refuses
+	// the rest outright, at C_CreateObject. Under the profile we do the same;
+	// without it every set the cipher implements stays available.
+	disableOther28147Modes = Configuration::i()->getBool("DISABLE_OTHER_28147_MODES", fakeRutokenECP);
 
 	// Configure the log level
 	if (!setLogLevel(Configuration::i()->getString("log.level", DEFAULT_LOG_LEVEL)))
@@ -7867,6 +7872,13 @@ CK_RV SoftHSM::C_GenerateKey(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMecha
 	    pMechanism->mechanism == CKM_KUZNECHIK_KEY_GEN ||
 	    pMechanism->mechanism == CKM_MAGMA_KEY_GEN)
 	{
+		// Same refusal as C_CreateObject, in the same place the device makes
+		// it: before the key exists, not later when it is used.
+		if (keyType == CKK_GOST28147)
+		{
+			rv = checkGOST28147ParamSet(pTemplate, ulCount);
+			if (rv != CKR_OK) return rv;
+		}
 		return this->generateGeneric(hSession, pTemplate, ulCount, phKey,
 			isOnToken, isPrivate, keyType, pMechanism->mechanism, 32);
 	}
@@ -16136,6 +16148,46 @@ CK_RV SoftHSM::deriveSymmetric
 	return rv;
 }
 
+// DISABLE_OTHER_28147_MODES. The reference Rutoken ECP accepts two GOST
+// 28147-89 parameter sets - CryptoPro-A, 1.2.643.2.2.31.1, and TC26-Z,
+// 1.2.643.7.1.2.5.1.1 - and refuses the test set and CryptoPro-B, C and D with
+// CKR_ATTRIBUTE_VALUE_INVALID at C_CreateObject, before any operation is asked
+// for. This module implements all six, so under the profile it has to say no
+// in the same place and with the same code.
+//
+// An absent or empty parameter set is left alone: it means CryptoPro-A, which
+// the device accepts, and refusing it would break a template that simply does
+// not mention the attribute. A value the cipher does not know at all is
+// refused here too, and was already refused later at C_EncryptInit when the
+// setting is off - it is never quietly turned into CryptoPro-A.
+CK_RV SoftHSM::checkGOST28147ParamSet(CK_ATTRIBUTE_PTR pTemplate, CK_ULONG ulCount) const
+{
+	if (!disableOther28147Modes) return CKR_OK;
+
+	static const unsigned char CRYPTOPRO_A[] = {
+		0x06, 0x07, 0x2A, 0x85, 0x03, 0x02, 0x02, 0x1F, 0x01 };
+	static const unsigned char TC26_Z[] = {
+		0x06, 0x09, 0x2A, 0x85, 0x03, 0x07, 0x01, 0x02, 0x05, 0x01, 0x01 };
+
+	for (CK_ULONG i = 0; i < ulCount; ++i)
+	{
+		if (pTemplate[i].type != CKA_GOST28147_PARAMS) continue;
+		if (pTemplate[i].pValue == NULL_PTR || pTemplate[i].ulValueLen == 0) continue;
+
+		const unsigned char* value = (const unsigned char*)pTemplate[i].pValue;
+		if (pTemplate[i].ulValueLen == sizeof(CRYPTOPRO_A) &&
+		    memcmp(value, CRYPTOPRO_A, sizeof(CRYPTOPRO_A)) == 0) continue;
+		if (pTemplate[i].ulValueLen == sizeof(TC26_Z) &&
+		    memcmp(value, TC26_Z, sizeof(TC26_Z)) == 0) continue;
+
+		INFO_MSG("DISABLE_OTHER_28147_MODES: the reference device takes only "
+			 "CryptoPro-A and TC26-Z");
+		return CKR_ATTRIBUTE_VALUE_INVALID;
+	}
+
+	return CKR_OK;
+}
+
 CK_RV SoftHSM::CreateObject(CK_SESSION_HANDLE hSession, CK_ATTRIBUTE_PTR pTemplate, CK_ULONG ulCount, CK_OBJECT_HANDLE_PTR phObject, int op)
 {
 	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;
@@ -16167,6 +16219,12 @@ CK_RV SoftHSM::CreateObject(CK_SESSION_HANDLE hSession, CK_ATTRIBUTE_PTR pTempla
 	{
 		ERROR_MSG("Mandatory attribute not present in template");
 		return rv;
+	}
+
+	if (keyType == CKK_GOST28147)
+	{
+		rv = checkGOST28147ParamSet(pTemplate, ulCount);
+		if (rv != CKR_OK) return rv;
 	}
 	// Check user credentials
 	rv = haveWrite(session->getState(), isOnToken, isPrivate);

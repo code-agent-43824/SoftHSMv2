@@ -4647,6 +4647,130 @@ static void verifyMultipleTokens(const fs::path& modulePath)
     std::cout << "the profile lays tokens out across its slots, one each, stably\n";
 }
 
+// DISABLE_OTHER_28147_MODES, from the outside. The reference device accepts
+// CryptoPro-A and TC26-Z and refuses the rest with CKR_ATTRIBUTE_VALUE_INVALID
+// at C_CreateObject - before the key exists, not later when it is used. This
+// module implements six sets, so the setting is what makes it answer the same.
+//
+// P11_28147_EXPECT_RESTRICTED says which side of the setting this run is on,
+// so the same scenario checks the profile default, the setting turned off by
+// hand, and the ordinary mode where it defaults off.
+static void verifyGOST28147Modes(const fs::path& modulePath)
+{
+    const bool restricted = environmentYes("P11_28147_EXPECT_RESTRICTED");
+    trace("CONFIG", std::string("expecting ") +
+                    (restricted ? "only CryptoPro-A and TC26-Z" : "every implemented set"));
+
+    Module module(modulePath);
+    const std::vector<CK_SLOT_ID> present = slots(module, CK_TRUE);
+    if (present.empty()) fail("no slot holds a token");
+    CK_SESSION_HANDLE session = CK_INVALID_HANDLE;
+    callOk("C_OpenSession", "slotID=" + std::to_string(present[0]),
+           [&] { return module->C_OpenSession(present[0], CKF_SERIAL_SESSION | CKF_RW_SESSION,
+                                              nullptr, nullptr, &session); });
+    login(module, session, CKU_USER, environment("P11_TEST_USER_PIN", true));
+
+    const Bytes key = bytesFromHex(
+        "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
+    const Bytes cryptoProA = bytesFromHex("06072a850302021f01");
+    const Bytes tc26z = bytesFromHex("06092a8503070102050101");
+    const Bytes cryptoProB = bytesFromHex("06072a850302021f02");
+    // 1.2.643.2.2.31.9 - well formed, and no parameter set this cipher knows.
+    const Bytes unknown = bytesFromHex("06072a850302021f09");
+    const Bytes block = bytesFromHex("1020304050607080");
+    CK_MECHANISM ecb{CKM_GOST28147_ECB, nullptr, 0};
+
+    // The two the device takes are accepted either way and actually work.
+    for (size_t i = 0; i < 2; ++i)
+    {
+        const Bytes& accepted = i == 0 ? cryptoProA : tc26z;
+        const char* name = i == 0 ? "CryptoPro-A" : "TC26-Z";
+        const CK_OBJECT_HANDLE handle =
+            createGOST28147Key(module, session, key, accepted, CK_TRUE);
+        const Bytes cipherText = encryptOneShot(module, session, handle, ecb, block);
+        if (decryptOneShot(module, session, handle, ecb, cipherText) != block)
+            fail(std::string(name) + " does not round trip");
+        trace("CONFIG", std::string(name) + " accepted and working");
+    }
+
+    // CryptoPro-B: refused where the device refuses it, accepted and working
+    // where the setting is off, because the cipher does implement it.
+    {
+        CK_RV outcome = CKR_OK;
+        const CK_OBJECT_HANDLE handle =
+            createGOST28147Key(module, session, key, cryptoProB, CK_TRUE, &outcome);
+        if (restricted)
+        {
+            if (outcome != CKR_ATTRIBUTE_VALUE_INVALID)
+                fail("C_CreateObject with CryptoPro-B returned " + hexNumber(outcome) +
+                     " where the device returns CKR_ATTRIBUTE_VALUE_INVALID");
+        }
+        else
+        {
+            if (outcome != CKR_OK)
+                fail("C_CreateObject with CryptoPro-B returned " + hexNumber(outcome) +
+                     " with the restriction off");
+            const Bytes cipherText = encryptOneShot(module, session, handle, ecb, block);
+            if (decryptOneShot(module, session, handle, ecb, cipherText) != block)
+                fail("CryptoPro-B does not round trip with the restriction off");
+        }
+        trace("CONFIG", restricted ? "CryptoPro-B refused at C_CreateObject"
+                                   : "CryptoPro-B accepted and working");
+    }
+
+    // C_GenerateKey has to refuse in the same place, not later.
+    {
+        CK_OBJECT_CLASS keyClass = CKO_SECRET_KEY;
+        CK_KEY_TYPE keyType = CKK_GOST28147;
+        CK_BBOOL no = CK_FALSE, yes = CK_TRUE;
+        Bytes parameters = cryptoProB;
+        CK_MECHANISM generate{CKM_GOST28147_KEY_GEN, nullptr, 0};
+        CK_ATTRIBUTE attributes[] = {
+            {CKA_CLASS, &keyClass, sizeof(keyClass)},
+            {CKA_KEY_TYPE, &keyType, sizeof(keyType)},
+            {CKA_TOKEN, &no, sizeof(no)},
+            {CKA_PRIVATE, &yes, sizeof(yes)},
+            {CKA_GOST28147_PARAMS, parameters.data(),
+             static_cast<CK_ULONG>(parameters.size())}
+        };
+        CK_OBJECT_HANDLE generated = CK_INVALID_HANDLE;
+        const CK_RV outcome = invoke("C_GenerateKey", "CKM_GOST28147_KEY_GEN on CryptoPro-B",
+                                     [&] { return module->C_GenerateKey(session, &generate,
+                                                 attributes, 5, &generated); });
+        check(outcome, restricted ? CKR_ATTRIBUTE_VALUE_INVALID : CKR_OK,
+              "C_GenerateKey(CryptoPro-B)");
+    }
+
+    // A set the cipher does not know is refused whichever way the setting is:
+    // at C_CreateObject when the restriction is on, and at the operation when
+    // it is off. What must never happen is it quietly becoming CryptoPro-A.
+    {
+        CK_RV outcome = CKR_OK;
+        const CK_OBJECT_HANDLE handle =
+            createGOST28147Key(module, session, key, unknown, CK_TRUE, &outcome);
+        if (restricted)
+        {
+            if (outcome != CKR_ATTRIBUTE_VALUE_INVALID)
+                fail("an unknown parameter set was not refused at C_CreateObject: " +
+                     hexNumber(outcome));
+        }
+        else
+        {
+            if (outcome != CKR_OK)
+                fail("C_CreateObject with an unknown parameter set returned " +
+                     hexNumber(outcome) + " with the restriction off");
+            check(invoke("C_EncryptInit", "unknown parameter set",
+                         [&] { return module->C_EncryptInit(session, &ecb, handle); }),
+                  CKR_MECHANISM_INVALID, "C_EncryptInit(unknown parameter set)");
+        }
+        trace("CONFIG", "an unknown parameter set is refused, not silently made CryptoPro-A");
+    }
+
+    logout(module, session, "CKU_USER");
+    closeSession(module, session);
+    std::cout << "GOST 28147-89 parameter sets behave as configured\n";
+}
+
 // The packaged README promises the token directory appears beside the per-user
 // configuration.  The module already kept that promise - ObjectStore makes the
 // directory when it opens - and this pins that half on every platform, since
@@ -4693,6 +4817,11 @@ int main(int argc, char** argv)
             verifyFirstRunCreatesTokenDirectory(fs::absolute(argv[2]), argv[3]);
             return 0;
         }
+        if (argc == 3 && std::string(argv[1]) == "gost28147-modes")
+        {
+            verifyGOST28147Modes(fs::absolute(argv[2]));
+            return 0;
+        }
         if (argc == 3 && std::string(argv[1]) == "multi-token")
         {
             verifyMultipleTokens(fs::absolute(argv[2]));
@@ -4728,6 +4857,7 @@ int main(int argc, char** argv)
                   << "  portable-token-e2e probe <module>\n"
                   << "  portable-token-e2e first-run <module> <expected-token-directory>\n"
                   << "  portable-token-e2e multi-token <module>\n"
+                  << "  portable-token-e2e gost28147-modes <module>\n"
                   << "  portable-token-e2e rutoken-profile <module>\n"
                   << "  portable-token-e2e prepare <module> <work>\n"
                   << "  portable-token-e2e finish <module> <work> <leaf.der> <ca.der> <payload> <cms.der>\n"

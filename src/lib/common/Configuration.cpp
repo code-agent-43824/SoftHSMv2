@@ -54,6 +54,7 @@ const struct config Configuration::valid_config[] = {
 	{ "library.reset_on_fork",	CONFIG_TYPE_BOOL },
 	{ "FAKE_RUTOKEN_ECP",		CONFIG_TYPE_BOOL },
 	{ "RUTOKEN_FORCE_SENSITIVE",	CONFIG_TYPE_BOOL },
+	{ "DISABLE_OTHER_28147_MODES",	CONFIG_TYPE_BOOL },
 	{ "",				CONFIG_TYPE_UNSUPPORTED }
 };
 

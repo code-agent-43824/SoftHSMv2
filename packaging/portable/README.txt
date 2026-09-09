@@ -184,8 +184,7 @@ and sign one-shot or multipart input with the TC26
 CKM_GOSTR3410_WITH_GOSTR3411_2012_256 mechanism. That mechanism accepts the
 same parameter-set OID the digest mechanism does, since Rutoken-aware software
 sends it to both; until this release it refused every parameter, which put
-GOST signing out of reach of such software. GOST verification,
-MAC, key agreement, CMS construction, and other GOST mechanisms are not enabled.
+GOST signing out of reach of such software.
 
 The 512-bit variants work the same way. GOST R 34.11-2012/512 is available
 through CKM_GOSTR3411_12_512, one-shot and multipart, and takes its own
@@ -216,6 +215,31 @@ number of blocks in bits - 64 for Magma, 128 for Kuznechik.
 
 softhsm2-export takes --type gost512 for the 512-bit private key, alongside
 the existing rsa, ec and gost.
+
+GOST 28147-89 is available through CKM_GOST28147 (gaming with feedback, which
+is what the reference device does in that mechanism), CKM_GOST28147_ECB,
+CKM_GOST28147_MAC and CKM_GOST28147_KEY_WRAP, on 256-bit CKK_GOST28147 keys.
+Until this release the parameter set was read from a private key object
+without decrypting it - every attribute of such an object is stored encrypted -
+so any key an application would normally create answered
+CKR_MECHANISM_INVALID and the cipher was in practice unreachable. It works on
+private and public objects alike now, and its output matches the reference
+device byte for byte, including the CryptoPro key meshing that changes the key
+every 1024 bytes. That meshing now applies to the TC26-Z parameter set as
+well, as it does on the device.
+
+DISABLE_OTHER_28147_MODES limits which parameter sets a CKK_GOST28147 key may
+carry. With FAKE_RUTOKEN_ECP on it defaults to on, and then only CryptoPro-A
+(1.2.643.2.2.31.1) and TC26-Z (1.2.643.7.1.2.5.1.1) are accepted, which is what
+the device accepts; anything else is refused with CKR_ATTRIBUTE_VALUE_INVALID
+by C_CreateObject and C_GenerateKey, in the same place and with the same code
+the device uses, rather than later when the key is used. With the profile off
+it defaults to off and every parameter set the cipher implements - the test
+set and CryptoPro-B, C and D besides - stays available. Write it in the
+configuration file by name to override either default. A template that does
+not name CKA_GOST28147_PARAMS at all is unaffected: that means CryptoPro-A,
+which the device accepts. A parameter set the cipher does not implement is
+refused either way, and is never quietly treated as CryptoPro-A.
 
 RSA and GOST public/private key objects can be imported separately with the
 standard C_CreateObject function. Private RSA components and the GOST private

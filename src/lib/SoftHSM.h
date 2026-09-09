@@ -241,6 +241,12 @@ private:
 	// ordinary SoftHSM mode is untouched unless it is switched on by name.
 	bool forceSensitive;
 
+	// DISABLE_OTHER_28147_MODES: accept only the two GOST 28147-89 parameter
+	// sets the reference device accepts. Defaults to the state of
+	// FAKE_RUTOKEN_ECP, like forceSensitive above.
+	bool disableOther28147Modes;
+	CK_RV checkGOST28147ParamSet(CK_ATTRIBUTE_PTR pTemplate, CK_ULONG ulCount) const;
+
 	// The Rutoken profile's slot layout: index is the facade slot the caller
 	// sees, value is the SoftHSM slot standing behind it. Initialized tokens
 	// come first, oldest to newest, then the spare uninitialized token. Never

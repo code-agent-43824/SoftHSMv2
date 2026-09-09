@@ -111,6 +111,32 @@ jobs:
           perl -0pi -e 's/FAKE_RUTOKEN_ECP = false/FAKE_RUTOKEN_ECP = true/' \
             "$HOME/softhsm/softhsm.conf"
           P11_TEST_SO_PIN=12345678 ./portable-token-e2e multi-token "$module"
+      # DISABLE_OTHER_28147_MODES from all three sides: the profile default,
+      # the setting turned off by hand under the profile, and the ordinary mode
+      # where it defaults off and nothing about SoftHSM changes.
+      - name: Verify the GOST 28147-89 parameter-set policy
+        run: |
+          module="$GITHUB_WORKSPACE/portable-product/libsofthsm2.so"
+          for case in profile-default profile-off no-profile; do
+            export HOME="$GITHUB_WORKSPACE/gost28147-$case-home"
+            mkdir -p "$HOME"
+            ./portable-token-e2e probe "$module"
+            expect=NO
+            if [ "$case" != no-profile ]; then
+              perl -0pi -e 's/FAKE_RUTOKEN_ECP = false/FAKE_RUTOKEN_ECP = true/' \
+                "$HOME/softhsm/softhsm.conf"
+              expect=YES
+            fi
+            if [ "$case" = profile-off ]; then
+              echo 'DISABLE_OTHER_28147_MODES = false' >> "$HOME/softhsm/softhsm.conf"
+              expect=NO
+            fi
+            P11_TEST_INITIALIZE_TOKEN=YES P11_TEST_SO_PIN=12345678 \
+            P11_TEST_USER_PIN=12345678 P11_TEST_TOKEN_LABEL='Rutoken ECP' \
+              ./portable-token-e2e prepare "$module" "$GITHUB_WORKSPACE/gost28147-$case-work"
+            P11_TEST_USER_PIN=12345678 P11_28147_EXPECT_RESTRICTED=$expect \
+              ./portable-token-e2e gost28147-modes "$module"
+          done
       - name: Verify the Rutoken ECP compatibility profile
         run: |
           export HOME="$GITHUB_WORKSPACE/profile-gate-home"
