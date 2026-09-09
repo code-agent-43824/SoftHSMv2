@@ -3881,6 +3881,20 @@ static void verifyGOST28147OnPrivateKeys(Module& module, CK_SESSION_HANDLE sessi
     if (attribute(module, session, restored, CKA_VALUE) != carried)
         fail("a key wrapped and unwrapped with a private GOST 28147-89 key came back changed");
 
+    // TC26-Z, the other parameter set the device accepts. Byte 0 always
+    // agreed; byte 1024 did not, because key meshing was applied to the
+    // CryptoPro sets and not to this one. The device meshes here too.
+    const Bytes tc26z = bytesFromHex("06092a8503070102050101");
+    const CK_OBJECT_HANDLE tc26zKey =
+        createGOST28147Key(module, session, key, tc26z, CK_TRUE);
+    if (gostSample(module, session, tc26zKey, longIv, 4096, 0) !=
+        bytesFromHex("13e9883fee6baa43"))
+        fail("CKM_GOST28147 on TC26-Z differs from the device at byte 0");
+    if (gostSample(module, session, tc26zKey, longIv, 4096, 1024) !=
+        bytesFromHex("2a275c50d24ea662"))
+        fail("CKM_GOST28147 on TC26-Z differs from the device at byte 1024: the key "
+             "has to be meshed there for this set as well");
+
     trace("REFERENCE", "GOST 28147-89 works on a private key and matches the device");
 }
 

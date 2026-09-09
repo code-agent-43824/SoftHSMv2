@@ -17,7 +17,16 @@ public:
 	void encryptBlock(const unsigned char[8], unsigned char[8]) const;
 	void decryptBlock(const unsigned char[8], unsigned char[8]) const;
 	void macBlock(unsigned char[8], const unsigned char[8]) const;
-	bool usesKeyMeshing() const { return paramSet != TEST && paramSet != TC26_Z; }
+	// The reference Rutoken ECP meshes the key for TC26-Z as well, on the same
+	// 1024-byte boundary and with the same constant: measured on 4096 bytes,
+	// where excluding TC26-Z put us at 77bf085a2366484e on byte 1024 and the
+	// device at 2a275c50d24ea662, while byte 0 already agreed. Other
+	// boundaries - 256, 512, 2048 - were tried and none of them agree.
+	//
+	// The test parameter set stays out: the device refuses to create a key
+	// with it at all, so there is nothing to compare against and nothing to
+	// change the behaviour on.
+	bool usesKeyMeshing() const { return paramSet != TEST; }
 	void meshKey(unsigned char[8]);
 
 private:
