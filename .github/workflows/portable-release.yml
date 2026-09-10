@@ -698,7 +698,11 @@ jobs:
           fi
           printf '%s\n' "$changed"
 
-          documentation='^(docs/|HANDOFF\.md$|AGENTS\.md$|CLAUDE\.md$|GEMINI\.md$|\.github/copilot-instructions\.md$|README\.md$|NEWS$|CMAKE-NOTES\.md$|CMAKE-WIN-NOTES\.md$|OSX-NOTES\.md$|WIN32-NOTES\.md$|FIPS-NOTES\.md$)'
+          documentation='^(docs/|tests/portable/README\.md$|HANDOFF\.md$|AGENTS\.md$|CLAUDE\.md$|GEMINI\.md$|\.github/copilot-instructions\.md$|README\.md$|NEWS$|CMAKE-NOTES\.md$|CMAKE-WIN-NOTES\.md$|OSX-NOTES\.md$|WIN32-NOTES\.md$|FIPS-NOTES\.md$)'
+          if printf '%s\n' tests/portable/README.md | grep -Ev "$documentation" >/dev/null; then
+            echo "tests/portable/README.md must remain documentation-only" >&2
+            exit 1
+          fi
           if ! printf '%s\n' "$changed" | grep -Ev "$documentation" >/dev/null; then
             echo "No product changes since $latest_tag; publication skipped."
             echo "publish=false" >> "$GITHUB_OUTPUT"
