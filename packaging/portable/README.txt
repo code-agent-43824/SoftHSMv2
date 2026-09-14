@@ -64,15 +64,44 @@ operating-system account.
 
 Each token appears on its own slot. The profile shows fifteen readers, as the
 reference device does. Initialized tokens occupy the first of them, one each,
-oldest first by the moment the token was created; the spare uninitialized token
-SoftHSM always keeps takes the slot after them, so softhsm2-util --init-token
---free works through the profile; the rest are empty readers. The order is the
-same on every run, and adding a token does not move the ones already placed.
+oldest first by the moment the token was created; the rest report no token.
+The order is the same on every run, and adding a token does not move the ones
+already placed.
 Removing a token from the middle does shift the ones after it - a slot is held
 by the order, not by a stored token-to-slot map - so an application that pins
 itself to slot 0 rather than enumerating slots can end up on a different token.
 Tokens created by releases before this one carry no creation time, are not
 given one, and sort ahead of the rest.
+
+Creating a token, and why an uninitialized one is never shown
+------------------------------------------------------------
+
+Software written for a Rutoken does not work with uninitialized tokens. It
+treats one as a faulty device: it opens every slot it was given a token for,
+and a slot answering CKR_TOKEN_NOT_RECOGNIZED is read as hardware failure, so
+the whole slot list is discarded. A single uninitialized token in the list is
+therefore enough to hide every real token behind it - the application reports
+no devices at all rather than one bad one. A real Rutoken never presents an
+uninitialized device, and with FAKE_RUTOKEN_ECP on neither does this module.
+
+SoftHSM itself still keeps one spare slot holding an uninitialized token; that
+is how a new token is made. Under the profile it is simply not advertised: it
+is absent from C_GetSlotList(tokenPresent = TRUE) and reports no token present,
+while still answering C_GetTokenInfo and accepting C_InitToken by slot number.
+
+To create a token, initialize the first slot that shows no token:
+
+  softhsm2-util --show-slots
+  softhsm2-util --init-token --slot N --label mytoken --so-pin ... --pin ...
+
+N is the first slot printed with "Token present: no". On an empty store that is
+slot 0, and until a token exists the profile shows no slot with a token at all,
+which is what a reader with nothing in it looks like.
+
+Do not use --init-token --free. It still works, but it finds its slot by
+looking for exactly the uninitialized token a real device never has, so it
+depends on the one thing the profile is hiding. Naming the slot is both
+explicit and independent of that.
 
 Rutoken ECP compatibility profile
 ---------------------------------
@@ -83,7 +112,7 @@ which loads the PKCS #11 module:
   FAKE_RUTOKEN_ECP = true
 
 The module then reports the Rutoken ECP 2.19 library identity, a 15-slot reader
-topology with the token in slot 0, Aktiv/Rutoken token metadata, hardware
+topology with the first token in slot 0, Aktiv/Rutoken token metadata, hardware
 version 60.1 and firmware version 30.2, a stable eight-decimal-digit
 device-style serial number, and the advertised 6..249 PIN range. A token whose
 own label is blank is reported as "Rutoken ECP <no label>", exactly as the
