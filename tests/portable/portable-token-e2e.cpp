@@ -2088,6 +2088,220 @@ static void verifyGOSTKEG(Module& module, CK_SESSION_HANDLE session)
     trace("REFERENCE", "CKM_GOST_KEG matched the independent 64-byte Magma twin-key vector and plugin call shape");
 }
 
+// KEG on a 512-bit GOST R 34.10-2012 key, against the worked example published
+// with the TC26 PKCS #11 extension (sample_keg_512). That ETALON is the known
+// answer: it was computed by the standard's authors, not here.
+//
+// The construction is NOT the 256-bit one with a longer key. For a 512-bit base
+// key, VKO on Streebog-512 is the whole of KEG - it already produces the 64
+// bytes a twin key needs, and no KDF tree follows. That was established by
+// reproducing both published ETALONs, the 256-bit one included; see
+// docs/JOURNAL.md for 14.09.2026.
+//
+// There is no device trace for 512-bit KEG. Whether a real Rutoken performs it,
+// and in what form, is unverified; this follows the standard.
+//
+// Two details of the vector as it appears here. The private scalar is byte
+// reversed relative to the published sample: the sample hands C_CreateObject a
+// little-endian CKA_VALUE, which is Rutoken's convention, and SoftHSM stores
+// that attribute big-endian. And the sample omits CKA_GOSTR3411_PARAMS, which
+// this object store requires on a GOST private key, so it is supplied. Neither
+// touches the derivation - the 64 bytes below are the published ones.
+static void verifyGOSTKEG512(Module& module, CK_SESSION_HANDLE session)
+{
+    Bytes privateValue = bytesFromHex(
+        "12fd7a70067479a0f66c59f9a25534adfbc7abfd3cc72d79806f8b402601644b"
+        "3005ed365a2d8989a8ccae640d5fc08dd27dfbbfe137cf528e1ac6d445192e01");
+    Bytes publicValue = bytesFromHex(
+        "c65bd705b6860198bad4a70eb937b6b48084e260adf7b1074a89182862c5bffe"
+        "6486283541330b150fe48a737cb3e5bb043e4a1134035a6d479b189351be41c9"
+        "be9a7e2afc246276fe4e2356845293b03178e2ec003ca8a814324f16350bc0ab"
+        "534187de86c76be29a940a8db2ad71646aa0c952fdf411206548813eb9f754a1");
+    Bytes ukm = bytesFromHex(
+        "c3ef0428d4b7a1f4c5025f2e65dd2b2ea583aeefdb67c7f4214a6a298e99e325");
+    const Bytes expected = bytesFromHex(
+        "7dac56e48a4dc170faa8fcbae20db845450cccc4c6328bdc8d01157cefa2a5f1"
+        "1f1cbad8866166f01ffaab0152e24bf4609d5f46a5c899c787900d08b9fcad24");
+    // id-tc26-gost-3410-2012-512-paramSetC, the curve the published sample
+    // uses. Botan 2.19 does not know it; the module carries its domain
+    // explicitly, taken from RFC 7836.
+    Bytes curveC = bytesFromHex("06092a8503070102010203");
+    Bytes curveA = bytesFromHex("06092a8503070102010201");
+    Bytes curve256 = bytesFromHex("06092a8503070102010101");
+    Bytes digestParam = bytesFromHex("06082a85030701010203");
+
+    CK_OBJECT_CLASS privateClass = CKO_PRIVATE_KEY;
+    CK_OBJECT_CLASS secretClass = CKO_SECRET_KEY;
+    CK_KEY_TYPE gostType = CKK_GOSTR3410_512;
+    CK_KEY_TYPE twinType = CKK_MAGMA_TWIN_KEY;
+    CK_BBOOL yes = CK_TRUE;
+    CK_BBOOL no = CK_FALSE;
+    CK_ULONG valueLen = 64;
+
+    auto makeBaseKey = [&](Bytes& curve, const std::string& what) {
+        CK_ATTRIBUTE privateTemplate[] = {
+            {CKA_CLASS, &privateClass, sizeof(privateClass)},
+            {CKA_KEY_TYPE, &gostType, sizeof(gostType)},
+            {CKA_TOKEN, &no, sizeof(no)},
+            {CKA_PRIVATE, &yes, sizeof(yes)},
+            {CKA_SENSITIVE, &no, sizeof(no)},
+            {CKA_EXTRACTABLE, &yes, sizeof(yes)},
+            {CKA_DERIVE, &yes, sizeof(yes)},
+            {CKA_VALUE, privateValue.data(), static_cast<CK_ULONG>(privateValue.size())},
+            {CKA_GOSTR3410_PARAMS, curve.data(), static_cast<CK_ULONG>(curve.size())},
+            {CKA_GOSTR3411_PARAMS, digestParam.data(), static_cast<CK_ULONG>(digestParam.size())}
+        };
+        return createObject(module, session, what, privateTemplate,
+                            sizeof(privateTemplate) / sizeof(privateTemplate[0]));
+    };
+
+    const CK_OBJECT_HANDLE baseKey = makeBaseKey(curveC, "GOST KEG 512-bit private-key vector");
+
+    CK_ECDH1_DERIVE_PARAMS params{CKD_NULL, static_cast<CK_ULONG>(ukm.size()), ukm.data(),
+                                  static_cast<CK_ULONG>(publicValue.size()), publicValue.data()};
+    CK_MECHANISM mechanism{CKM_GOST_KEG, &params, sizeof(params)};
+
+    CK_ATTRIBUTE outputTemplate[] = {
+        {CKA_CLASS, &secretClass, sizeof(secretClass)},
+        {CKA_KEY_TYPE, &twinType, sizeof(twinType)},
+        {CKA_TOKEN, &no, sizeof(no)},
+        {CKA_PRIVATE, &no, sizeof(no)},
+        {CKA_SENSITIVE, &no, sizeof(no)},
+        {CKA_EXTRACTABLE, &yes, sizeof(yes)},
+        {CKA_VALUE_LEN, &valueLen, sizeof(valueLen)}
+    };
+    CK_OBJECT_HANDLE twinKey = CK_INVALID_HANDLE;
+    traceTemplate("GOST KEG 512-bit known-answer output template", outputTemplate,
+                  sizeof(outputTemplate) / sizeof(outputTemplate[0]));
+    callOk("C_DeriveKey", "512-bit CKM_GOST_KEG, full output template",
+           [&] { return module->C_DeriveKey(session, &mechanism, baseKey, outputTemplate,
+                                            sizeof(outputTemplate) / sizeof(outputTemplate[0]), &twinKey); });
+    if (attribute(module, session, twinKey, CKA_VALUE) != expected)
+        fail("512-bit CKM_GOST_KEG does not match the published TC26 sample_keg_512 ETALON");
+    if (ulongAttribute(module, session, twinKey, CKA_KEY_TYPE) != CKK_MAGMA_TWIN_KEY ||
+        ulongAttribute(module, session, twinKey, CKA_VALUE_LEN) != 64)
+        fail("512-bit CKM_GOST_KEG created an object with unexpected key type or size");
+    destroyObject(module, session, twinKey);
+
+    // The shape the Rutoken Plugin actually sends: three attributes, nothing
+    // said about sensitivity. The value still has to read back.
+    CK_ATTRIBUTE pluginTemplate[] = {
+        {CKA_CLASS, &secretClass, sizeof(secretClass)},
+        {CKA_KEY_TYPE, &twinType, sizeof(twinType)},
+        {CKA_TOKEN, &no, sizeof(no)}
+    };
+    twinKey = CK_INVALID_HANDLE;
+    callOk("C_DeriveKey", "512-bit CKM_GOST_KEG, plugin-shaped three-attribute template",
+           [&] { return module->C_DeriveKey(session, &mechanism, baseKey, pluginTemplate,
+                                            sizeof(pluginTemplate) / sizeof(pluginTemplate[0]), &twinKey); });
+    if (attribute(module, session, twinKey, CKA_VALUE) != expected)
+        fail("a plugin-shaped 512-bit CKM_GOST_KEG key does not read back as the published ETALON");
+    destroyObject(module, session, twinKey);
+
+    // Inconsistent combinations must be refused, not quietly produce something.
+    // A wrong curve of the right size matters most: the point simply is not on
+    // it, and silently deriving anyway would be the failure mode that the
+    // 256-bit paramSet A curve trap already caused once.
+    auto mustRefuse = [&](const std::string& what, CK_OBJECT_HANDLE key,
+                          CK_ULONG publicLen, CK_ULONG kdf) {
+        CK_ECDH1_DERIVE_PARAMS bad{kdf, static_cast<CK_ULONG>(ukm.size()), ukm.data(),
+                                   publicLen, publicValue.data()};
+        CK_MECHANISM badMechanism{CKM_GOST_KEG, &bad, sizeof(bad)};
+        CK_OBJECT_HANDLE refused = CK_INVALID_HANDLE;
+        check(invoke("C_DeriveKey", what,
+                     [&] { return module->C_DeriveKey(session, &badMechanism, key, pluginTemplate,
+                                                      sizeof(pluginTemplate) / sizeof(pluginTemplate[0]),
+                                                      &refused); }),
+              CKR_MECHANISM_PARAM_INVALID, ("C_DeriveKey(" + what + ")").c_str());
+        if (refused != CK_INVALID_HANDLE) fail("a refused CKM_GOST_KEG call returned a key handle");
+    };
+    mustRefuse("512-bit key with a 64-byte peer point", baseKey, 64, CKD_NULL);
+    mustRefuse("512-bit key with a foreign KDF", baseKey, 128, CKD_SHA1_KDF);
+
+    const CK_OBJECT_HANDLE onCurveA = makeBaseKey(curveA, "GOST KEG 512-bit key on paramSetA");
+    mustRefuse("512-bit key on the wrong 512-bit curve", onCurveA, 128, CKD_NULL);
+    destroyObject(module, session, onCurveA);
+
+    const CK_OBJECT_HANDLE on256 = makeBaseKey(curve256, "GOST KEG 512-bit key on a 256-bit curve");
+    mustRefuse("512-bit key on a 256-bit curve", on256, 128, CKD_NULL);
+    destroyObject(module, session, on256);
+
+    destroyObject(module, session, baseKey);
+
+    // The published example is on paramSetC. The keys this module generates -
+    // and the ones on the owner's bench, where a 512-bit certificate is what
+    // made KEG fail - are on paramSetA, which the ETALON therefore does not
+    // cover. Checked here by the property that gives key agreement its name:
+    // two freshly generated key pairs, each side deriving from its own private
+    // key and the other's public one, must arrive at the same 64 bytes. It
+    // needs no external vector and it fails if either side is wrong.
+    const Bytes curveAgreement = bytesFromHex("06092a8503070102010201");
+    CK_OBJECT_CLASS publicClass = CKO_PUBLIC_KEY;
+    CK_KEY_TYPE gost512 = CKK_GOSTR3410_512;
+    auto generatePair = [&](const std::string& what,
+                            CK_OBJECT_HANDLE& publicKey, CK_OBJECT_HANDLE& privateKey) {
+        CK_ATTRIBUTE publicTemplate[] = {
+            {CKA_CLASS, &publicClass, sizeof(publicClass)},
+            {CKA_KEY_TYPE, &gost512, sizeof(gost512)},
+            {CKA_TOKEN, &no, sizeof(no)},
+            {CKA_DERIVE, &yes, sizeof(yes)},
+            {CKA_GOSTR3410_PARAMS, const_cast<unsigned char*>(curveAgreement.data()),
+                                   static_cast<CK_ULONG>(curveAgreement.size())}
+        };
+        CK_ATTRIBUTE privateTemplate[] = {
+            {CKA_CLASS, &privateClass, sizeof(privateClass)},
+            {CKA_KEY_TYPE, &gost512, sizeof(gost512)},
+            {CKA_TOKEN, &no, sizeof(no)},
+            {CKA_PRIVATE, &yes, sizeof(yes)},
+            {CKA_DERIVE, &yes, sizeof(yes)}
+        };
+        CK_MECHANISM generation{CKM_GOSTR3410_512_KEY_PAIR_GEN, nullptr, 0};
+        callOk("C_GenerateKeyPair", what,
+               [&] { return module->C_GenerateKeyPair(session, &generation,
+                                                      publicTemplate, 5, privateTemplate, 5,
+                                                      &publicKey, &privateKey); });
+    };
+
+    CK_OBJECT_HANDLE alicePublic = CK_INVALID_HANDLE, alicePrivate = CK_INVALID_HANDLE;
+    CK_OBJECT_HANDLE bobPublic = CK_INVALID_HANDLE, bobPrivate = CK_INVALID_HANDLE;
+    generatePair("512-bit KEG agreement, first pair on paramSetA", alicePublic, alicePrivate);
+    generatePair("512-bit KEG agreement, second pair on paramSetA", bobPublic, bobPrivate);
+
+    auto deriveWith = [&](CK_OBJECT_HANDLE privateKey, CK_OBJECT_HANDLE peerPublic,
+                          const std::string& what) {
+        Bytes peer = attribute(module, session, peerPublic, CKA_VALUE);
+        if (peer.size() != 128)
+            fail("a generated 512-bit public key is " + std::to_string(peer.size()) +
+                 " bytes where 128 are expected");
+        CK_ECDH1_DERIVE_PARAMS agree{CKD_NULL, static_cast<CK_ULONG>(ukm.size()), ukm.data(),
+                                     static_cast<CK_ULONG>(peer.size()), peer.data()};
+        CK_MECHANISM agreeMechanism{CKM_GOST_KEG, &agree, sizeof(agree)};
+        CK_OBJECT_HANDLE derived = CK_INVALID_HANDLE;
+        callOk("C_DeriveKey", what,
+               [&] { return module->C_DeriveKey(session, &agreeMechanism, privateKey,
+                                                pluginTemplate,
+                                                sizeof(pluginTemplate) / sizeof(pluginTemplate[0]),
+                                                &derived); });
+        Bytes value = attribute(module, session, derived, CKA_VALUE);
+        destroyObject(module, session, derived);
+        return value;
+    };
+    const Bytes fromAlice = deriveWith(alicePrivate, bobPublic, "512-bit KEG, alice with bob's key");
+    const Bytes fromBob = deriveWith(bobPrivate, alicePublic, "512-bit KEG, bob with alice's key");
+    if (fromAlice.size() != 64)
+        fail("512-bit KEG produced " + std::to_string(fromAlice.size()) + " bytes, not 64");
+    if (fromAlice != fromBob)
+        fail("512-bit KEG on paramSetA is not a key agreement: the two sides derived "
+             "different keys");
+    destroyObject(module, session, alicePublic);
+    destroyObject(module, session, alicePrivate);
+    destroyObject(module, session, bobPublic);
+    destroyObject(module, session, bobPrivate);
+
+    trace("REFERENCE", "512-bit CKM_GOST_KEG matched the published TC26 ETALON in both call "
+                       "shapes, and both sides agree on paramSetA");
+}
+
 static void verifyRSACreateObjectRoundTrip(Module& module, CK_SESSION_HANDLE session)
 {
     CK_OBJECT_CLASS publicClass = CKO_PUBLIC_KEY;
@@ -2477,6 +2691,7 @@ static void prepare(const fs::path& modulePath, const fs::path& work)
     {
         verifyGOSTCreateObjectRoundTrip(module, session);
         verifyGOSTKEG(module, session);
+        verifyGOSTKEG512(module, session);
         verifyGOST2012_512(module, session);
     }
     else

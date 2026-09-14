@@ -10033,8 +10033,18 @@ CK_RV SoftHSM::C_DeriveKey
 	{
 		if (keyType != CKK_MAGMA_TWIN_KEY)
 			return CKR_TEMPLATE_INCONSISTENT;
+		// KEG takes a GOST R 34.10-2012 private key of either length. The
+		// published TC26 extension names both as base key types, and a token
+		// holding a 512-bit certificate cannot decrypt without the second.
+		const CK_KEY_TYPE baseType =
+			key->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED);
+		const bool baseIsGOST = baseType == CKK_GOSTR3410
+#ifdef WITH_GOST_3410_2012_512
+		                        || baseType == CKK_GOSTR3410_512
+#endif
+		                        ;
 		if (key->getUnsignedLongValue(CKA_CLASS, CKO_VENDOR_DEFINED) != CKO_PRIVATE_KEY ||
-		    key->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED) != CKK_GOSTR3410)
+		    !baseIsGOST)
 			return CKR_KEY_TYPE_INCONSISTENT;
 		return this->deriveGOSTKEG(hSession, pMechanism, hBaseKey, pTemplate,
 		                           ulCount, phKey, isOnToken, isPrivate);
@@ -14445,9 +14455,14 @@ CK_RV SoftHSM::deriveGOSTKEG
 
 	CK_ECDH1_DERIVE_PARAMS_PTR params =
 		CK_ECDH1_DERIVE_PARAMS_PTR(pMechanism->pParameter);
+	// The peer's public key is twice the field size: 64 bytes for a 256-bit
+	// key, 128 for a 512-bit one. Which of the two is required is decided by
+	// the base key below, so that a 64-byte point cannot be passed with a
+	// 512-bit key or the other way round.
 	if (params->kdf != CKD_NULL ||
 	    params->ulSharedDataLen != 32 || params->pSharedData == NULL_PTR ||
-	    params->ulPublicDataLen != 64 || params->pPublicData == NULL_PTR)
+	    (params->ulPublicDataLen != 64 && params->ulPublicDataLen != 128) ||
+	    params->pPublicData == NULL_PTR)
 		return CKR_MECHANISM_PARAM_INVALID;
 
 	for (CK_ULONG i = 0; i < ulCount; ++i)
@@ -14477,6 +14492,14 @@ CK_RV SoftHSM::deriveGOSTKEG
 	BotanGOST2012PrivateKey privateKey;
 	CK_RV rv = getGOSTPrivateKey(&privateKey, token, baseKey);
 	if (rv != CKR_OK) return rv;
+	// The peer point has to match the base key, not merely be one of the two
+	// accepted lengths. Mixing them would otherwise reach the curve check as a
+	// confusing failure instead of being named here.
+	if (params->ulPublicDataLen != privateKey.getD().size() * 2)
+	{
+		privateKey.setD(ByteString());
+		return CKR_MECHANISM_PARAM_INVALID;
+	}
 	ByteString publicValue(params->pPublicData, params->ulPublicDataLen);
 	ByteString ukmSource(params->pSharedData, params->ulSharedDataLen);
 	ByteString twinKey;
