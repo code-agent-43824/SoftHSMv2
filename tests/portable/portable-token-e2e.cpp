@@ -2084,6 +2084,25 @@ static void verifyGOSTKEG(Module& module, CK_SESSION_HANDLE session)
           CKR_MECHANISM_PARAM_INVALID, "C_DeriveKey(CKM_GOST_KEG unsupported kdf)");
     if (twinKey != CK_INVALID_HANDLE) fail("failed CKM_GOST_KEG call returned a key handle");
 
+    // The mirror of the 512-bit length check: a 256-bit base key must refuse a
+    // 128-byte peer point. Since KEG accepts both key lengths, the two sizes
+    // have to stay told apart in both directions rather than merely being
+    // accepted one at a time.
+    Bytes oversizedPeer(128, 0x00);
+    std::copy(publicValue.begin(), publicValue.end(), oversizedPeer.begin());
+    CK_ECDH1_DERIVE_PARAMS oversized{CKD_NULL, static_cast<CK_ULONG>(ukm.size()), ukm.data(),
+                                     static_cast<CK_ULONG>(oversizedPeer.size()),
+                                     oversizedPeer.data()};
+    CK_MECHANISM oversizedMechanism{CKM_GOST_KEG, &oversized, sizeof(oversized)};
+    twinKey = CK_INVALID_HANDLE;
+    check(invoke("C_DeriveKey", "256-bit key with a 128-byte peer point",
+                 [&] { return module->C_DeriveKey(session, &oversizedMechanism, baseKey,
+                                                  pluginTemplate,
+                                                  sizeof(pluginTemplate) / sizeof(pluginTemplate[0]),
+                                                  &twinKey); }),
+          CKR_MECHANISM_PARAM_INVALID, "C_DeriveKey(256-bit key, 128-byte peer point)");
+    if (twinKey != CK_INVALID_HANDLE) fail("failed CKM_GOST_KEG call returned a key handle");
+
     destroyObject(module, session, baseKey);
     trace("REFERENCE", "CKM_GOST_KEG matched the independent 64-byte Magma twin-key vector and plugin call shape");
 }
