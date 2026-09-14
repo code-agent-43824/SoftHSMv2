@@ -462,7 +462,8 @@ private:
     bool initialized_ = false;
 };
 
-static std::vector<CK_SLOT_ID> slots(Module& module, CK_BBOOL tokenPresent)
+static std::vector<CK_SLOT_ID> slots(Module& module, CK_BBOOL tokenPresent,
+                                     bool allowEmpty = false)
 {
     std::vector<CK_SLOT_ID> result;
     for (;;)
@@ -494,7 +495,7 @@ static std::vector<CK_SLOT_ID> slots(Module& module, CK_BBOOL tokenPresent)
         }
         listed << ']';
         trace("PKCS11", listed.str());
-        if (result.empty()) fail("module exposed no token-present slots");
+        if (result.empty() && !allowEmpty) fail("module exposed no token-present slots");
         return result;
     }
 }
@@ -519,6 +520,20 @@ static CK_TOKEN_INFO tokenInfo(Module& module, CK_SLOT_ID slot)
                                                    sizeof(info.serialNumber)) +
                    "\", flags=" + hexNumber(info.flags));
     return info;
+}
+
+// C_GetTokenInfo on a slot that may hold nothing. Used to find the spare
+// uninitialized token, which the Rutoken profile deliberately keeps out of
+// C_GetSlotList(tokenPresent = TRUE) while still answering about it: that is
+// the slot a new token is created on.
+static bool tokenInfoIfAny(Module& module, CK_SLOT_ID slot, CK_TOKEN_INFO& info)
+{
+    const CK_RV rv = invoke("C_GetTokenInfo", "slotID=" + std::to_string(slot) +
+                                " (may hold no token)",
+                            [&] { return module->C_GetTokenInfo(slot, &info); });
+    if (rv == CKR_OK) return true;
+    check(rv, CKR_TOKEN_NOT_PRESENT, "C_GetTokenInfo(slot holding no token)");
+    return false;
 }
 
 static CK_SLOT_ID selectSlot(Module& module, bool requireInitialized)
@@ -549,11 +564,19 @@ static CK_SLOT_ID selectSlotForInitialization(Module& module, const std::string&
     const std::optional<CK_SLOT_ID> requestedSlot = configuredSlot();
     std::vector<CK_SLOT_ID> existingTarget;
     std::vector<CK_SLOT_ID> uninitialized;
-    const std::vector<CK_SLOT_ID> present = slots(module, CK_TRUE);
-    for (CK_SLOT_ID slot : present)
+    const std::vector<CK_SLOT_ID> present = slots(module, CK_TRUE, true);
+    // Every reader, not only the ones reporting a token. Under the Rutoken
+    // profile the spare uninitialized token is deliberately absent from the
+    // token-present list - software written for a real Rutoken discards the
+    // whole list when it meets one - but it still answers C_GetTokenInfo, and
+    // it is where a new token goes. On an empty store it is the only token
+    // there is, so looking only at the present list would find nothing to
+    // initialize.
+    for (CK_SLOT_ID slot : slots(module, CK_FALSE, true))
     {
         if (requestedSlot && slot != *requestedSlot) continue;
-        const CK_TOKEN_INFO info = tokenInfo(module, slot);
+        CK_TOKEN_INFO info{};
+        if (!tokenInfoIfAny(module, slot, info)) continue;
         if ((info.flags & CKF_TOKEN_INITIALIZED) != 0)
         {
             if (paddedText(info.label, sizeof(info.label)) == targetLabel)
@@ -4185,11 +4208,20 @@ static void verifyRutokenProfile(const fs::path& modulePath)
     for (size_t i = 0; i < allSlots.size(); ++i)
         if (allSlots[i] != static_cast<CK_SLOT_ID>(i)) fail("Rutoken slot IDs are not contiguous 0..14");
 
-    // The occupied slots run from zero without a gap: the initialized tokens
-    // first, then the one spare SoftHSM always keeps, which reports present
-    // and uninitialized. This used to insist on a token in slot 0 and nowhere
-    // else, which was the old single-slot facade; the spare was hidden then,
-    // and hiding it is what stopped --init-token --free from working here.
+    // The occupied slots run from zero without a gap, and every one of them
+    // holds an initialized token.
+    //
+    // This is the blocker the owner hit on the live bench. SoftHSM always
+    // keeps one slot with an uninitialized token; the profile used to list it
+    // here beside the real ones. The Rutoken Plugin opens every slot it is
+    // given, gets CKR_TOKEN_NOT_RECOGNIZED from that one, reads it as a
+    // hardware fault and drops the whole list - so a single spare hid every
+    // real token and the plugin reported no devices at all. A real Rutoken
+    // never shows an uninitialized device, and neither does the profile now.
+    //
+    // Two properties are checked, because either alone can be satisfied the
+    // wrong way: no listed slot holds an uninitialized token, and a session
+    // opens on every listed slot.
     if (presentSlots.empty()) fail("Rutoken profile shows no token at all");
     for (size_t i = 0; i < presentSlots.size(); ++i)
         if (presentSlots[i] != static_cast<CK_SLOT_ID>(i))
@@ -4198,13 +4230,38 @@ static void verifyRutokenProfile(const fs::path& modulePath)
     for (size_t i = 0; i < presentSlots.size(); ++i)
     {
         const CK_TOKEN_INFO occupant = tokenInfo(module, presentSlots[i]);
-        const bool initialized = (occupant.flags & CKF_TOKEN_INITIALIZED) != 0;
-        const bool last = i + 1 == presentSlots.size();
-        if (initialized == last)
-            fail(std::string("slot ") + std::to_string(i) + " holds " +
-                 (initialized ? "an initialized token" : "the spare") +
-                 ", but it is " + (last ? "the last occupied slot" : "not the last") +
-                 ": the spare belongs after every initialized token");
+        if ((occupant.flags & CKF_TOKEN_INITIALIZED) == 0)
+            fail("slot " + std::to_string(presentSlots[i]) +
+                 " is listed as holding a token but that token is uninitialized;"
+                 " software written for a Rutoken discards the whole slot list over it");
+        CK_SESSION_HANDLE session = CK_INVALID_HANDLE;
+        callOk("C_OpenSession", "slotID=" + std::to_string(presentSlots[i]) +
+                   " (every listed slot must open)",
+               [&] { return module->C_OpenSession(presentSlots[i], CKF_SERIAL_SESSION,
+                                                  nullptr, nullptr, &session); });
+        callOk("C_CloseSession", "hSession from slot " + std::to_string(presentSlots[i]),
+               [&] { return module->C_CloseSession(session); });
+    }
+
+    // The spare has to stay reachable by slot ID even though it is no longer
+    // advertised, or there would be no way to make a new token through the
+    // profile. It sits immediately past the listed run: C_GetTokenInfo still
+    // answers for it, and reports it uninitialized, which is what
+    // softhsm2-util --init-token --free looks for.
+    const CK_SLOT_ID spareSlot = static_cast<CK_SLOT_ID>(presentSlots.size());
+    if (spareSlot < 15)
+    {
+        const CK_TOKEN_INFO reserve = tokenInfo(module, spareSlot);
+        if ((reserve.flags & CKF_TOKEN_INITIALIZED) != 0)
+            fail("slot " + std::to_string(spareSlot) +
+                 " should hold the spare uninitialized token, ready to be initialized");
+        CK_SLOT_INFO hidden{};
+        callOk("C_GetSlotInfo", "slotID=" + std::to_string(spareSlot) + " (the spare)",
+               [&] { return module->C_GetSlotInfo(spareSlot, &hidden); });
+        if ((hidden.flags & CKF_TOKEN_PRESENT) != 0)
+            fail("slot " + std::to_string(spareSlot) +
+                 " reports CKF_TOKEN_PRESENT but is absent from C_GetSlotList(tokenPresent=TRUE);"
+                 " the flag and the list must agree");
     }
 
     CK_SLOT_INFO slot{};
@@ -4238,10 +4295,10 @@ static void verifyRutokenProfile(const fs::path& modulePath)
         (token.flags & (CKF_SO_PIN_TO_BE_CHANGED | CKF_USER_PIN_TO_BE_CHANGED)) != 0)
         fail("Rutoken token flags differ from the reference device");
 
-    // The first reader past the occupied run is genuinely empty. It used to be
-    // slot 1 always; now it is wherever the tokens end, since the spare is
-    // shown too.
-    const CK_SLOT_ID firstEmpty = static_cast<CK_SLOT_ID>(presentSlots.size());
+    // The first reader with nothing behind it at all sits one past the spare:
+    // the listed tokens, then the spare that is no longer listed, then empty
+    // readers to the end of the fifteen.
+    const CK_SLOT_ID firstEmpty = static_cast<CK_SLOT_ID>(presentSlots.size() + 1);
     CK_TOKEN_INFO absent{};
     check(invoke("C_GetTokenInfo", "slotID=" + std::to_string(firstEmpty) + ", pInfo=&absent",
                  [&] { return module->C_GetTokenInfo(firstEmpty, &absent); }),
@@ -4456,17 +4513,24 @@ static void verifyRutokenProfile(const fs::path& modulePath)
 // token label, and where the spare uninitialized token sits.
 struct SlotLayout
 {
-    std::vector<std::string> labels;   // one per occupied slot, in slot order
+    std::vector<std::string> labels;   // one per listed slot, in slot order
     std::vector<CK_SLOT_ID> present;   // what C_GetSlotList(tokenPresent) returned
+    CK_SLOT_ID spare;                  // the unlisted slot holding the spare
+    bool haveSpare;                    // false when all fifteen are taken
 };
 
 static SlotLayout readSlotLayout(Module& module)
 {
     SlotLayout layout;
+    layout.spare = 15;
+    layout.haveSpare = false;
     const std::vector<CK_SLOT_ID> all = slots(module, CK_FALSE);
     if (all.size() != 15)
         fail("the profile must always show fifteen readers, saw " + std::to_string(all.size()));
-    layout.present = slots(module, CK_TRUE);
+    // An empty store lists nothing at all under the profile: the only token
+    // there is the spare, and the spare is not advertised. That is the state
+    // this scenario starts from.
+    layout.present = slots(module, CK_TRUE, true);
 
     for (size_t i = 0; i < all.size(); ++i)
     {
@@ -4482,11 +4546,35 @@ static SlotLayout readSlotLayout(Module& module)
                  (listed ? "listed" : "did not list") + " it");
         if (!occupied)
         {
-            // An empty reader answers about no token at all.
-            CK_TOKEN_INFO ignored{};
-            check(invoke("C_GetTokenInfo", "slotID=" + std::to_string(all[i]) + " (empty reader)",
-                         [&] { return module->C_GetTokenInfo(all[i], &ignored); }),
-                  CKR_TOKEN_NOT_PRESENT, "C_GetTokenInfo(empty reader)");
+            // Two kinds of slot are not listed. The spare, which still answers
+            // C_GetTokenInfo and reports itself uninitialized - that is how a
+            // new token is made, and what --init-token --free looks for - and
+            // the genuinely empty readers past it, which answer about no token
+            // at all. The spare comes first, directly after the listed run.
+            CK_TOKEN_INFO reserve{};
+            const CK_RV rv = invoke("C_GetTokenInfo", "slotID=" + std::to_string(all[i]) +
+                                        " (not listed)",
+                                    [&] { return module->C_GetTokenInfo(all[i], &reserve); });
+            if (rv == CKR_OK)
+            {
+                if (layout.haveSpare)
+                    fail("slot " + std::to_string(all[i]) + " holds a second unlisted token; "
+                         "SoftHSM keeps exactly one spare");
+                if ((reserve.flags & CKF_TOKEN_INITIALIZED) != 0)
+                    fail("slot " + std::to_string(all[i]) + " holds an initialized token but is "
+                         "absent from C_GetSlotList(tokenPresent=TRUE)");
+                if (all[i] != static_cast<CK_SLOT_ID>(layout.labels.size()))
+                    fail("the spare sits on slot " + std::to_string(all[i]) + " but the listed "
+                         "tokens end at slot " + std::to_string(layout.labels.size()) +
+                         "; the spare belongs directly after them");
+                layout.spare = all[i];
+                layout.haveSpare = true;
+                continue;
+            }
+            check(rv, CKR_TOKEN_NOT_PRESENT, "C_GetTokenInfo(empty reader)");
+            if (!layout.haveSpare && layout.labels.size() < 15)
+                fail("slot " + std::to_string(all[i]) + " is empty and no spare was found before "
+                     "it; there would be no way to create a new token");
             continue;
         }
         if (layout.labels.size() != i)
@@ -4494,6 +4582,9 @@ static SlotLayout readSlotLayout(Module& module)
                  std::to_string(i - 1) + " does not: the occupied slots must be contiguous "
                  "from zero");
         const CK_TOKEN_INFO token = tokenInfo(module, all[i]);
+        if ((token.flags & CKF_TOKEN_INITIALIZED) == 0)
+            fail("slot " + std::to_string(all[i]) + " is listed as holding a token but that "
+                 "token is uninitialized");
         layout.labels.push_back(paddedText(token.label, sizeof(token.label)));
     }
 
@@ -4507,8 +4598,11 @@ static SlotLayout readSlotLayout(Module& module)
                  [&] { return module->C_GetTokenInfo(15, &beyondToken); }),
           CKR_SLOT_ID_INVALID, "C_GetTokenInfo(slot 15)");
 
-    trace("LAYOUT", "occupied slots 0.." + std::to_string(layout.labels.size() - 1) +
-                    ", last of them \"" + layout.labels.back() + "\"");
+    if (layout.labels.empty())
+        trace("LAYOUT", "no token listed; the spare sits on slot " + std::to_string(layout.spare));
+    else
+        trace("LAYOUT", "listed slots 0.." + std::to_string(layout.labels.size() - 1) +
+                        ", last of them \"" + layout.labels.back() + "\"");
     return layout;
 }
 
@@ -4528,15 +4622,16 @@ static void verifyMultipleTokens(const fs::path& modulePath)
     {
         Module module(modulePath);
         SlotLayout layout = readSlotLayout(module);
-        if (layout.labels.size() != 1)
-            fail("this scenario wants a store holding nothing but the spare token; it has " +
-                 std::to_string(layout.labels.size()) + " occupied slots");
+        if (!layout.labels.empty())
+            fail("this scenario wants a store holding nothing but the spare token; it lists " +
+                 std::to_string(layout.labels.size()) + " tokens");
 
         for (size_t i = 0; i < wanted.size(); ++i)
         {
-            // The spare always sits at the end of the occupied run, and
-            // initializing it is exactly what --init-token --free does.
-            const CK_SLOT_ID spare = static_cast<CK_SLOT_ID>(layout.labels.size() - 1);
+            // The spare sits directly after the listed run, and initializing
+            // it is exactly what --init-token --free does.
+            if (!layout.haveSpare) fail("no spare slot to initialize");
+            const CK_SLOT_ID spare = layout.spare;
             std::array<CK_UTF8CHAR, 32> label{};
             label.fill(' ');
             std::copy(wanted[i].begin(), wanted[i].end(), label.begin());
@@ -4550,9 +4645,9 @@ static void verifyMultipleTokens(const fs::path& modulePath)
             layout = readSlotLayout(module);
             // The new token takes the slot the spare was on, a fresh spare
             // appears after it, and nothing already placed has moved.
-            if (layout.labels.size() != placed.size() + 1)
+            if (layout.labels.size() != placed.size())
                 fail("after initializing " + std::to_string(placed.size()) + " tokens the profile "
-                     "shows " + std::to_string(layout.labels.size()) + " occupied slots");
+                     "lists " + std::to_string(layout.labels.size()) + " of them");
             for (size_t k = 0; k < placed.size(); ++k)
                 if (layout.labels[k] != placed[k])
                     fail("slot " + std::to_string(k) + " moved: expected \"" + placed[k] +
@@ -4567,7 +4662,7 @@ static void verifyMultipleTokens(const fs::path& modulePath)
     {
         Module module(modulePath);
         const SlotLayout layout = readSlotLayout(module);
-        if (layout.labels.size() != placed.size() + 1)
+        if (layout.labels.size() != placed.size())
             fail("a fresh load sees a different number of tokens");
         for (size_t k = 0; k < placed.size(); ++k)
             if (layout.labels[k] != placed[k])
@@ -4575,13 +4670,17 @@ static void verifyMultipleTokens(const fs::path& modulePath)
                      " where \"" + placed[k] + "\" stood before");
         trace("LAYOUT", "a fresh library load reproduced the same layout");
 
-        // The spare is present but uninitialized: that is what a reader with a
-        // blank token looks like, and it is the slot --init-token --free takes.
+        // The spare is reachable but unlisted: C_GetTokenInfo answers for it
+        // and reports it uninitialized, which is the slot --init-token --free
+        // takes, while no application enumerating devices ever sees it.
         const CK_SLOT_ID spare = static_cast<CK_SLOT_ID>(placed.size());
+        if (!layout.haveSpare || layout.spare != spare)
+            fail("the spare should sit unlisted on slot " + std::to_string(spare));
         const CK_TOKEN_INFO spareToken = tokenInfo(module, spare);
         if ((spareToken.flags & CKF_TOKEN_INITIALIZED) != 0)
             fail("the slot after the last token should hold the uninitialized spare");
-        trace("LAYOUT", "the spare uninitialized token is present on slot " + std::to_string(spare));
+        trace("LAYOUT", "the spare uninitialized token is reachable, unlisted, on slot " +
+                        std::to_string(spare));
 
         // Every operation has to answer about the token behind the slot it was
         // asked on, not about slot 0.

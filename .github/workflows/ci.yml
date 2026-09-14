@@ -147,8 +147,16 @@ jobs:
           perl -0pi -e 's/FAKE_RUTOKEN_ECP = false/FAKE_RUTOKEN_ECP = true/' \
             "$HOME/softhsm/softhsm.conf"
           grep -F 'FAKE_RUTOKEN_ECP = true' "$HOME/softhsm/softhsm.conf"
-          # A store whose token has never been labelled must report the
-          # placeholder the device uses.
+          # A token that has never been labelled must report the placeholder
+          # the device uses. It has to be initialized first: the profile no
+          # longer lists the spare uninitialized token, because software
+          # written for a Rutoken treats one as a broken device and drops the
+          # whole slot list. Creating it here on slot 0, through the profile,
+          # is also the documented way to make the first token - so this gate
+          # proves that path still works.
+          "$GITHUB_WORKSPACE/portable-product/softhsm2-util" \
+            --module "$module" --init-token --slot 0 --label '' \
+            --so-pin 12345678 --pin 12345678
           P11_PROFILE_EXPECTED_LABEL='Rutoken ECP <no label>' \
             ./portable-token-e2e rutoken-profile "$module"
       # The other branch of the label rule, and everything the gate can only

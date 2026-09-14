@@ -890,11 +890,12 @@ CK_RV SoftHSM::C_GetSlotList(CK_BBOOL tokenPresent, CK_SLOT_ID_PTR pSlotList, CK
 		CK_ULONG replenish = 0;
 		(void)slotManager->getSlotList(objectStore, CK_FALSE, NULL_PTR, &replenish);
 
-		// Every slot the layout fills holds a token - the initialized ones and
-		// the one spare, which a real reader also reports as present. The rest
-		// are empty readers.
+		// Only the initialized tokens are presented as slots holding a token.
+		// The spare keeps its place in the layout, so it can still be reached
+		// by slot ID to be initialized, but it is not advertised here - see
+		// fakeRutokenPresentCount.
 		const CK_ULONG count = tokenPresent == CK_TRUE ?
-			static_cast<CK_ULONG>(fakeRutokenLayout().size()) :
+			static_cast<CK_ULONG>(fakeRutokenPresentCount()) :
 			static_cast<CK_ULONG>(FAKE_RUTOKEN_SLOT_COUNT);
 		if (pSlotList == NULL_PTR) { *pulCount = count; return CKR_OK; }
 		if (*pulCount < count) { *pulCount = count; return CKR_BUFFER_TOO_SMALL; }
@@ -917,7 +918,11 @@ CK_RV SoftHSM::C_GetSlotInfo(CK_SLOT_ID slotID, CK_SLOT_INFO_PTR pInfo)
 		if (pInfo == NULL_PTR) return CKR_ARGUMENTS_BAD;
 		memset(pInfo->slotDescription, ' ', sizeof(pInfo->slotDescription));
 		memset(pInfo->manufacturerID, ' ', sizeof(pInfo->manufacturerID));
-		const bool occupied = slotID < fakeRutokenLayout().size();
+		// Deliberately the same test as C_GetSlotList(tokenPresent = TRUE), so
+		// the flag and the list can never disagree. The slot backing the spare
+		// token therefore looks exactly like an empty reader, which is what a
+		// real Rutoken shows when no device is plugged into it.
+		const bool occupied = slotID < fakeRutokenPresentCount();
 		if (occupied)
 		{
 			// "Aktiv Rutoken ECP 0" is what the reference device reports, and
@@ -1624,9 +1629,12 @@ std::vector<CK_SLOT_ID> SoftHSM::fakeRutokenLayout()
 		if (token == NULL) continue;
 		if (!token->isInitialized())
 		{
-			// SoftHSM keeps exactly one of these. Showing it is what makes
-			// softhsm2-util --init-token --free work through the profile, and
-			// it is the event C_WaitForSlotEvent has to report.
+			// SoftHSM keeps exactly one of these. Keeping it in the layout is
+			// what makes softhsm2-util --init-token --free work through the
+			// profile, and it is the event C_WaitForSlotEvent has to report.
+			// It is not advertised as a slot holding a token; that is decided
+			// by fakeRutokenPresentCount, and the spare sorts last so the
+			// tokens that are advertised remain a prefix of the layout.
 			if (!haveSpare) { spare = it->first; haveSpare = true; }
 			continue;
 		}
@@ -1648,6 +1656,27 @@ std::vector<CK_SLOT_ID> SoftHSM::fakeRutokenLayout()
 	if (haveSpare && layout.size() < FAKE_RUTOKEN_SLOT_COUNT) layout.push_back(spare);
 
 	return layout;
+}
+
+// The spare uninitialized token keeps its place in the layout - it is how a
+// new token is created and what C_WaitForSlotEvent reports - but it is not
+// shown as a slot holding a token. Software written for a real Rutoken reads
+// an uninitialized token as a faulty device: the Rutoken Plugin answers
+// C_OpenSession on such a slot, gets CKR_TOKEN_NOT_RECOGNIZED and throws away
+// the entire slot list, so a single spare hides every real token behind it.
+// A real device never presents one, and neither does the profile.
+size_t SoftHSM::fakeRutokenPresentCount()
+{
+	const std::vector<CK_SLOT_ID> layout = fakeRutokenLayout();
+	size_t present = 0;
+	while (present < layout.size())
+	{
+		Slot* slot = slotManager->getSlot(layout[present]);
+		Token* token = slot != NULL ? slot->getToken() : NULL;
+		if (token == NULL || !token->isInitialized()) break;
+		++present;
+	}
+	return present;
 }
 
 CK_SLOT_ID SoftHSM::fakeRutokenBackingSlotID(CK_SLOT_ID externalSlotID)
@@ -2318,10 +2347,11 @@ CK_RV SoftHSM::C_InitToken(CK_SLOT_ID slotID, CK_UTF8CHAR_PTR pPin, CK_ULONG ulP
 
 	// SoftHSM always keeps one spare slot holding an uninitialised token.
 	// Initialising that one is the single state change the library has that a
-	// watcher would call a slot event: a token appears where there was none,
-	// and the next C_GetSlotList grows by a fresh spare. Re-initialising a
-	// token that already existed wipes it but inserts nothing, so it is not
-	// reported.
+	// watcher would call a slot event: under the profile the slot genuinely
+	// joins the list C_GetSlotList(tokenPresent = TRUE) returns, having been
+	// withheld from it until now, and a fresh spare takes its place behind.
+	// Re-initialising a token that already existed wipes it but inserts
+	// nothing, so it is not reported.
 	Token* slotToken = slot->getToken();
 	const bool wasInitialised = slotToken != NULL && slotToken->isInitialized();
 

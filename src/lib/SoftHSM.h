@@ -252,6 +252,13 @@ private:
 	// come first, oldest to newest, then the spare uninitialized token. Never
 	// longer than the fifteen slots the profile advertises.
 	std::vector<CK_SLOT_ID> fakeRutokenLayout();
+	// How many of those facade slots hold a token an application may use -
+	// that is, an initialized one. Always a prefix of the layout, because the
+	// spare sorts last. This, not the layout length, is what the profile
+	// presents as a slot with a token: software written for a real Rutoken
+	// treats an uninitialized token as a broken device and discards the whole
+	// slot list over it, and a real device never shows one.
+	size_t fakeRutokenPresentCount();
 	CK_SLOT_ID fakeRutokenBackingSlotID(CK_SLOT_ID externalSlotID);
 	// The other direction: which facade slot a SoftHSM slot appears on.
 	CK_SLOT_ID fakeRutokenFacadeSlotID(CK_SLOT_ID backingSlotID);

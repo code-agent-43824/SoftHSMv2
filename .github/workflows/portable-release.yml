@@ -334,6 +334,15 @@ jobs:
           test ! -e "$no_template/tokens"
           perl -0pi -e 's/FAKE_RUTOKEN_ECP = false/FAKE_RUTOKEN_ECP = true/' \
             "$generated_home/softhsm/softhsm.conf"
+          # The placeholder label belongs to a token that carries no label of
+          # its own, so one has to be created first. The profile no longer
+          # lists the spare uninitialized token - software written for a
+          # Rutoken reads one as a broken device and drops the whole slot list
+          # - and creating the first token on slot 0 through the profile is
+          # the documented way to do it.
+          HOME="$generated_home" "$kit/bin/softhsm2-util" \
+            --module "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so" \
+            --init-token --slot 0 --label '' --so-pin 12345678 --pin 12345678
           HOME="$generated_home" P11_PROFILE_EXPECTED_LABEL='Rutoken ECP <no label>' \
             "$kit/bin/portable-token-e2e" rutoken-profile \
               "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so"
