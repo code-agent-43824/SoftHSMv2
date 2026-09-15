@@ -93,6 +93,18 @@ jobs:
           c++ -std=c++17 -O2 -Wall -Wextra -Werror -static-libstdc++ -static-libgcc \
             -I src/lib/pkcs11 tests/portable/portable-token-e2e.cpp \
             -ldl -o portable-token-e2e
+      # The client compiles here on Linux and then again under MSVC, but only
+      # in the release run - so a name windows.h steals with a macro gets
+      # through this job and reddens the release matrix instead. It has
+      # happened twice: "small" from rpcndr.h, and std::max. This reproduces
+      # the condition without Windows: every header the client uses is
+      # included first, then max, min and small are defined as macros the way
+      # windows.h defines them, and only the client's own code is exposed to
+      # them. Syntax-only, so it costs a couple of seconds.
+      - name: "Check the client against the macros windows.h defines"
+        run: |
+          c++ -std=c++17 -fsyntax-only -I src/lib/pkcs11 -I tests/portable \
+            tests/portable/windows-macro-guard.cpp
       - name: Verify a cold start creates the token directory
         run: |
           export HOME="$GITHUB_WORKSPACE/first-run-home"

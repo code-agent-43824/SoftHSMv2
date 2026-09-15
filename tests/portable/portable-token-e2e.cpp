@@ -2123,7 +2123,12 @@ static Big mod(const Big& a, const Big& m)
 static Big mulmod(const Big& a, const Big& b, const Big& m) { return mod(mul(a, b), m); }
 static Big addmod(const Big& a, const Big& b, const Big& m)
 {
-    Big r(std::max(a.size(), b.size()) + 1, 0);
+    // Not std::max: windows.h defines max as a macro, and MSVC then reads
+    // std::max(...) as std::(...). Same trap as "small" from rpcndr.h, which
+    // this project has already been caught by once - and, like that one, it is
+    // invisible to every compiler used locally.
+    const size_t width = a.size() > b.size() ? a.size() : b.size();
+    Big r(width + 1, 0);
     uint64_t carry = 0;
     for (size_t i = 0; i < r.size(); ++i)
     {
