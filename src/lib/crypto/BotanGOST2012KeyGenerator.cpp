@@ -16,6 +16,7 @@
 
 #include "config.h"
 #include "BotanGOST2012KeyGenerator.h"
+#include "BotanGOSTCurves.h"
 #include "CryptoFactory.h"
 #include "RNG.h"
 #include "log.h"
@@ -70,14 +71,20 @@ bool BotanGOST2012KeyGenerator::generate(const ByteString& encodedCurveOID,
 
 	try
 	{
-		std::vector<uint8_t> encodedCurve(encodedCurveOID.size());
-		if (!encodedCurve.empty())
-			std::memcpy(encodedCurve.data(), encodedCurveOID.const_byte_str(), encodedCurve.size());
-		Botan::EC_Group group(encodedCurve);
-		if (group.get_order().bits() != orderBits)
+		// Never Botan::EC_Group(oid) here. Botan 2.19 resolves the TC26
+		// 256-bit paramSetA OID to the older CryptoPro-A curve, and this is
+		// where that used to happen: the key came out on CryptoPro-A while its
+		// CKA_GOSTR3410_PARAMS still said paramSetA.
+		if (!BotanGOSTCurves::supported(encodedCurveOID))
 		{
-			ERROR_MSG("GOST R 34.10-2012/%zu was asked for a curve of order %zu bits",
-			          orderBits, (size_t) group.get_order().bits());
+			ERROR_MSG("GOST R 34.10-2012 was asked for a curve with no domain parameters");
+			return false;
+		}
+		Botan::EC_Group group = BotanGOSTCurves::group(encodedCurveOID);
+		if (BotanGOSTCurves::orderBits(encodedCurveOID) != orderBits)
+		{
+			ERROR_MSG("GOST R 34.10-2012/%zu was asked for a %zu-bit curve",
+			          orderBits, BotanGOSTCurves::orderBits(encodedCurveOID));
 			return false;
 		}
 

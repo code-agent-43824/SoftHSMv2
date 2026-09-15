@@ -16,6 +16,7 @@
 
 #include "config.h"
 #include "BotanGOST2012Signer.h"
+#include "BotanGOSTCurves.h"
 #include "CryptoFactory.h"
 #include "RNG.h"
 #include "log.h"
@@ -84,15 +85,18 @@ const char* mechanismHashName(AsymMech::Type mechanism)
 	return mechanism == AsymMech::GOST_GOST_512 ? "Streebog-512" : "Streebog-256";
 }
 
+// Never Botan::EC_Group(oid) here either. Signing and verifying have to agree
+// with generation and with KEG about what a curve OID means, and Botan 2.19
+// does not: it resolves the TC26 256-bit paramSetA OID to CryptoPro-A. When
+// this built its own group, a key generated "on paramSetA" signed and verified
+// happily against itself on the wrong curve, and nothing said so.
 Botan::EC_Group groupOf(const ByteString& ec, size_t coordinateBytes)
 {
-	std::vector<uint8_t> encodedCurve(ec.size());
-	if (!encodedCurve.empty())
-		std::memcpy(encodedCurve.data(), ec.const_byte_str(), encodedCurve.size());
-	Botan::EC_Group group(encodedCurve);
-	if (group.get_order().bits() != coordinateBytes * 8)
+	if (!BotanGOSTCurves::supported(ec))
+		throw std::runtime_error("no domain parameters for this GOST curve OID");
+	if (BotanGOSTCurves::orderBits(ec) != coordinateBytes * 8)
 		throw std::runtime_error("the curve does not match the mechanism's key size");
-	return group;
+	return BotanGOSTCurves::group(ec);
 }
 
 bool signDigest(BotanGOST2012PrivateKey* privateKey, size_t coordinateBytes,
@@ -156,10 +160,49 @@ bool verifyDigest(BotanGOST2012PublicKey* publicKey, size_t coordinateBytes,
 		}
 
 		const Botan::PointGFp publicPoint = group.OS2ECP(point.data(), point.size());
-		Botan::GOST_3410_PublicKey botanKey(group, publicPoint);
-		Botan::PK_Verifier verifier(botanKey, "Raw", Botan::IEEE_1363);
-		return verifier.verify_message(digest.const_byte_str(), digest.size(),
-		                               signature.const_byte_str(), signature.size());
+		if (!group.verify_public_element(publicPoint))
+		{
+			ERROR_MSG("This GOST public key does not lie on the curve it names");
+			return false;
+		}
+
+		// GOST R 34.10-2012 clause 6.2, done here rather than through Botan's
+		// PK_Verifier. Botan 2.19.5 finishes with R.get_affine_x() == r, with
+		// no reduction modulo the group order, while its own signing reduces r
+		// that way. On a curve whose order is close to the field size the two
+		// almost always agree and nothing shows; on the TC26 curves with
+		// cofactor 4 - the 256-bit paramSetA and the 512-bit paramSetC - the
+		// order is about a quarter of the field, so a perfectly valid
+		// signature was rejected roughly three times in four. Measured at
+		// 5/12 and 2/12 accepted before this, 12/12 after.
+		//
+		// The reduction below is the only difference from what Botan does.
+		const size_t orderBytes = group.get_order_bytes();
+		if (signature.size() != 2 * orderBytes) return false;
+		const Botan::BigInt order = group.get_order();
+		const Botan::BigInt s(signature.const_byte_str(), orderBytes);
+		const Botan::BigInt r(signature.const_byte_str() + orderBytes, orderBytes);
+		if (s <= Botan::BigInt(0) || s >= order || r <= Botan::BigInt(0) || r >= order)
+			return false;
+
+		// The digest is read little-endian, as GOST R 34.10 prescribes.
+		std::vector<uint8_t> reversed(digest.const_byte_str(),
+		                              digest.const_byte_str() + digest.size());
+		std::reverse(reversed.begin(), reversed.end());
+		Botan::BigInt e = group.mod_order(Botan::BigInt(reversed.data(), reversed.size()));
+		if (e.is_zero()) e = Botan::BigInt(1);
+
+		const Botan::BigInt v = group.inverse_mod_order(e);
+		const Botan::BigInt z1 = group.multiply_mod_order(s, v);
+		const Botan::BigInt z2 = group.multiply_mod_order(order - r, v);
+
+		SoftHSMGOST2012RNG rng(CryptoFactory::i()->getRNG());
+		std::vector<Botan::BigInt> workspace;
+		const Botan::PointGFp check =
+			group.blinded_base_point_multiply(z1, rng, workspace) +
+			group.blinded_var_point_multiply(publicPoint, z2, rng, workspace);
+		if (check.is_zero()) return false;
+		return group.mod_order(check.get_affine_x()) == r;
 	}
 	catch (const std::exception& exception)
 	{

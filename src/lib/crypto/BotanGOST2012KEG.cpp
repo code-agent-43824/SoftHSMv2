@@ -16,6 +16,7 @@
 
 #include "config.h"
 #include "BotanGOST2012KEG.h"
+#include "BotanGOSTCurves.h"
 #include "CryptoFactory.h"
 #include "RNG.h"
 #include "log.h"
@@ -54,90 +55,6 @@ public:
 private:
 	RNG* source;
 };
-
-bool oidIs(const ByteString& encodedCurveOID, const uint8_t* oid, size_t length)
-{
-	return encodedCurveOID.size() == length &&
-	       std::memcmp(encodedCurveOID.const_byte_str(), oid, length) == 0;
-}
-
-// Botan 2.19 knows only some of the curves KEG can be asked for, and for one
-// of them it knows the wrong one. Each domain given explicitly below was taken
-// from RFC 7836 and checked against it digit by digit; where Botan does have
-// the curve and has it right, its named group is used.
-//
-//   1.2.643.7.1.2.1.1.1  256-bit ParamSet A - Botan resolves this OID to the
-//                        older CryptoPro-A curve. Same field size, so a length
-//                        check passes, but different points and a different
-//                        order: cofactor 4, not 1. Given explicitly.
-//   1.2.643.7.1.2.1.2.1  512-bit ParamSet A - Botan's gost_512A, verified
-//                        against RFC 7836 (p, a, b, order, cofactor 1). Used
-//                        as a named group.
-//   1.2.643.7.1.2.1.2.2  512-bit ParamSet B - Botan does not know it.
-//   1.2.643.7.1.2.1.2.3  512-bit ParamSet C - Botan does not know it. Cofactor
-//                        4; this is the curve the published TC26 KEG example
-//                        for 512-bit keys uses, so without it that example
-//                        cannot be checked at all.
-Botan::EC_Group gostGroup(const ByteString& encodedCurveOID)
-{
-	static const uint8_t tc26ParamSetA256[] =
-		{0x06, 0x09, 0x2a, 0x85, 0x03, 0x07, 0x01, 0x02, 0x01, 0x01, 0x01};
-	static const uint8_t tc26ParamSetB512[] =
-		{0x06, 0x09, 0x2a, 0x85, 0x03, 0x07, 0x01, 0x02, 0x01, 0x02, 0x02};
-	static const uint8_t tc26ParamSetC512[] =
-		{0x06, 0x09, 0x2a, 0x85, 0x03, 0x07, 0x01, 0x02, 0x01, 0x02, 0x03};
-
-	if (oidIs(encodedCurveOID, tc26ParamSetA256, sizeof(tc26ParamSetA256)))
-	{
-		return Botan::EC_Group(
-			Botan::BigInt("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFD97"),
-			Botan::BigInt("0xC2173F1513981673AF4892C23035A27CE25E2013BF95AA33B22C656F277E7335"),
-			Botan::BigInt("0x295F9BAE7428ED9CCC20E7C359A9D41A22FCCD9108E17BF7BA9337A6F8AE9513"),
-			Botan::BigInt("0x91E38443A5E82C0D880923425712B2BB658B9196932E02C78B2582FE742DAA28"),
-			Botan::BigInt("0x32879423AB1A0375895786C4BB46E9565FDE0B5344766740AF268ADB32322E5C"),
-			Botan::BigInt("0x400000000000000000000000000000000FD8CDDFC87B6635C115AF556C360C67"),
-			Botan::BigInt(4));
-	}
-	if (oidIs(encodedCurveOID, tc26ParamSetB512, sizeof(tc26ParamSetB512)))
-	{
-		return Botan::EC_Group(
-			Botan::BigInt("0x8000000000000000000000000000000000000000000000000000000000000000"
-			              "000000000000000000000000000000000000000000000000000000000000006F"),
-			Botan::BigInt("0x8000000000000000000000000000000000000000000000000000000000000000"
-			              "000000000000000000000000000000000000000000000000000000000000006C"),
-			Botan::BigInt("0x687D1B459DC841457E3E06CF6F5E2517B97C7D614AF138BCBF85DC806C4B289F"
-			              "3E965D2DB1416D217F8B276FAD1AB69C50F78BEE1FA3106EFB8CCBC7C5140116"),
-			Botan::BigInt("0x0000000000000000000000000000000000000000000000000000000000000000"
-			              "0000000000000000000000000000000000000000000000000000000000000002"),
-			Botan::BigInt("0x1A8F7EDA389B094C2C071E3647A8940F3C123B697578C213BE6DD9E6C8EC7335"
-			              "DCB228FD1EDF4A39152CBCAAF8C0398828041055F94CEEEC7E21340780FE41BD"),
-			Botan::BigInt("0x8000000000000000000000000000000000000000000000000000000000000001"
-			              "49A1EC142565A545ACFDB77BD9D40CFA8B996712101BEA0EC6346C54374F25BD"),
-			Botan::BigInt(1));
-	}
-	if (oidIs(encodedCurveOID, tc26ParamSetC512, sizeof(tc26ParamSetC512)))
-	{
-		return Botan::EC_Group(
-			Botan::BigInt("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
-			              "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFDC7"),
-			Botan::BigInt("0xDC9203E514A721875485A529D2C722FB187BC8980EB866644DE41C68E1430645"
-			              "46E861C0E2C9EDD92ADE71F46FCF50FF2AD97F951FDA9F2A2EB6546F39689BD3"),
-			Botan::BigInt("0xB4C4EE28CEBC6C2C8AC12952CF37F16AC7EFB6A9F69F4B57FFDA2E4F0DE5ADE0"
-			              "38CBC2FFF719D2C18DE0284B8BFEF3B52B8CC7A5F5BF0A3C8D2319A5312557E1"),
-			Botan::BigInt("0xE2E31EDFC23DE7BDEBE241CE593EF5DE2295B7A9CBAEF021D385F7074CEA043A"
-			              "A27272A7AE602BF2A7B9033DB9ED3610C6FB85487EAE97AAC5BC7928C1950148"),
-			Botan::BigInt("0xF5CE40D95B5EB899ABBCCFF5911CB8577939804D6527378B8C108C3D2090FF9B"
-			              "E18E2D33E3021ED2EF32D85822423B6304F726AA854BAE07D0396E9A9ADDC40F"),
-			Botan::BigInt("0x3FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
-			              "C98CDBA46506AB004C33A9FF5147502CC8EDA9E7A769A12694623CEF47F023ED"),
-			Botan::BigInt(4));
-	}
-
-	std::vector<uint8_t> encodedCurve(encodedCurveOID.size());
-	if (!encodedCurve.empty())
-		std::memcpy(encodedCurve.data(), encodedCurveOID.const_byte_str(), encodedCurve.size());
-	return Botan::EC_Group(encodedCurve);
-}
 
 Botan::secure_vector<uint8_t> streebog(const char* algorithm, const uint8_t* data, size_t length)
 {
@@ -195,7 +112,16 @@ bool BotanGOST2012KEG::derive(const ByteString& encodedCurveOID,
 
 	try
 	{
-		Botan::EC_Group group = gostGroup(encodedCurveOID);
+		// One source for the whole module - see BotanGOSTCurves.h. The
+		// explicit domains that used to live in this file are there now,
+		// which is what stopped generation and signing from meaning a
+		// different curve by the same OID.
+		if (!BotanGOSTCurves::supported(encodedCurveOID))
+		{
+			ERROR_MSG("GOST KEG was given a curve with no domain parameters");
+			return false;
+		}
+		Botan::EC_Group group = BotanGOSTCurves::group(encodedCurveOID);
 		if (group.get_p().bytes() != fieldBytes)
 		{
 			ERROR_MSG("GOST KEG curve size does not match the private key length");

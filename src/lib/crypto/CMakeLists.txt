@@ -120,7 +120,8 @@ endif(WITH_GOST_3411_2012_512)
 if(WITH_GOST_3410_2012_256)
     list(APPEND SOURCES BotanGOST2012KEG.cpp
                         BotanGOST2012KeyGenerator.cpp
-                        BotanGOST2012Signer.cpp)
+                        BotanGOST2012Signer.cpp
+                        BotanGOSTCurves.cpp)
 endif(WITH_GOST_3410_2012_256)
 
 if(WITH_BOTAN)

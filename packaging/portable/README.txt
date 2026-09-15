@@ -72,6 +72,34 @@ application that pins itself to slot 0 rather than enumerating slots can end up
 on a different token. Tokens created by releases before this one carry no
 creation time, are not given one, and sort ahead of the rest.
 
+GOST curve OIDs, and one incompatible change
+--------------------------------------------
+
+Each GOST R 34.10-2012 curve OID names exactly one curve, and the module uses
+the published domain parameters for it - RFC 7836 for the TC26 curves, RFC 4357
+for the CryptoPro ones. Seven OIDs are supported: 1.2.643.7.1.2.1.1.1,
+1.2.643.7.1.2.1.1.2, 1.2.643.2.2.35.1 and 1.2.643.2.2.36.0 at 256 bits, and
+1.2.643.7.1.2.1.2.1, .2 and .3 at 512 bits. The last three of the 256-bit ones
+are three names for a single curve; that is what RFC 4357 and RFC 9215 say, not
+a simplification made here. An OID with no parameters is refused rather than
+answered with some other curve.
+
+Releases up to and including v2.7.0-portable.41 got 1.2.643.7.1.2.1.1.1 wrong:
+a key generated under it was actually placed on CryptoPro-A, because the
+underlying library resolves that OID to the older curve and the two share the
+same prime, so nothing noticed. Such a key is a valid key; it was simply
+labelled with the wrong curve.
+
+What that means for keys you already have. A public key made by an older
+release under 1.2.643.7.1.2.1.1.1 no longer imports under that OID - it does
+not lie on the curve it names, and C_CreateObject answers
+CKR_ATTRIBUTE_VALUE_INVALID. Import it under 1.2.643.2.2.35.1, the curve it is
+really on, and it is accepted and works. A private key cannot be told apart
+this way at all, since a bare scalar carries no clue which curve it belongs to;
+if you hold one generated under that OID by an older release, treat it as a
+CryptoPro-A key. Signatures and certificates already issued are unaffected -
+they were always on CryptoPro-A and remain verifiable as such.
+
 Creating a token, and why an uninitialized one is never shown
 ------------------------------------------------------------
 

@@ -1700,8 +1700,8 @@ static void requireBooleanAttribute(Module& module, CK_SESSION_HANDLE session,
 // the weight is carried by verification, including the cases that must fail.
 static void verifyGOST2012_512(Module& module, CK_SESSION_HANDLE session)
 {
-    // id-tc26-gost-3410-2012-512-paramSetA, the only 512-bit curve this build
-    // carries; paramSetB and paramSetC are refused rather than substituted.
+    // id-tc26-gost-3410-2012-512-paramSetA. All three 512-bit TC26 curves are
+    // carried since 15.09.2026; paramSetB is exercised below.
     const Bytes curve = bytesFromHex("06092a8503070102010201");
     const Bytes curveB = bytesFromHex("06092a8503070102010202");
     const Bytes digestParam = bytesFromHex("06082a85030701010203");
@@ -1755,23 +1755,46 @@ static void verifyGOST2012_512(Module& module, CK_SESSION_HANDLE session)
     if (attribute(module, session, publicKey, CKA_GOSTR3411_PARAMS) != digestParam)
         fail("a 512-bit GOST key did not default to the 512-bit digest parameter set");
 
-    // paramSetB has no domain parameters in this build, and answering with a
-    // key on paramSetA instead would be worse than refusing.
-    CK_ATTRIBUTE refusedTemplate[] = {
+    // paramSetB used to be refused here because this build carried no domain
+    // parameters for it. It carries them now, so generating on it must work.
+    CK_ATTRIBUTE paramSetBTemplate[] = {
         {CKA_CLASS, &publicClass, sizeof(publicClass)},
         {CKA_KEY_TYPE, &keyType, sizeof(keyType)},
         {CKA_TOKEN, &no, sizeof(no)},
         {CKA_GOSTR3410_PARAMS, const_cast<unsigned char*>(curveB.data()),
                                static_cast<CK_ULONG>(curveB.size())}
     };
+    CK_OBJECT_HANDLE paramSetBPublic = CK_INVALID_HANDLE;
+    CK_OBJECT_HANDLE paramSetBPrivate = CK_INVALID_HANDLE;
+    callOk("C_GenerateKeyPair", "512-bit paramSetB, which this build now carries",
+           [&] { return module->C_GenerateKeyPair(session, &generation,
+                                                  paramSetBTemplate, 4,
+                                                  privateTemplate, 5,
+                                                  &paramSetBPublic, &paramSetBPrivate); });
+    if (attribute(module, session, paramSetBPublic, CKA_GOSTR3410_PARAMS) != curveB)
+        fail("a paramSetB key does not report paramSetB");
+    destroyObject(module, session, paramSetBPublic);
+    destroyObject(module, session, paramSetBPrivate);
+
+    // A curve this build genuinely has no parameters for is still refused
+    // rather than answered with a different one. 1.2.643.7.1.2.1.2.4 does not
+    // exist; the point is that an unknown OID is a refusal, not a substitution.
+    const Bytes curveUnknown = bytesFromHex("06092a8503070102010204");
+    CK_ATTRIBUTE refusedTemplate[] = {
+        {CKA_CLASS, &publicClass, sizeof(publicClass)},
+        {CKA_KEY_TYPE, &keyType, sizeof(keyType)},
+        {CKA_TOKEN, &no, sizeof(no)},
+        {CKA_GOSTR3410_PARAMS, const_cast<unsigned char*>(curveUnknown.data()),
+                               static_cast<CK_ULONG>(curveUnknown.size())}
+    };
     CK_OBJECT_HANDLE refusedPublic = CK_INVALID_HANDLE;
     CK_OBJECT_HANDLE refusedPrivate = CK_INVALID_HANDLE;
-    check(invoke("C_GenerateKeyPair", "512-bit paramSetB, which this build does not carry",
+    check(invoke("C_GenerateKeyPair", "a 512-bit curve OID this build does not know",
                  [&] { return module->C_GenerateKeyPair(session, &generation,
                                                         refusedTemplate, 4,
                                                         privateTemplate, 5,
                                                         &refusedPublic, &refusedPrivate); }),
-          CKR_ATTRIBUTE_VALUE_INVALID, "C_GenerateKeyPair(512-bit paramSetB)");
+          CKR_ATTRIBUTE_VALUE_INVALID, "C_GenerateKeyPair(unknown 512-bit curve)");
 
     // Sign the way Rutoken-aware software does: the joint mechanism with the
     // parameter-set OID of the hash it computes.
@@ -1983,6 +2006,425 @@ static void verifyGOSTCreateObjectRoundTrip(Module& module, CK_SESSION_HANDLE se
     destroyObject(module, session, generatedPrivate);
     destroyObject(module, session, generatedPublic);
     trace("IMPORT", "GOST exportable generation, C_GetAttributeValue, two-object C_CreateObject import, re-export and signing verified");
+}
+
+// ---------------------------------------------------------------------------
+// Just enough unsigned big-integer arithmetic to check a point against a curve
+// equation, written here on purpose. The question this answers is whether the
+// key the module produced lies on the curve its own CKA_GOSTR3410_PARAMS
+// names, and asking the same library that generated the key would not answer
+// it: for a year the module generated on CryptoPro-A while reporting the TC26
+// paramSetA OID, and every library-side check agreed with itself throughout.
+// The moduli below come from the RFCs, not from the module.
+namespace bignum
+{
+typedef std::vector<uint32_t> Big;   // little-endian 32-bit limbs
+
+static void trim(Big& a) { while (!a.empty() && a.back() == 0) a.pop_back(); }
+
+static Big fromHex(const std::string& hex)
+{
+    Big a;
+    std::string h = hex;
+    if (h.size() % 8) h.insert(0, 8 - h.size() % 8, '0');
+    for (size_t i = h.size(); i > 0; i -= 8)
+        a.push_back(static_cast<uint32_t>(std::stoul(h.substr(i - 8, 8), nullptr, 16)));
+    trim(a);
+    return a;
+}
+
+static Big fromBytesBE(const unsigned char* b, size_t n)
+{
+    Big a;
+    size_t i = n;
+    while (i >= 4) { a.push_back((uint32_t)b[i-1] | ((uint32_t)b[i-2] << 8) |
+                                 ((uint32_t)b[i-3] << 16) | ((uint32_t)b[i-4] << 24)); i -= 4; }
+    uint32_t tail = 0;
+    for (size_t k = 0; k < i; ++k) tail = (tail << 8) | b[k];
+    if (i) a.push_back(tail);
+    trim(a);
+    return a;
+}
+
+static int cmp(const Big& a, const Big& b)
+{
+    if (a.size() != b.size()) return a.size() < b.size() ? -1 : 1;
+    for (size_t i = a.size(); i > 0; --i)
+        if (a[i-1] != b[i-1]) return a[i-1] < b[i-1] ? -1 : 1;
+    return 0;
+}
+
+static Big sub(const Big& a, const Big& b)   // a >= b
+{
+    Big r; r.reserve(a.size());
+    uint64_t borrow = 0;
+    for (size_t i = 0; i < a.size(); ++i)
+    {
+        uint64_t bv = i < b.size() ? b[i] : 0;
+        uint64_t cur = (uint64_t)a[i] - bv - borrow;
+        borrow = (cur >> 63) & 1;
+        r.push_back((uint32_t)cur);
+    }
+    trim(r);
+    return r;
+}
+
+static Big mul(const Big& a, const Big& b)
+{
+    if (a.empty() || b.empty()) return Big();
+    Big r(a.size() + b.size(), 0);
+    for (size_t i = 0; i < a.size(); ++i)
+    {
+        uint64_t carry = 0;
+        for (size_t j = 0; j < b.size(); ++j)
+        {
+            uint64_t cur = (uint64_t)a[i] * b[j] + r[i+j] + carry;
+            r[i+j] = (uint32_t)cur;
+            carry = cur >> 32;
+        }
+        r[i + b.size()] = (uint32_t)carry;
+    }
+    trim(r);
+    return r;
+}
+
+static void shl1(Big& a)
+{
+    uint32_t carry = 0;
+    for (size_t i = 0; i < a.size(); ++i)
+    {
+        uint32_t next = a[i] >> 31;
+        a[i] = (a[i] << 1) | carry;
+        carry = next;
+    }
+    if (carry) a.push_back(carry);
+}
+
+static bool bit(const Big& a, size_t i)
+{
+    return i / 32 < a.size() && ((a[i/32] >> (i % 32)) & 1u);
+}
+
+// Plain binary long division; a handful of points do not need anything faster.
+static Big mod(const Big& a, const Big& m)
+{
+    Big r;
+    if (m.empty()) return r;
+    for (size_t i = a.size() * 32; i > 0; --i)
+    {
+        shl1(r);
+        if (bit(a, i - 1)) { if (r.empty()) r.push_back(1); else r[0] |= 1u; }
+        if (cmp(r, m) >= 0) r = sub(r, m);
+    }
+    trim(r);
+    return r;
+}
+
+static Big mulmod(const Big& a, const Big& b, const Big& m) { return mod(mul(a, b), m); }
+static Big addmod(const Big& a, const Big& b, const Big& m)
+{
+    Big r(std::max(a.size(), b.size()) + 1, 0);
+    uint64_t carry = 0;
+    for (size_t i = 0; i < r.size(); ++i)
+    {
+        uint64_t cur = carry + (i < a.size() ? a[i] : 0) + (i < b.size() ? b[i] : 0);
+        r[i] = (uint32_t)cur;
+        carry = cur >> 32;
+    }
+    trim(r);
+    return mod(r, m);
+}
+}
+
+// Is this little-endian X || Y point on y^2 = x^3 + ax + b (mod p)?
+static bool pointSatisfiesCurve(const Bytes& point, const std::string& pHex,
+                                const std::string& aHex, const std::string& bHex)
+{
+    if (point.size() % 2 != 0) return false;
+    const size_t field = point.size() / 2;
+    std::vector<unsigned char> xb(point.begin(), point.begin() + field);
+    std::vector<unsigned char> yb(point.begin() + field, point.end());
+    std::reverse(xb.begin(), xb.end());          // PKCS #11 carries them little-endian
+    std::reverse(yb.begin(), yb.end());
+
+    const bignum::Big p = bignum::fromHex(pHex);
+    const bignum::Big a = bignum::fromHex(aHex);
+    const bignum::Big b = bignum::fromHex(bHex);
+    const bignum::Big x = bignum::mod(bignum::fromBytesBE(xb.data(), xb.size()), p);
+    const bignum::Big y = bignum::mod(bignum::fromBytesBE(yb.data(), yb.size()), p);
+
+    const bignum::Big left = bignum::mulmod(y, y, p);
+    const bignum::Big x3 = bignum::mulmod(bignum::mulmod(x, x, p), x, p);
+    const bignum::Big right = bignum::addmod(bignum::addmod(x3, bignum::mulmod(a, x, p), p), b, p);
+    return bignum::cmp(left, right) == 0;
+}
+
+// Every curve the module supports, checked for the one property that went
+// wrong: a key must lie on the curve its own attribute names.
+//
+// Until 15.09.2026 a key generated under the TC26 256-bit paramSetA OID came
+// out on CryptoPro-A. Botan 2.19 resolves that OID to the older curve, the two
+// share the same prime so no length check noticed, the attribute read back
+// unchanged, and signing and verification agreed with each other because both
+// used the same wrong curve. Only KEG - which built the domain explicitly -
+// ever objected.
+//
+// The parameters below are the published ones, from RFC 7836 for the TC26
+// curves and RFC 4357 for CryptoPro-A. RFC 9215 Appendix C is why the 256-bit
+// paramSetB shares CryptoPro-A's domain, and RFC 4357 is why the exchange set
+// 1.2.643.2.2.36.0 does too. They are written out here rather than fetched
+// from the module, because the module's own answer is the thing under test.
+static void verifyGOSTCurveIdentity(Module& module, CK_SESSION_HANDLE session)
+{
+    struct Curve
+    {
+        const char* name;
+        const char* oid;
+        const char* p;
+        const char* a;
+        const char* b;
+        bool wide;
+    };
+    static const Curve curves[] = {
+        {"id-tc26-gost-3410-2012-256-paramSetA", "06092a8503070102010101",
+         "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFD97",
+         "C2173F1513981673AF4892C23035A27CE25E2013BF95AA33B22C656F277E7335",
+         "295F9BAE7428ED9CCC20E7C359A9D41A22FCCD9108E17BF7BA9337A6F8AE9513", false},
+        {"id-tc26-gost-3410-2012-256-paramSetB", "06092a8503070102010102",
+         "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFD97",
+         "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFD94",
+         "A6", false},
+        {"id-GostR3410-2001-CryptoPro-A-ParamSet", "06072a850302022301",
+         "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFD97",
+         "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFD94",
+         "A6", false},
+        {"id-GostR3410-2001-CryptoPro-XchA-ParamSet", "06072a850302022400",
+         "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFD97",
+         "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFD94",
+         "A6", false},
+        {"id-tc26-gost-3410-12-512-paramSetA", "06092a8503070102010201",
+         "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
+         "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFDC7",
+         "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
+         "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFDC4",
+         "E8C2505DEDFC86DDC1BD0B2B6667F1DA34B82574761CB0E879BD081CFD0B6265"
+         "EE3CB090F30D27614CB4574010DA90DD862EF9D4EBEE4761503190785A71C760", true},
+        {"id-tc26-gost-3410-12-512-paramSetB", "06092a8503070102010202",
+         "8000000000000000000000000000000000000000000000000000000000000000"
+         "000000000000000000000000000000000000000000000000000000000000006F",
+         "8000000000000000000000000000000000000000000000000000000000000000"
+         "000000000000000000000000000000000000000000000000000000000000006C",
+         "687D1B459DC841457E3E06CF6F5E2517B97C7D614AF138BCBF85DC806C4B289F"
+         "3E965D2DB1416D217F8B276FAD1AB69C50F78BEE1FA3106EFB8CCBC7C5140116", true},
+        {"id-tc26-gost-3410-2012-512-paramSetC", "06092a8503070102010203",
+         "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
+         "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFDC7",
+         "DC9203E514A721875485A529D2C722FB187BC8980EB866644DE41C68E1430645"
+         "46E861C0E2C9EDD92ADE71F46FCF50FF2AD97F951FDA9F2A2EB6546F39689BD3",
+         "B4C4EE28CEBC6C2C8AC12952CF37F16AC7EFB6A9F69F4B57FFDA2E4F0DE5ADE0"
+         "38CBC2FFF719D2C18DE0284B8BFEF3B52B8CC7A5F5BF0A3C8D2319A5312557E1", true}
+    };
+
+    const Bytes digest256 = bytesFromHex("06082a85030701010202");
+    const Bytes digest512 = bytesFromHex("06082a85030701010203");
+    const Bytes ukm = bytesFromHex(
+        "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f");
+    CK_OBJECT_CLASS publicClass = CKO_PUBLIC_KEY;
+    CK_OBJECT_CLASS privateClass = CKO_PRIVATE_KEY;
+    CK_OBJECT_CLASS secretClass = CKO_SECRET_KEY;
+    CK_KEY_TYPE twinType = CKK_MAGMA_TWIN_KEY;
+    CK_BBOOL yes = CK_TRUE;
+    CK_BBOOL no = CK_FALSE;
+
+    // Kept from the first curve of each size, so a later curve of the same size
+    // can be asked to verify it. Held per size because a 256-bit signature
+    // against a 512-bit key would be refused on length alone, which would
+    // prove nothing about curves.
+    Bytes foreignSignature[2];
+    Bytes foreignDigest[2];
+    Bytes foreignPoint;
+
+    for (size_t k = 0; k < sizeof(curves) / sizeof(curves[0]); ++k)
+    {
+        const Curve& curve = curves[k];
+        const Bytes oid = bytesFromHex(curve.oid);
+        const Bytes digestParam = curve.wide ? digest512 : digest256;
+        CK_KEY_TYPE keyType = curve.wide ? CKK_GOSTR3410_512 : CKK_GOSTR3410;
+        CK_MECHANISM generation{curve.wide ? CKM_GOSTR3410_512_KEY_PAIR_GEN
+                                           : CKM_GOSTR3410_KEY_PAIR_GEN, nullptr, 0};
+
+        auto generate = [&](CK_OBJECT_HANDLE& publicKey, CK_OBJECT_HANDLE& privateKey) {
+            CK_ATTRIBUTE publicTemplate[] = {
+                {CKA_CLASS, &publicClass, sizeof(publicClass)},
+                {CKA_KEY_TYPE, &keyType, sizeof(keyType)},
+                {CKA_TOKEN, &no, sizeof(no)},
+                {CKA_VERIFY, &yes, sizeof(yes)},
+                {CKA_DERIVE, &yes, sizeof(yes)},
+                {CKA_GOSTR3410_PARAMS, const_cast<unsigned char*>(oid.data()),
+                                       static_cast<CK_ULONG>(oid.size())},
+                {CKA_GOSTR3411_PARAMS, const_cast<unsigned char*>(digestParam.data()),
+                                       static_cast<CK_ULONG>(digestParam.size())}
+            };
+            CK_ATTRIBUTE privateTemplate[] = {
+                {CKA_CLASS, &privateClass, sizeof(privateClass)},
+                {CKA_KEY_TYPE, &keyType, sizeof(keyType)},
+                {CKA_TOKEN, &no, sizeof(no)},
+                {CKA_PRIVATE, &no, sizeof(no)},
+                {CKA_SIGN, &yes, sizeof(yes)},
+                {CKA_DERIVE, &yes, sizeof(yes)}
+            };
+            callOk("C_GenerateKeyPair", std::string("on ") + curve.name,
+                   [&] { return module->C_GenerateKeyPair(session, &generation,
+                                                          publicTemplate, 7,
+                                                          privateTemplate, 6,
+                                                          &publicKey, &privateKey); });
+        };
+
+        CK_OBJECT_HANDLE alicePublic = CK_INVALID_HANDLE, alicePrivate = CK_INVALID_HANDLE;
+        CK_OBJECT_HANDLE bobPublic = CK_INVALID_HANDLE, bobPrivate = CK_INVALID_HANDLE;
+        generate(alicePublic, alicePrivate);
+        generate(bobPublic, bobPrivate);
+
+        // 1. The attribute says what was asked for, and the point obeys that
+        //    curve's equation. The second half is the part that was missing.
+        if (attribute(module, session, alicePublic, CKA_GOSTR3410_PARAMS) != oid)
+            fail(std::string("a key generated on ") + curve.name + " does not report that curve");
+        const Bytes point = attribute(module, session, alicePublic, CKA_VALUE);
+        if (point.size() != (curve.wide ? 128u : 64u))
+            fail(std::string("a key on ") + curve.name + " has a public value of " +
+                 std::to_string(point.size()) + " bytes");
+        if (!pointSatisfiesCurve(point, curve.p, curve.a, curve.b))
+            fail(std::string("a key generated under ") + curve.name +
+                 " does not lie on that curve - the OID and the curve disagree");
+
+        // 2. KEG on the generated key works and both sides reach the same key.
+        auto derive = [&](CK_OBJECT_HANDLE privateKey, CK_OBJECT_HANDLE peer) {
+            Bytes peerPoint = attribute(module, session, peer, CKA_VALUE);
+            CK_ECDH1_DERIVE_PARAMS params{CKD_NULL,
+                                          static_cast<CK_ULONG>(ukm.size()),
+                                          const_cast<unsigned char*>(ukm.data()),
+                                          static_cast<CK_ULONG>(peerPoint.size()),
+                                          peerPoint.data()};
+            CK_MECHANISM mechanism{CKM_GOST_KEG, &params, sizeof(params)};
+            CK_ATTRIBUTE secretTemplate[] = {
+                {CKA_CLASS, &secretClass, sizeof(secretClass)},
+                {CKA_KEY_TYPE, &twinType, sizeof(twinType)},
+                {CKA_TOKEN, &no, sizeof(no)}
+            };
+            CK_OBJECT_HANDLE derived = CK_INVALID_HANDLE;
+            callOk("C_DeriveKey", std::string("CKM_GOST_KEG on ") + curve.name,
+                   [&] { return module->C_DeriveKey(session, &mechanism, privateKey,
+                                                    secretTemplate, 3, &derived); });
+            Bytes value = attribute(module, session, derived, CKA_VALUE);
+            destroyObject(module, session, derived);
+            return value;
+        };
+        const Bytes fromAlice = derive(alicePrivate, bobPublic);
+        const Bytes fromBob = derive(bobPrivate, alicePublic);
+        if (fromAlice.size() != 64)
+            fail(std::string("KEG on ") + curve.name + " produced " +
+                 std::to_string(fromAlice.size()) + " bytes, not 64");
+        if (fromAlice != fromBob)
+            fail(std::string("KEG on ") + curve.name +
+                 " is not a key agreement: the two sides derived different keys");
+
+        // 3. A signature verifies under its own key, and the signature made on
+        //    the first curve does not verify here.
+        CK_MECHANISM signing{curve.wide ? CKM_GOSTR3410_512 : CKM_GOSTR3410, nullptr, 0};
+        const size_t digestBytes = curve.wide ? 64 : 32;
+        Bytes message(digestBytes);
+        for (size_t i = 0; i < digestBytes; ++i) message[i] = static_cast<unsigned char>(i * 5 + 3);
+        Bytes signature(curve.wide ? 128 : 64, 0);
+        CK_ULONG signatureLength = static_cast<CK_ULONG>(signature.size());
+        callOk("C_SignInit", std::string("signing on ") + curve.name,
+               [&] { return module->C_SignInit(session, &signing, alicePrivate); });
+        callOk("C_Sign", std::string("the signature on ") + curve.name,
+               [&] { return module->C_Sign(session, message.data(),
+                                           static_cast<CK_ULONG>(message.size()),
+                                           signature.data(), &signatureLength); });
+        signature.resize(signatureLength);
+        callOk("C_VerifyInit", std::string("verifying on ") + curve.name,
+               [&] { return module->C_VerifyInit(session, &signing, alicePublic); });
+        callOk("C_Verify", std::string("its own signature on ") + curve.name,
+               [&] { return module->C_Verify(session, message.data(),
+                                             static_cast<CK_ULONG>(message.size()),
+                                             signature.data(), signatureLength); });
+
+        const size_t bucket = curve.wide ? 1 : 0;
+        if (foreignSignature[bucket].empty())
+        {
+            foreignSignature[bucket] = signature;
+            foreignDigest[bucket] = message;
+            if (!curve.wide && foreignPoint.empty()) foreignPoint = point;
+        }
+        else
+        {
+            // Same sizes, different curve: the signature must not verify.
+            callOk("C_VerifyInit", std::string("a foreign-curve signature against ") + curve.name,
+                   [&] { return module->C_VerifyInit(session, &signing, alicePublic); });
+            check(invoke("C_Verify", std::string("a signature made on another curve, against ") +
+                                     curve.name,
+                         [&] { return module->C_Verify(session, foreignDigest[bucket].data(),
+                                                       static_cast<CK_ULONG>(foreignDigest[bucket].size()),
+                                                       foreignSignature[bucket].data(),
+                                                       static_cast<CK_ULONG>(foreignSignature[bucket].size())); }),
+                  CKR_SIGNATURE_INVALID, "C_Verify(signature from another curve)");
+        }
+
+        destroyObject(module, session, alicePublic);
+        destroyObject(module, session, alicePrivate);
+        destroyObject(module, session, bobPublic);
+        destroyObject(module, session, bobPrivate);
+        trace("CURVE", std::string(curve.name) + ": point on its own curve, KEG agrees, "
+                       "signature verifies and a foreign-curve one does not");
+    }
+
+    // A point belonging to one curve, offered under the OID of another, is
+    // refused rather than stored and misused later. This is also what a key
+    // made by a build from before 15.09.2026 under the paramSetA OID looks
+    // like: it really sits on CryptoPro-A.
+    const Bytes paramSetA = bytesFromHex("06092a8503070102010101");
+    const Bytes cryptoProA = bytesFromHex("06072a850302022301");
+    CK_KEY_TYPE keyType256 = CKK_GOSTR3410;
+    Bytes stale = foreignPoint;      // generated on paramSetA above
+    CK_ATTRIBUTE misnamed[] = {
+        {CKA_CLASS, &publicClass, sizeof(publicClass)},
+        {CKA_KEY_TYPE, &keyType256, sizeof(keyType256)},
+        {CKA_TOKEN, &no, sizeof(no)},
+        {CKA_PRIVATE, &no, sizeof(no)},
+        {CKA_VERIFY, &yes, sizeof(yes)},
+        {CKA_VALUE, stale.data(), static_cast<CK_ULONG>(stale.size())},
+        {CKA_GOSTR3410_PARAMS, const_cast<unsigned char*>(cryptoProA.data()),
+                               static_cast<CK_ULONG>(cryptoProA.size())},
+        {CKA_GOSTR3411_PARAMS, const_cast<unsigned char*>(digest256.data()),
+                               static_cast<CK_ULONG>(digest256.size())}
+    };
+    CK_OBJECT_HANDLE refused = CK_INVALID_HANDLE;
+    check(invoke("C_CreateObject", "a paramSetA point declared as CryptoPro-A",
+                 [&] { return module->C_CreateObject(session, misnamed, 8, &refused); }),
+          CKR_ATTRIBUTE_VALUE_INVALID, "C_CreateObject(point not on the curve it names)");
+    if (refused != CK_INVALID_HANDLE) fail("a misnamed GOST public key was created anyway");
+
+    // The same point under the OID it really belongs to is accepted: the check
+    // rejects the wrong name, not the key.
+    CK_ATTRIBUTE correct[] = {
+        {CKA_CLASS, &publicClass, sizeof(publicClass)},
+        {CKA_KEY_TYPE, &keyType256, sizeof(keyType256)},
+        {CKA_TOKEN, &no, sizeof(no)},
+        {CKA_PRIVATE, &no, sizeof(no)},
+        {CKA_VERIFY, &yes, sizeof(yes)},
+        {CKA_VALUE, stale.data(), static_cast<CK_ULONG>(stale.size())},
+        {CKA_GOSTR3410_PARAMS, const_cast<unsigned char*>(paramSetA.data()),
+                               static_cast<CK_ULONG>(paramSetA.size())},
+        {CKA_GOSTR3411_PARAMS, const_cast<unsigned char*>(digest256.data()),
+                               static_cast<CK_ULONG>(digest256.size())}
+    };
+    const CK_OBJECT_HANDLE accepted = createObject(
+        module, session, "the same point under the curve it belongs to", correct, 8);
+    destroyObject(module, session, accepted);
+
+    trace("CURVE", "every supported curve means one curve, and a point is refused "
+                   "under any other one");
 }
 
 static void verifyGOSTKEG(Module& module, CK_SESSION_HANDLE session)
@@ -2709,6 +3151,7 @@ static void prepare(const fs::path& modulePath, const fs::path& work)
     if (requireGOSTImportExport)
     {
         verifyGOSTCreateObjectRoundTrip(module, session);
+        verifyGOSTCurveIdentity(module, session);
         verifyGOSTKEG(module, session);
         verifyGOSTKEG512(module, session);
         verifyGOST2012_512(module, session);
