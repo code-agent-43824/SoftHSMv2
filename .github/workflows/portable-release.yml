@@ -624,6 +624,17 @@ jobs:
           path: ${{ runner.temp }}/openssl-crash-dumps/*.dmp
           if-no-files-found: warn
           retention-days: 1
+      - name: Save OpenSSL ARM64 crash symbols
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: diagnostic-openssl-arm64-symbols
+          path: |
+            ${{ runner.temp }}/testkit-windows-arm64/stage/bin/openssl.exe
+            ${{ runner.temp }}/testkit-windows-arm64/stage/bin/libcrypto-3-arm64.dll
+            ${{ runner.temp }}/testkit-windows-arm64/openssl-3.5.8/**/*.pdb
+          if-no-files-found: warn
+          retention-days: 1
       - uses: actions/upload-artifact@v7
         with:
           name: softhsm-testkit-windows-arm64
