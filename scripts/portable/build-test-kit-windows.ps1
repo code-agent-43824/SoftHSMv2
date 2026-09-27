@@ -74,7 +74,24 @@ if ($env:PORTABLE_ARCH -eq "x86") {
     }
     $Ameth = $Ameth.Replace($OldComparison, 'if (*len < (size_t)(2 * half))')
     [IO.File]::WriteAllText($AmethPath, $Ameth, [Text.UTF8Encoding]::new($false))
+    $PmethPath = Join-Path $EngineSource "gost_pmeth.c"
+    $Pmeth = [IO.File]::ReadAllText($PmethPath)
+    $OldComparison = 'if (*siglen < order)'
+    if ([regex]::Matches($Pmeth, [regex]::Escape($OldComparison)).Count -ne 1) {
+        throw "expected exactly one upstream x86 signature length comparison"
+    }
+    $Pmeth = $Pmeth.Replace($OldComparison, 'if (*siglen < (size_t)order)')
+    [IO.File]::WriteAllText($PmethPath, $Pmeth, [Text.UTF8Encoding]::new($false))
 }
+# Upstream's OPENSSL_EXPORT does not export the entry point from MSVC modules.
+$ProviderPath = Join-Path $EngineSource "gost_prov.c"
+$Provider = [IO.File]::ReadAllText($ProviderPath)
+$OldExport = "OPENSSL_EXPORT`nint OSSL_provider_init("
+if ([regex]::Matches($Provider, [regex]::Escape($OldExport)).Count -ne 1) {
+    throw "expected exactly one upstream provider entry point"
+}
+$Provider = $Provider.Replace($OldExport, "__declspec(dllexport)`nint OSSL_provider_init(")
+[IO.File]::WriteAllText($ProviderPath, $Provider, [Text.UTF8Encoding]::new($false))
 
 Push-Location $OpenSSLSource
 try {
@@ -117,6 +134,10 @@ foreach ($Dll in $CryptoDlls) {
 }
 $ProviderDlls = @(Get-ChildItem -LiteralPath $EngineBuild -Filter gostprov.dll -File -Recurse)
 if ($ProviderDlls.Count -ne 1) { throw "expected exactly one GOST provider DLL" }
+$ProviderExports = & dumpbin /exports $ProviderDlls[0].FullName
+if ($LASTEXITCODE -ne 0 -or -not ($ProviderExports | Select-String -Pattern '\bOSSL_provider_init\b')) {
+    throw "GOST provider DLL does not export OSSL_provider_init"
+}
 Copy-Item -LiteralPath $ProviderDlls[0].FullName -Destination (Join-Path $StageDir "bin/gostprov.dll")
 $OpenSSLConfig = [IO.File]::ReadAllText((Join-Path $OpenSSLSource "apps/openssl.cnf"))
 [IO.File]::WriteAllText((Join-Path $StageDir "config/openssl.cnf"), $OpenSSLConfig,

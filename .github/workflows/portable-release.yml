@@ -200,10 +200,12 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential ca-certificates cmake curl file opensc patchelf perl unzip zip
+            build-essential ca-certificates curl file opensc patchelf perl unzip zip
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - name: Install pinned CMake
+        run: bash scripts/portable/install-cmake-linux.sh
       - uses: actions/download-artifact@v8
         with:
           name: softhsm-portable-linux-x64
@@ -382,10 +384,12 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential ca-certificates cmake curl file opensc patchelf perl unzip zip
+            build-essential ca-certificates curl file opensc patchelf perl unzip zip
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - name: Install pinned CMake
+        run: bash scripts/portable/install-cmake-linux.sh
       - uses: actions/download-artifact@v8
         with:
           name: softhsm-portable-linux-arm64
