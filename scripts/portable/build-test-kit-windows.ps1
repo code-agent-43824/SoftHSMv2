@@ -186,7 +186,9 @@ foreach ($Dll in $CryptoDlls) {
 if ($env:PORTABLE_ARCH -eq "arm64") {
     if (-not $env:VCToolsRedistDir) { throw "VCToolsRedistDir is required for ARM64 CRT bundling" }
     $RedistDir = Join-Path $env:VCToolsRedistDir "arm64/Microsoft.VC143.CRT"
-    foreach ($Name in @("vcruntime140.dll", "vcruntime140_1.dll")) {
+    # The ARM64 redistributable also carries an x64 vcruntime140_1.dll for emulated apps.
+    # Native OpenSSL C binaries need the ARM64 vcruntime140.dll only.
+    foreach ($Name in @("vcruntime140.dll")) {
         $Source = Join-Path $RedistDir $Name
         if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) {
             throw "required ARM64 CRT redistribution file is missing: $Source"
