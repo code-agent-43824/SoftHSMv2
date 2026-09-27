@@ -148,6 +148,12 @@ if ($env:PORTABLE_ARCH -eq "arm64") {
         }
         $Keymgmt = $Keymgmt.Replace($Patch.Old, $Patch.New.Replace('`n', "`n"))
     }
+    $AfterKeygen = "        goto end;`n`n    return key_data;"
+    if ([regex]::Matches($Keymgmt, [regex]::Escape($AfterKeygen)).Count -ne 1) {
+        throw "expected exactly one upstream ARM64 keygen return"
+    }
+    $Keymgmt = $Keymgmt.Replace($AfterKeygen,
+        "        goto end;`n`n    fprintf(stderr, `"[GOST-ARM64] after public key return\n`");`n    return key_data;")
     $Keymgmt = "#include <stdio.h>`n" + $Keymgmt
     [IO.File]::WriteAllText($KeymgmtPath, $Keymgmt, [Text.UTF8Encoding]::new($false))
     $Sign = [IO.File]::ReadAllText($SignPath)
@@ -165,6 +171,20 @@ if ($env:PORTABLE_ARCH -eq "arm64") {
             throw "expected exactly one upstream ARM64 keygen trace point"
         }
         $Sign = $Sign.Replace($Patch.Old, $Patch.New.Replace('`n', "`n"))
+    }
+    foreach ($Patch in @(
+        @{ Old = '    if (!gost_ec_point_mul(group, pub_key, priv_key, NULL, NULL, ctx)) {';
+           New = '    fprintf(stderr, "[GOST-ARM64] before point mul\n");`n    if (!gost_ec_point_mul(group, pub_key, priv_key, NULL, NULL, ctx)) {' },
+        @{ Old = '    if (!EC_KEY_set_public_key(ec, pub_key)) {';
+           New = '    fprintf(stderr, "[GOST-ARM64] after point mul\n");`n    if (!EC_KEY_set_public_key(ec, pub_key)) {' },
+        @{ Old = '    ok = 1;`n err:';
+           New = '    fprintf(stderr, "[GOST-ARM64] after set public key\n");`n    ok = 1;`n err:' }
+    )) {
+        $Old = $Patch.Old.Replace('`n', "`n")
+        if ([regex]::Matches($Sign, [regex]::Escape($Old)).Count -ne 1) {
+            throw "expected exactly one upstream ARM64 public-key trace point"
+        }
+        $Sign = $Sign.Replace($Old, $Patch.New.Replace('`n', "`n"))
     }
     $Sign = "#include <stdio.h>`n" + $Sign
     [IO.File]::WriteAllText($SignPath, $Sign, [Text.UTF8Encoding]::new($false))
@@ -184,7 +204,7 @@ finally { Pop-Location }
 
 # Keep upstream's /WX for all other diagnostics; its x86-only signedness
 # warnings are handled above where known, and masked for remaining vendor code.
-$GostCFlags = if ($env:PORTABLE_ARCH -eq "x86") { @("-DCMAKE_C_FLAGS=/wd4018 /wd4389") } else { @() }
+$GostCFlags = if ($env:PORTABLE_ARCH -eq "x86") { @("-DCMAKE_C_FLAGS=/wd4018") } else { @() }
 cmake -S $EngineSource -B $EngineBuild -G "NMake Makefiles" `
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_DEFAULT_CMP0091=NEW `
     -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
