@@ -154,6 +154,12 @@ if ($env:PORTABLE_ARCH -eq "arm64") {
     }
     $Keymgmt = $Keymgmt.Replace($AfterKeygen,
         "        goto end;`n`n    fprintf(stderr, `"[GOST-ARM64] after public key return\n`");`n    return key_data;")
+    $FreeBlock = "    EC_KEY_free(key_data->ec);`n    OPENSSL_free(key_data);"
+    if ([regex]::Matches($Keymgmt, [regex]::Escape($FreeBlock)).Count -ne 1) {
+        throw "expected exactly one upstream ARM64 keymgmt cleanup"
+    }
+    $Keymgmt = $Keymgmt.Replace($FreeBlock,
+        "    fprintf(stderr, `"[GOST-ARM64] before key free\n`");`n    EC_KEY_free(key_data->ec);`n    fprintf(stderr, `"[GOST-ARM64] after EC free\n`");`n    OPENSSL_free(key_data);`n    fprintf(stderr, `"[GOST-ARM64] after key free\n`");")
     $Keymgmt = "#include <stdio.h>`n" + $Keymgmt
     [IO.File]::WriteAllText($KeymgmtPath, $Keymgmt, [Text.UTF8Encoding]::new($false))
     $Sign = [IO.File]::ReadAllText($SignPath)
@@ -220,6 +226,12 @@ if ($env:PORTABLE_ARCH -eq "arm64") {
         }
         $Encoder = $Encoder.Replace($Old, $Patch.New.Replace('`n', "`n"))
     }
+    $Cleanup = "exit:`n    st_free(key_st);`n    BIO_free(out);`n    return ok;"
+    if ([regex]::Matches($Encoder, [regex]::Escape($Cleanup)).Count -ne 1) {
+        throw "expected exactly one upstream ARM64 encoder cleanup"
+    }
+    $Encoder = $Encoder.Replace($Cleanup,
+        "exit:`n    fprintf(stderr, `"[GOST-ARM64] before encoder cleanup\n`");`n    st_free(key_st);`n    fprintf(stderr, `"[GOST-ARM64] after ASN1 free\n`");`n    BIO_free(out);`n    fprintf(stderr, `"[GOST-ARM64] after BIO free\n`");`n    return ok;")
     $Encoder = "#include <stdio.h>`n" + $Encoder
     [IO.File]::WriteAllText($EncoderPath, $Encoder, [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText($SignPath, $Sign, [Text.UTF8Encoding]::new($false))
