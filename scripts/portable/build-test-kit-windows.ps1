@@ -107,6 +107,15 @@ if ($env:PORTABLE_ARCH -eq "x86") {
     }
     $Keyx = $Keyx.Replace($OldComparison, 'if (*out_len < (size_t)(2 * half_len))')
     [IO.File]::WriteAllText($KeyxPath, $Keyx, [Text.UTF8Encoding]::new($false))
+    $DigestPath = Join-Path $EngineSource "gost_prov_digest.c"
+    $Digest = [IO.File]::ReadAllText($DigestPath)
+    $OldComparison = 'if (outsize < GOST_digest_size(gctx->descriptor))'
+    if ([regex]::Matches($Digest, [regex]::Escape($OldComparison)).Count -ne 1) {
+        throw "expected exactly one upstream x86 digest size comparison"
+    }
+    $Digest = $Digest.Replace($OldComparison,
+        'if (outsize < (size_t)GOST_digest_size(gctx->descriptor))')
+    [IO.File]::WriteAllText($DigestPath, $Digest, [Text.UTF8Encoding]::new($false))
 }
 if ($env:PORTABLE_ARCH -eq "arm64") {
     # The pinned provider's optimized curve multiplication fast-fails during
@@ -125,6 +134,40 @@ if ($env:PORTABLE_ARCH -eq "arm64") {
     }
     $Sign = $Sign.Replace($OldEnd, "    return 0;`n#endif`n}`n`n/*`n *`n * Generates GOST")
     [IO.File]::WriteAllText($SignPath, $Sign, [Text.UTF8Encoding]::new($false))
+    # Trace the native fast-fail to distinguish provider setup, RNG, and EC math.
+    $KeymgmtPath = Join-Path $EngineSource "gost_prov_keymgmt.c"
+    $Keymgmt = [IO.File]::ReadAllText($KeymgmtPath)
+    foreach ($Patch in @(
+        @{ Old = '    key_data->ec = internal_ec_paramgen(key_data->param_nid);';
+           New = '    fprintf(stderr, "[GOST-ARM64] before paramgen\n");`n    key_data->ec = internal_ec_paramgen(key_data->param_nid);' },
+        @{ Old = '    if (FLAGS_CONTAIN(gctx->selection, OSSL_KEYMGMT_SELECT_PRIVATE_KEY)';
+           New = '    fprintf(stderr, "[GOST-ARM64] after paramgen\n");`n    if (FLAGS_CONTAIN(gctx->selection, OSSL_KEYMGMT_SELECT_PRIVATE_KEY)' }
+    )) {
+        if ([regex]::Matches($Keymgmt, [regex]::Escape($Patch.Old)).Count -ne 1) {
+            throw "expected exactly one upstream ARM64 keymgmt trace point"
+        }
+        $Keymgmt = $Keymgmt.Replace($Patch.Old, $Patch.New.Replace('`n', "`n"))
+    }
+    $Keymgmt = "#include <stdio.h>`n" + $Keymgmt
+    [IO.File]::WriteAllText($KeymgmtPath, $Keymgmt, [Text.UTF8Encoding]::new($false))
+    $Sign = [IO.File]::ReadAllText($SignPath)
+    foreach ($Patch in @(
+        @{ Old = '    if (!EC_GROUP_get_order(group, order, NULL)) {';
+           New = '    fprintf(stderr, "[GOST-ARM64] before group order\n");`n    if (!EC_GROUP_get_order(group, order, NULL)) {' },
+        @{ Old = '        if (!BN_rand_range(d, order)) {';
+           New = '        fprintf(stderr, "[GOST-ARM64] before RNG\n");`n        if (!BN_rand_range(d, order)) {' },
+        @{ Old = '    if (!EC_KEY_set_private_key(ec, d)) {';
+           New = '    fprintf(stderr, "[GOST-ARM64] after RNG\n");`n    if (!EC_KEY_set_private_key(ec, d)) {' },
+        @{ Old = '    return (ok) ? gost_ec_compute_public(ec) : 0;';
+           New = '    fprintf(stderr, "[GOST-ARM64] before public key\n");`n    return (ok) ? gost_ec_compute_public(ec) : 0;' }
+    )) {
+        if ([regex]::Matches($Sign, [regex]::Escape($Patch.Old)).Count -ne 1) {
+            throw "expected exactly one upstream ARM64 keygen trace point"
+        }
+        $Sign = $Sign.Replace($Patch.Old, $Patch.New.Replace('`n', "`n"))
+    }
+    $Sign = "#include <stdio.h>`n" + $Sign
+    [IO.File]::WriteAllText($SignPath, $Sign, [Text.UTF8Encoding]::new($false))
 }
 
 Push-Location $OpenSSLSource
@@ -139,13 +182,16 @@ try {
 }
 finally { Pop-Location }
 
+# Keep upstream's /WX for all other diagnostics; its x86-only signedness
+# warnings are handled above where known, and masked for remaining vendor code.
+$GostCFlags = if ($env:PORTABLE_ARCH -eq "x86") { @("-DCMAKE_C_FLAGS=/wd4018 /wd4389") } else { @() }
 cmake -S $EngineSource -B $EngineBuild -G "NMake Makefiles" `
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_DEFAULT_CMP0091=NEW `
     -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
     "-DCMAKE_MODULE_LINKER_FLAGS=/EXPORT:OSSL_provider_init" `
     "-DOPENSSL_ROOT_DIR=$OpenSSLPrefix" `
     -DOPENSSL_ENGINES_DIR=bin -DGOST_BUILD_ENGINE=OFF `
-    -DGOST_BUILD_STATIC_ENGINE=OFF -DGOST_BUILD_PROVIDER=ON
+    -DGOST_BUILD_STATIC_ENGINE=OFF -DGOST_BUILD_PROVIDER=ON @GostCFlags
 if ($LASTEXITCODE -ne 0) { throw "GOST provider configure failed" }
 cmake --build $EngineBuild --target gost_prov
 if ($LASTEXITCODE -ne 0) { throw "GOST provider build failed" }
