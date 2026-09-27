@@ -187,6 +187,41 @@ if ($env:PORTABLE_ARCH -eq "arm64") {
         $Sign = $Sign.Replace($Old, $Patch.New.Replace('`n', "`n"))
     }
     $Sign = "#include <stdio.h>`n" + $Sign
+    $AmethPath = Join-Path $EngineSource "gost_ameth.c"
+    $Ameth = [IO.File]::ReadAllText($AmethPath)
+    foreach ($Patch in @(
+        @{ Old = '    const char *pk_format = get_gost_engine_param(GOST_PARAM_PK_FORMAT);';
+           New = '    fprintf(stderr, "[GOST-ARM64] before encoding config\n");`n    const char *pk_format = get_gost_engine_param(GOST_PARAM_PK_FORMAT);`n    fprintf(stderr, "[GOST-ARM64] after encoding config\n");' },
+        @{ Old = '    params = internal_encode_algor_params(ec, key_type);';
+           New = '    fprintf(stderr, "[GOST-ARM64] before ASN1 params\n");`n    params = internal_encode_algor_params(ec, key_type);`n    fprintf(stderr, "[GOST-ARM64] after ASN1 params\n");' }
+    )) {
+        $Expected = if ($Patch.Old -eq '    params = internal_encode_algor_params(ec, key_type);') { 2 } else { 1 }
+        if ([regex]::Matches($Ameth, [regex]::Escape($Patch.Old)).Count -ne $Expected) {
+            throw "unexpected upstream ARM64 encoding trace point count"
+        }
+        $Ameth = $Ameth.Replace($Patch.Old, $Patch.New.Replace('`n', "`n"))
+    }
+    $Ameth = "#include <stdio.h>`n" + $Ameth
+    [IO.File]::WriteAllText($AmethPath, $Ameth, [Text.UTF8Encoding]::new($false))
+    $EncoderPath = Join-Path $EngineSource "gost_prov_encoder.c"
+    $Encoder = [IO.File]::ReadAllText($EncoderPath)
+    foreach ($Patch in @(
+        @{ Old = '    if (!ec2st_encode(key_st, key_data->ec, key_data->type))';
+           New = '    fprintf(stderr, "[GOST-ARM64] before encoder\n");`n    if (!ec2st_encode(key_st, key_data->ec, key_data->type))' },
+        @{ Old = '    if (!st2bio(out, key_st))';
+           New = '    fprintf(stderr, "[GOST-ARM64] after encoder\n");`n    if (!st2bio(out, key_st))' },
+        @{ Old = '    ok = 1;`n`nexit:';
+           New = '    fprintf(stderr, "[GOST-ARM64] after BIO write\n");`n    ok = 1;`n`nexit:' }
+    )) {
+        $Old = $Patch.Old.Replace('`n', "`n")
+        $Expected = if ($Patch.Old -eq '    ok = 1;`n`nexit:') { 2 } else { 1 }
+        if ([regex]::Matches($Encoder, [regex]::Escape($Old)).Count -ne $Expected) {
+            throw "unexpected upstream ARM64 encoder trace point count"
+        }
+        $Encoder = $Encoder.Replace($Old, $Patch.New.Replace('`n', "`n"))
+    }
+    $Encoder = "#include <stdio.h>`n" + $Encoder
+    [IO.File]::WriteAllText($EncoderPath, $Encoder, [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText($SignPath, $Sign, [Text.UTF8Encoding]::new($false))
 }
 
@@ -202,19 +237,20 @@ try {
 }
 finally { Pop-Location }
 
-# Keep upstream's /WX for all other diagnostics; its x86-only signedness
-# warnings are handled above where known, and masked for remaining vendor code.
-$GostCFlags = if ($env:PORTABLE_ARCH -eq "x86") { @("-DCMAKE_C_FLAGS=/wd4018") } else { @() }
+# Scope upstream x86 signedness warnings to the GOST provider's MSVC build.
+$PreviousCl = $env:CL
+if ($env:PORTABLE_ARCH -eq "x86") { $env:CL = ("$PreviousCl /wd4018 /wd4389").Trim() }
 cmake -S $EngineSource -B $EngineBuild -G "NMake Makefiles" `
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_DEFAULT_CMP0091=NEW `
     -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
     "-DCMAKE_MODULE_LINKER_FLAGS=/EXPORT:OSSL_provider_init" `
     "-DOPENSSL_ROOT_DIR=$OpenSSLPrefix" `
     -DOPENSSL_ENGINES_DIR=bin -DGOST_BUILD_ENGINE=OFF `
-    -DGOST_BUILD_STATIC_ENGINE=OFF -DGOST_BUILD_PROVIDER=ON @GostCFlags
+    -DGOST_BUILD_STATIC_ENGINE=OFF -DGOST_BUILD_PROVIDER=ON
 if ($LASTEXITCODE -ne 0) { throw "GOST provider configure failed" }
 cmake --build $EngineBuild --target gost_prov
 if ($LASTEXITCODE -ne 0) { throw "GOST provider build failed" }
+$env:CL = $PreviousCl
 
 $Client = Join-Path $StageDir "bin/portable-token-e2e.exe"
 $CompileArgs = @(
