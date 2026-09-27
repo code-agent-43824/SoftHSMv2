@@ -160,6 +160,12 @@ if ($env:PORTABLE_ARCH -eq "arm64") {
     }
     $Keymgmt = $Keymgmt.Replace($FreeBlock,
         "    fprintf(stderr, `"[GOST-ARM64] before key free\n`");`n    EC_KEY_free(key_data->ec);`n    fprintf(stderr, `"[GOST-ARM64] after EC free\n`");`n    OPENSSL_free(key_data);`n    fprintf(stderr, `"[GOST-ARM64] after key free\n`");")
+    $GenCleanup = "    GOST_GEN_CTX *gctx = genctx;`n    OPENSSL_free(gctx);"
+    if ([regex]::Matches($Keymgmt, [regex]::Escape($GenCleanup)).Count -ne 1) {
+        throw "expected exactly one upstream ARM64 generator cleanup"
+    }
+    $Keymgmt = $Keymgmt.Replace($GenCleanup,
+        "    GOST_GEN_CTX *gctx = genctx;`n    fprintf(stderr, `"[GOST-ARM64] before gen cleanup\n`");`n    OPENSSL_free(gctx);`n    fprintf(stderr, `"[GOST-ARM64] after gen cleanup\n`");")
     $Keymgmt = "#include <stdio.h>`n" + $Keymgmt
     [IO.File]::WriteAllText($KeymgmtPath, $Keymgmt, [Text.UTF8Encoding]::new($false))
     $Sign = [IO.File]::ReadAllText($SignPath)
@@ -232,8 +238,24 @@ if ($env:PORTABLE_ARCH -eq "arm64") {
     }
     $Encoder = $Encoder.Replace($Cleanup,
         "exit:`n    fprintf(stderr, `"[GOST-ARM64] before encoder cleanup\n`");`n    st_free(key_st);`n    fprintf(stderr, `"[GOST-ARM64] after ASN1 free\n`");`n    BIO_free(out);`n    fprintf(stderr, `"[GOST-ARM64] after BIO free\n`");`n    return ok;")
+    $EncoderFree = "    GOST_ENCODER_CTX *ectx = ctx;`n`n    OPENSSL_free(ectx);"
+    if ([regex]::Matches($Encoder, [regex]::Escape($EncoderFree)).Count -ne 1) {
+        throw "expected exactly one upstream ARM64 encoder context cleanup"
+    }
+    $Encoder = $Encoder.Replace($EncoderFree,
+        "    GOST_ENCODER_CTX *ectx = ctx;`n`n    fprintf(stderr, `"[GOST-ARM64] before encoder context free\n`");`n    OPENSSL_free(ectx);`n    fprintf(stderr, `"[GOST-ARM64] after encoder context free\n`");")
     $Encoder = "#include <stdio.h>`n" + $Encoder
     [IO.File]::WriteAllText($EncoderPath, $Encoder, [Text.UTF8Encoding]::new($false))
+    $ProviderPath = Join-Path $EngineSource "gost_prov.c"
+    $Provider = [IO.File]::ReadAllText($ProviderPath)
+    $Teardown = "    GOST_prov_deinit_digests();`n    GOST_prov_deinit_macs();`n    provider_ctx_free(vprovctx);"
+    if ([regex]::Matches($Provider, [regex]::Escape($Teardown)).Count -ne 1) {
+        throw "expected exactly one upstream ARM64 provider teardown"
+    }
+    $Provider = $Provider.Replace($Teardown,
+        "    fprintf(stderr, `"[GOST-ARM64] before teardown\n`");`n    GOST_prov_deinit_digests();`n    GOST_prov_deinit_macs();`n    provider_ctx_free(vprovctx);`n    fprintf(stderr, `"[GOST-ARM64] after teardown\n`");")
+    $Provider = "#include <stdio.h>`n" + $Provider
+    [IO.File]::WriteAllText($ProviderPath, $Provider, [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText($SignPath, $Sign, [Text.UTF8Encoding]::new($false))
 }
 
