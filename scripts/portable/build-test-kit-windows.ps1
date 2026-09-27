@@ -134,134 +134,14 @@ if ($env:PORTABLE_ARCH -eq "arm64") {
     }
     $Sign = $Sign.Replace($OldEnd, "    return 0;`n#endif`n}`n`n/*`n *`n * Generates GOST")
     [IO.File]::WriteAllText($SignPath, $Sign, [Text.UTF8Encoding]::new($false))
-    # Trace the native fast-fail to distinguish provider setup, RNG, and EC math.
-    $KeymgmtPath = Join-Path $EngineSource "gost_prov_keymgmt.c"
-    $Keymgmt = [IO.File]::ReadAllText($KeymgmtPath)
-    foreach ($Patch in @(
-        @{ Old = '    key_data->ec = internal_ec_paramgen(key_data->param_nid);';
-           New = '    fprintf(stderr, "[GOST-ARM64] before paramgen\n");`n    key_data->ec = internal_ec_paramgen(key_data->param_nid);' },
-        @{ Old = '    if (FLAGS_CONTAIN(gctx->selection, OSSL_KEYMGMT_SELECT_PRIVATE_KEY)';
-           New = '    fprintf(stderr, "[GOST-ARM64] after paramgen\n");`n    if (FLAGS_CONTAIN(gctx->selection, OSSL_KEYMGMT_SELECT_PRIVATE_KEY)' }
-    )) {
-        if ([regex]::Matches($Keymgmt, [regex]::Escape($Patch.Old)).Count -ne 1) {
-            throw "expected exactly one upstream ARM64 keymgmt trace point"
-        }
-        $Keymgmt = $Keymgmt.Replace($Patch.Old, $Patch.New.Replace('`n', "`n"))
-    }
-    $AfterKeygen = "        goto end;`n`n    return key_data;"
-    if ([regex]::Matches($Keymgmt, [regex]::Escape($AfterKeygen)).Count -ne 1) {
-        throw "expected exactly one upstream ARM64 keygen return"
-    }
-    $Keymgmt = $Keymgmt.Replace($AfterKeygen,
-        "        goto end;`n`n    fprintf(stderr, `"[GOST-ARM64] after public key return\n`");`n    return key_data;")
-    $FreeBlock = "    EC_KEY_free(key_data->ec);`n    OPENSSL_free(key_data);"
-    if ([regex]::Matches($Keymgmt, [regex]::Escape($FreeBlock)).Count -ne 1) {
-        throw "expected exactly one upstream ARM64 keymgmt cleanup"
-    }
-    $Keymgmt = $Keymgmt.Replace($FreeBlock,
-        "    fprintf(stderr, `"[GOST-ARM64] before key free\n`");`n    EC_KEY_free(key_data->ec);`n    fprintf(stderr, `"[GOST-ARM64] after EC free\n`");`n    OPENSSL_free(key_data);`n    fprintf(stderr, `"[GOST-ARM64] after key free\n`");")
-    $GenCleanup = "    GOST_GEN_CTX *gctx = genctx;`n    OPENSSL_free(gctx);"
-    if ([regex]::Matches($Keymgmt, [regex]::Escape($GenCleanup)).Count -ne 1) {
-        throw "expected exactly one upstream ARM64 generator cleanup"
-    }
-    $Keymgmt = $Keymgmt.Replace($GenCleanup,
-        "    GOST_GEN_CTX *gctx = genctx;`n    fprintf(stderr, `"[GOST-ARM64] before gen cleanup\n`");`n    OPENSSL_free(gctx);`n    fprintf(stderr, `"[GOST-ARM64] after gen cleanup\n`");")
-    $Keymgmt = "#include <stdio.h>`n" + $Keymgmt
-    [IO.File]::WriteAllText($KeymgmtPath, $Keymgmt, [Text.UTF8Encoding]::new($false))
-    $Sign = [IO.File]::ReadAllText($SignPath)
-    foreach ($Patch in @(
-        @{ Old = '    if (!EC_GROUP_get_order(group, order, NULL)) {';
-           New = '    fprintf(stderr, "[GOST-ARM64] before group order\n");`n    if (!EC_GROUP_get_order(group, order, NULL)) {' },
-        @{ Old = '        if (!BN_rand_range(d, order)) {';
-           New = '        fprintf(stderr, "[GOST-ARM64] before RNG\n");`n        if (!BN_rand_range(d, order)) {' },
-        @{ Old = '    if (!EC_KEY_set_private_key(ec, d)) {';
-           New = '    fprintf(stderr, "[GOST-ARM64] after RNG\n");`n    if (!EC_KEY_set_private_key(ec, d)) {' },
-        @{ Old = '    return (ok) ? gost_ec_compute_public(ec) : 0;';
-           New = '    fprintf(stderr, "[GOST-ARM64] before public key\n");`n    return (ok) ? gost_ec_compute_public(ec) : 0;' }
-    )) {
-        if ([regex]::Matches($Sign, [regex]::Escape($Patch.Old)).Count -ne 1) {
-            throw "expected exactly one upstream ARM64 keygen trace point"
-        }
-        $Sign = $Sign.Replace($Patch.Old, $Patch.New.Replace('`n', "`n"))
-    }
-    foreach ($Patch in @(
-        @{ Old = '    if (!gost_ec_point_mul(group, pub_key, priv_key, NULL, NULL, ctx)) {';
-           New = '    fprintf(stderr, "[GOST-ARM64] before point mul\n");`n    if (!gost_ec_point_mul(group, pub_key, priv_key, NULL, NULL, ctx)) {' },
-        @{ Old = '    if (!EC_KEY_set_public_key(ec, pub_key)) {';
-           New = '    fprintf(stderr, "[GOST-ARM64] after point mul\n");`n    if (!EC_KEY_set_public_key(ec, pub_key)) {' },
-        @{ Old = '    ok = 1;`n err:';
-           New = '    fprintf(stderr, "[GOST-ARM64] after set public key\n");`n    ok = 1;`n err:' }
-    )) {
-        $Old = $Patch.Old.Replace('`n', "`n")
-        if ([regex]::Matches($Sign, [regex]::Escape($Old)).Count -ne 1) {
-            throw "expected exactly one upstream ARM64 public-key trace point"
-        }
-        $Sign = $Sign.Replace($Old, $Patch.New.Replace('`n', "`n"))
-    }
-    $Sign = "#include <stdio.h>`n" + $Sign
-    $AmethPath = Join-Path $EngineSource "gost_ameth.c"
-    $Ameth = [IO.File]::ReadAllText($AmethPath)
-    foreach ($Patch in @(
-        @{ Old = '    const char *pk_format = get_gost_engine_param(GOST_PARAM_PK_FORMAT);';
-           New = '    fprintf(stderr, "[GOST-ARM64] before encoding config\n");`n    const char *pk_format = get_gost_engine_param(GOST_PARAM_PK_FORMAT);`n    fprintf(stderr, "[GOST-ARM64] after encoding config\n");' },
-        @{ Old = '    params = internal_encode_algor_params(ec, key_type);';
-           New = '    fprintf(stderr, "[GOST-ARM64] before ASN1 params\n");`n    params = internal_encode_algor_params(ec, key_type);`n    fprintf(stderr, "[GOST-ARM64] after ASN1 params\n");' }
-    )) {
-        $Expected = if ($Patch.Old -eq '    params = internal_encode_algor_params(ec, key_type);') { 2 } else { 1 }
-        if ([regex]::Matches($Ameth, [regex]::Escape($Patch.Old)).Count -ne $Expected) {
-            throw "unexpected upstream ARM64 encoding trace point count"
-        }
-        $Ameth = $Ameth.Replace($Patch.Old, $Patch.New.Replace('`n', "`n"))
-    }
-    $Ameth = "#include <stdio.h>`n" + $Ameth
-    [IO.File]::WriteAllText($AmethPath, $Ameth, [Text.UTF8Encoding]::new($false))
-    $EncoderPath = Join-Path $EngineSource "gost_prov_encoder.c"
-    $Encoder = [IO.File]::ReadAllText($EncoderPath)
-    foreach ($Patch in @(
-        @{ Old = '    if (!ec2st_encode(key_st, key_data->ec, key_data->type))';
-           New = '    fprintf(stderr, "[GOST-ARM64] before encoder\n");`n    if (!ec2st_encode(key_st, key_data->ec, key_data->type))' },
-        @{ Old = '    if (!st2bio(out, key_st))';
-           New = '    fprintf(stderr, "[GOST-ARM64] after encoder\n");`n    if (!st2bio(out, key_st))' },
-        @{ Old = '    ok = 1;`n`nexit:';
-           New = '    fprintf(stderr, "[GOST-ARM64] after BIO write\n");`n    ok = 1;`n`nexit:' }
-    )) {
-        $Old = $Patch.Old.Replace('`n', "`n")
-        $Expected = if ($Patch.Old -eq '    ok = 1;`n`nexit:') { 2 } else { 1 }
-        if ([regex]::Matches($Encoder, [regex]::Escape($Old)).Count -ne $Expected) {
-            throw "unexpected upstream ARM64 encoder trace point count"
-        }
-        $Encoder = $Encoder.Replace($Old, $Patch.New.Replace('`n', "`n"))
-    }
-    $Cleanup = "exit:`n    st_free(key_st);`n    BIO_free(out);`n    return ok;"
-    if ([regex]::Matches($Encoder, [regex]::Escape($Cleanup)).Count -ne 1) {
-        throw "expected exactly one upstream ARM64 encoder cleanup"
-    }
-    $Encoder = $Encoder.Replace($Cleanup,
-        "exit:`n    fprintf(stderr, `"[GOST-ARM64] before encoder cleanup\n`");`n    st_free(key_st);`n    fprintf(stderr, `"[GOST-ARM64] after ASN1 free\n`");`n    BIO_free(out);`n    fprintf(stderr, `"[GOST-ARM64] after BIO free\n`");`n    return ok;")
-    $EncoderFree = "    GOST_ENCODER_CTX *ectx = ctx;`n`n    OPENSSL_free(ectx);"
-    if ([regex]::Matches($Encoder, [regex]::Escape($EncoderFree)).Count -ne 1) {
-        throw "expected exactly one upstream ARM64 encoder context cleanup"
-    }
-    $Encoder = $Encoder.Replace($EncoderFree,
-        "    GOST_ENCODER_CTX *ectx = ctx;`n`n    fprintf(stderr, `"[GOST-ARM64] before encoder context free\n`");`n    OPENSSL_free(ectx);`n    fprintf(stderr, `"[GOST-ARM64] after encoder context free\n`");")
-    $Encoder = "#include <stdio.h>`n" + $Encoder
-    [IO.File]::WriteAllText($EncoderPath, $Encoder, [Text.UTF8Encoding]::new($false))
-    $ProviderPath = Join-Path $EngineSource "gost_prov.c"
-    $Provider = [IO.File]::ReadAllText($ProviderPath)
-    $Teardown = "    GOST_prov_deinit_digests();`n    GOST_prov_deinit_macs();`n    provider_ctx_free(vprovctx);"
-    if ([regex]::Matches($Provider, [regex]::Escape($Teardown)).Count -ne 1) {
-        throw "expected exactly one upstream ARM64 provider teardown"
-    }
-    $Provider = $Provider.Replace($Teardown,
-        "    fprintf(stderr, `"[GOST-ARM64] before teardown\n`");`n    GOST_prov_deinit_digests();`n    GOST_prov_deinit_macs();`n    provider_ctx_free(vprovctx);`n    fprintf(stderr, `"[GOST-ARM64] after teardown\n`");")
-    $Provider = "#include <stdio.h>`n" + $Provider
-    [IO.File]::WriteAllText($ProviderPath, $Provider, [Text.UTF8Encoding]::new($false))
-    [IO.File]::WriteAllText($SignPath, $Sign, [Text.UTF8Encoding]::new($false))
 }
 
+# OpenSSL's VC-WIN64-ARM target has no UPLINK shim. Its EXE and DLL must
+# share one CRT for FILE* arguments passed through BIO_new_fp.
+$OpenSSLCrt = if ($env:PORTABLE_ARCH -eq "arm64") { "/MD" } else { "/MT" }
 Push-Location $OpenSSLSource
 try {
-    perl Configure $OpenSSLTarget shared no-tests no-asm /MT `
+    perl Configure $OpenSSLTarget shared no-tests no-asm $OpenSSLCrt `
         "--prefix=$OpenSSLPrefix" "--libdir=lib"
     if ($LASTEXITCODE -ne 0) { throw "OpenSSL configure failed" }
     nmake build_sw
@@ -302,6 +182,17 @@ $CryptoDlls = @(Get-ChildItem -LiteralPath (Join-Path $OpenSSLPrefix "bin") -Fil
 if ($CryptoDlls.Count -ne 2) { throw "expected bundled libcrypto and libssl DLLs" }
 foreach ($Dll in $CryptoDlls) {
     Copy-Item -LiteralPath $Dll.FullName -Destination (Join-Path $StageDir "bin")
+}
+if ($env:PORTABLE_ARCH -eq "arm64") {
+    if (-not $env:VCToolsRedistDir) { throw "VCToolsRedistDir is required for ARM64 CRT bundling" }
+    $RedistDir = Join-Path $env:VCToolsRedistDir "arm64/Microsoft.VC143.CRT"
+    foreach ($Name in @("vcruntime140.dll", "vcruntime140_1.dll")) {
+        $Source = Join-Path $RedistDir $Name
+        if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) {
+            throw "required ARM64 CRT redistribution file is missing: $Source"
+        }
+        Copy-Item -LiteralPath $Source -Destination (Join-Path $StageDir "bin")
+    }
 }
 $ProviderDlls = @(Get-ChildItem -LiteralPath $EngineBuild -Filter gostprov.dll -File -Recurse)
 if ($ProviderDlls.Count -ne 1) { throw "expected exactly one GOST provider DLL" }
@@ -389,7 +280,9 @@ foreach ($Binary in $CheckedBinaries) {
     }
     $AllowedCrypto = ($Binary -eq $OpenSSLExe -or $Binary -like "*libcrypto*.dll" -or
         $Binary -like "*libssl*.dll" -or $Binary -like "*gostprov.dll")
-    $Pattern = if ($AllowedCrypto) { 'vcruntime|msvcp|ucrtbased' }
+    $Pattern = if ($AllowedCrypto -and $env:PORTABLE_ARCH -eq "arm64") {
+                   'msvcp|ucrtbased'
+               } elseif ($AllowedCrypto) { 'vcruntime|msvcp|ucrtbased' }
                else { 'libcrypto|libssl|vcruntime|msvcp|ucrtbased' }
     $Unexpected = & dumpbin /dependents $Binary |
         Select-String -Pattern $Pattern -CaseSensitive:$false

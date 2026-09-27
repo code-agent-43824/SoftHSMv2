@@ -567,15 +567,6 @@ jobs:
         with:
           name: softhsm-portable-windows-arm64
           path: downloaded
-      - name: Capture OpenSSL crash dump on ARM64
-        shell: powershell
-        run: |
-          $dumpDir = Join-Path $env:RUNNER_TEMP 'openssl-crash-dumps'
-          New-Item -ItemType Directory -Force -Path $dumpDir | Out-Null
-          $key = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\openssl.exe'
-          New-Item -Path $key -Force | Out-Null
-          New-ItemProperty -Path $key -Name DumpFolder -PropertyType ExpandString -Value $dumpDir -Force | Out-Null
-          New-ItemProperty -Path $key -Name DumpType -PropertyType DWord -Value 1 -Force | Out-Null
       - name: Build and test downloadable test kit
         shell: cmd
         env:
@@ -616,25 +607,6 @@ jobs:
           if not exist "%USERPROFILE%\softhsm\tokens" exit /b 1
           if exist "%RUNNER_TEMP%\softhsm-no-template\tokens" exit /b 1
           powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-arm64.zip' -DestinationPath 'artifact-testkit'"
-      - name: Save OpenSSL ARM64 crash dump
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: diagnostic-openssl-arm64-dump
-          path: ${{ runner.temp }}/openssl-crash-dumps/*.dmp
-          if-no-files-found: warn
-          retention-days: 1
-      - name: Save OpenSSL ARM64 crash symbols
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: diagnostic-openssl-arm64-symbols
-          path: |
-            ${{ runner.temp }}/testkit-windows-arm64/stage/bin/openssl.exe
-            ${{ runner.temp }}/testkit-windows-arm64/stage/bin/libcrypto-3-arm64.dll
-            ${{ runner.temp }}/testkit-windows-arm64/openssl-3.5.8/**/*.pdb
-          if-no-files-found: warn
-          retention-days: 1
       - uses: actions/upload-artifact@v7
         with:
           name: softhsm-testkit-windows-arm64
