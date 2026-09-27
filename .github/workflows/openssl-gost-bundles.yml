@@ -1,0 +1,196 @@
+name: Versioned OpenSSL GOST bundles
+
+on:
+  workflow_dispatch:
+    inputs:
+      bundle_tag:
+        description: Immutable bundle release tag (for example openssl-gost-3.5.8.1)
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  OPENSSL_VERSION: 3.5.8
+  OPENSSL_SHA256: a8f84a39918ec6415ce765d9b429d313ba97b8143169c172e734b9514464f5b2
+  GOST_ENGINE_COMMIT: 4632029f872981c9f969f1cee8b4fb590dab598b
+  GOST_ENGINE_SHA256: f217905951fa5c2daed547a3795d2223891d88014157d16097da6cdb9e61133a
+  GOST_LIBPROV_COMMIT: d5d381f71c90fe0c91f861784b715b189554f1f2
+  GOST_LIBPROV_SHA256: 8514c1b4b1f88242c487d2afce4f1d8953f94294f37bfbf029c9b43175030666
+  OPENSSL_GOST_BUNDLE_ONLY: '1'
+
+jobs:
+  build-linux:
+    name: Build OpenSSL GOST ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runner: ubuntu-24.04
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    container: ubuntu:20.04
+    steps:
+      - run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential ca-certificates curl file patchelf perl unzip zip
+      - uses: actions/checkout@v7
+      - run: bash scripts/portable/install-cmake-linux.sh
+      - run: scripts/portable/build-test-kit-unix.sh '${{ matrix.platform }}'
+      - uses: actions/upload-artifact@v7
+        with:
+          name: openssl-gost-${{ matrix.platform }}
+          path: dist/openssl-gost-${{ matrix.platform }}.zip
+          if-no-files-found: error
+
+  build-macos:
+    name: Build OpenSSL GOST macos-universal
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - run: scripts/portable/build-test-kit-unix.sh macos-universal
+      - uses: actions/upload-artifact@v7
+        with:
+          name: openssl-gost-macos-universal
+          path: dist/openssl-gost-macos-universal.zip
+          if-no-files-found: error
+
+  build-windows:
+    name: Build OpenSSL GOST windows-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86
+            runner: windows-2025
+          - arch: x64
+            runner: windows-2025
+          - arch: arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - shell: cmd
+        env:
+          PORTABLE_ARCH: ${{ matrix.arch }}
+        run: call scripts\portable\build-test-kit-windows.cmd
+      - uses: actions/upload-artifact@v7
+        with:
+          name: openssl-gost-windows-${{ matrix.arch }}
+          path: dist/openssl-gost-windows-${{ matrix.arch }}.zip
+          if-no-files-found: error
+
+  verify-linux:
+    name: Verify OpenSSL GOST ${{ matrix.platform }}
+    needs: build-linux
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runner: ubuntu-24.04
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    container: ubuntu:20.04
+    steps:
+      - run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates unzip
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: openssl-gost-${{ matrix.platform }}
+          path: downloaded
+      - run: |
+          mkdir bundle
+          unzip -q 'downloaded/openssl-gost-${{ matrix.platform }}.zip' -d bundle
+          export OPENSSL_CONF="$PWD/bundle/config/openssl-gost.cnf"
+          export OPENSSL_MODULES="$PWD/bundle/bin"
+          bash tests/portable/verify-gost-openssl.sh bundle
+
+  verify-macos:
+    name: Verify OpenSSL GOST macos-universal
+    needs: build-macos
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: openssl-gost-macos-universal
+          path: downloaded
+      - run: |
+          mkdir bundle
+          unzip -q downloaded/openssl-gost-macos-universal.zip -d bundle
+          export OPENSSL_CONF="$PWD/bundle/config/openssl-gost.cnf"
+          export OPENSSL_MODULES="$PWD/bundle/bin"
+          lipo bundle/bin/openssl -verify_arch arm64 x86_64
+          bash tests/portable/verify-gost-openssl.sh bundle
+
+  verify-windows:
+    name: Verify OpenSSL GOST windows-${{ matrix.arch }}
+    needs: build-windows
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86
+            runner: windows-2025
+          - arch: x64
+            runner: windows-2025
+          - arch: arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: openssl-gost-windows-${{ matrix.arch }}
+          path: downloaded
+      - shell: powershell
+        run: |
+          Expand-Archive -LiteralPath 'downloaded/openssl-gost-windows-${{ matrix.arch }}.zip' -DestinationPath bundle
+          $env:OPENSSL_CONF = (Resolve-Path 'bundle/config/openssl-gost.cnf').Path
+          $env:OPENSSL_MODULES = (Resolve-Path 'bundle/bin').Path
+          & ./tests/portable/verify-gost-openssl.ps1 -KitDir (Resolve-Path bundle).Path
+
+  publish:
+    name: Publish verified OpenSSL GOST bundles
+    needs: [verify-linux, verify-macos, verify-windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Validate release tag
+        env:
+          BUNDLE_TAG: ${{ inputs.bundle_tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "$BUNDLE_TAG" =~ ^openssl-gost-3\.5\.8\.[0-9]+$ ]]
+          if gh release view "$BUNDLE_TAG" >/dev/null 2>&1; then
+            echo "Bundle release already exists: $BUNDLE_TAG" >&2
+            exit 1
+          fi
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: openssl-gost-*
+          path: downloaded
+      - name: Verify assets and checksums
+        run: |
+          mkdir release-assets
+          find downloaded -type f -name 'openssl-gost-*.zip' -exec cp {} release-assets/ \;
+          test "$(find release-assets -maxdepth 1 -name '*.zip' | wc -l)" -eq 6
+          (cd release-assets && sha256sum *.zip > SHA256SUMS && sha256sum -c SHA256SUMS)
+      - name: Publish immutable version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUNDLE_TAG: ${{ inputs.bundle_tag }}
+        run: |
+          gh release create "$BUNDLE_TAG" release-assets/* \
+            --target "$GITHUB_SHA" \
+            --latest=false \
+            --title "Portable OpenSSL GOST $BUNDLE_TAG" \
+            --notes "OpenSSL CLI, shared libraries, GOST provider and configuration for six platforms. Each archive was exercised on a fresh platform runner. SHA256SUMS pins the published bytes."

@@ -7,10 +7,14 @@ if (-not $env:OPENSSL_SHA256) { throw "OPENSSL_SHA256 is required" }
 foreach ($Name in @("GOST_ENGINE_COMMIT", "GOST_ENGINE_SHA256", "GOST_LIBPROV_COMMIT", "GOST_LIBPROV_SHA256")) {
     if (-not [Environment]::GetEnvironmentVariable($Name)) { throw "$Name is required" }
 }
-if (-not $env:PORTABLE_PRODUCT_DIR) { throw "PORTABLE_PRODUCT_DIR is required" }
+if ($env:OPENSSL_GOST_BUNDLE_ONLY -ne '1' -and -not $env:PORTABLE_PRODUCT_DIR) {
+    throw "PORTABLE_PRODUCT_DIR is required"
+}
 
 $RootDir = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
-$ProductDir = (Resolve-Path -LiteralPath $env:PORTABLE_PRODUCT_DIR).Path
+$ProductDir = if ($env:OPENSSL_GOST_BUNDLE_ONLY -ne '1') {
+    (Resolve-Path -LiteralPath $env:PORTABLE_PRODUCT_DIR).Path
+} else { $null }
 $WorkRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { Join-Path $RootDir ".portable-work" }
 $Platform = "windows-$($env:PORTABLE_ARCH)"
 $WorkDir = Join-Path $WorkRoot "testkit-$Platform"
@@ -166,15 +170,17 @@ cmake --build $EngineBuild --target gost_prov
 if ($LASTEXITCODE -ne 0) { throw "GOST provider build failed" }
 $env:CL = $PreviousCl
 
-$Client = Join-Path $StageDir "bin/portable-token-e2e.exe"
-$CompileArgs = @(
-    "/nologo", "/std:c++17", "/O2", "/EHsc", "/W4", "/MT",
-    "/I$(Join-Path $RootDir 'src/lib/pkcs11')",
-    (Join-Path $RootDir "tests/portable/portable-token-e2e.cpp"),
-    "/Fe:$Client"
-)
-& cl @CompileArgs
-if ($LASTEXITCODE -ne 0) { throw "test client compile failed" }
+if ($env:OPENSSL_GOST_BUNDLE_ONLY -ne '1') {
+    $Client = Join-Path $StageDir "bin/portable-token-e2e.exe"
+    $CompileArgs = @(
+        "/nologo", "/std:c++17", "/O2", "/EHsc", "/W4", "/MT",
+        "/I$(Join-Path $RootDir 'src/lib/pkcs11')",
+        (Join-Path $RootDir "tests/portable/portable-token-e2e.cpp"),
+        "/Fe:$Client"
+    )
+    & cl @CompileArgs
+    if ($LASTEXITCODE -ne 0) { throw "test client compile failed" }
+}
 
 Copy-Item (Join-Path $OpenSSLPrefix "bin/openssl.exe") (Join-Path $StageDir "bin/openssl.exe")
 $CryptoDlls = @(Get-ChildItem -LiteralPath (Join-Path $OpenSSLPrefix "bin") -File |
@@ -207,6 +213,21 @@ $OpenSSLConfig = [IO.File]::ReadAllText((Join-Path $OpenSSLSource "apps/openssl.
 [IO.File]::WriteAllText((Join-Path $StageDir "config/openssl.cnf"), $OpenSSLConfig,
     [Text.UTF8Encoding]::new($false))
 Copy-Item (Join-Path $EngineSource "test/provider.cnf") (Join-Path $StageDir "config/openssl-gost.cnf")
+if ($env:OPENSSL_GOST_BUNDLE_ONLY -eq '1') {
+    Copy-Item (Join-Path $OpenSSLSource "LICENSE.txt") (Join-Path $StageDir "LICENSE-OpenSSL.txt")
+    Copy-Item (Join-Path $EngineSource "LICENSE") (Join-Path $StageDir "LICENSE-GOST-Provider.txt")
+    Copy-Item (Join-Path $EngineSource "libprov/LICENSE") (Join-Path $StageDir "LICENSE-libprov.txt")
+    $ArchivePath = Join-Path $OutputDir "openssl-gost-$Platform.zip"
+    $BundleFiles = @(
+        (Join-Path $StageDir "bin"), (Join-Path $StageDir "config"),
+        (Join-Path $StageDir "LICENSE-OpenSSL.txt"),
+        (Join-Path $StageDir "LICENSE-GOST-Provider.txt"),
+        (Join-Path $StageDir "LICENSE-libprov.txt")
+    )
+    Compress-Archive -Path $BundleFiles -DestinationPath $ArchivePath
+    Get-FileHash -Algorithm SHA256 $ArchivePath
+    exit 0
+}
 Copy-Item (Join-Path $RootDir "tests/portable/run-test-kit.ps1") (Join-Path $StageDir "run-test.ps1")
 Copy-Item (Join-Path $RootDir "tests/portable/verify-gost-openssl.ps1") (Join-Path $StageDir "scripts/verify-gost-openssl.ps1")
 Copy-Item (Join-Path $RootDir "tests/portable/run-test-kit.cmd") (Join-Path $StageDir "run-test.cmd")

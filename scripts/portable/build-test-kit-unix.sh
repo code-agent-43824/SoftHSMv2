@@ -11,7 +11,9 @@ fi
 : "${GOST_ENGINE_SHA256:?GOST_ENGINE_SHA256 is required}"
 : "${GOST_LIBPROV_COMMIT:?GOST_LIBPROV_COMMIT is required}"
 : "${GOST_LIBPROV_SHA256:?GOST_LIBPROV_SHA256 is required}"
-: "${PORTABLE_PRODUCT_DIR:?PORTABLE_PRODUCT_DIR is required}"
+if [[ ${OPENSSL_GOST_BUNDLE_ONLY:-} != 1 ]]; then
+  : "${PORTABLE_PRODUCT_DIR:?PORTABLE_PRODUCT_DIR is required}"
+fi
 
 platform=$1
 case "$platform" in
@@ -22,7 +24,9 @@ case "$platform" in
 esac
 
 root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-product_dir=$(cd "$PORTABLE_PRODUCT_DIR" && pwd)
+if [[ ${OPENSSL_GOST_BUNDLE_ONLY:-} != 1 ]]; then
+  product_dir=$(cd "$PORTABLE_PRODUCT_DIR" && pwd)
+fi
 work_dir="${RUNNER_TEMP:-$root_dir/.portable-work}/testkit-$platform"
 archive="$work_dir/openssl.tar.gz"
 source_dir="$work_dir/openssl-$OPENSSL_VERSION"
@@ -101,10 +105,12 @@ if [[ "$platform" == macos-universal ]]; then
     for library in libcrypto.3.dylib libssl.3.dylib; do
       install_name_tool -id "@loader_path/$library" "$patched/$library"
     done
-    clang++ -std=c++17 -O2 -Wall -Wextra -Werror -arch "$arch" \
-      -mmacosx-version-min=11.0 -I"$root_dir/src/lib/pkcs11" \
-      "$root_dir/tests/portable/portable-token-e2e.cpp" \
-      -o "$work_dir/portable-token-e2e-$arch"
+    if [[ ${OPENSSL_GOST_BUNDLE_ONLY:-} != 1 ]]; then
+      clang++ -std=c++17 -O2 -Wall -Wextra -Werror -arch "$arch" \
+        -mmacosx-version-min=11.0 -I"$root_dir/src/lib/pkcs11" \
+        "$root_dir/tests/portable/portable-token-e2e.cpp" \
+        -o "$work_dir/portable-token-e2e-$arch"
+    fi
   done
   lipo -create "$work_dir/patched-arm64/openssl" "$work_dir/patched-x86_64/openssl" \
     -output "$stage_dir/bin/openssl"
@@ -115,18 +121,24 @@ if [[ "$platform" == macos-universal ]]; then
   lipo -create "$work_dir/patched-arm64/gostprov.dylib" \
     "$work_dir/patched-x86_64/gostprov.dylib" \
     -output "$stage_dir/bin/gostprov.dylib"
-  lipo -create "$work_dir/portable-token-e2e-arm64" "$work_dir/portable-token-e2e-x86_64" \
-    -output "$stage_dir/bin/portable-token-e2e"
+  if [[ ${OPENSSL_GOST_BUNDLE_ONLY:-} != 1 ]]; then
+    lipo -create "$work_dir/portable-token-e2e-arm64" "$work_dir/portable-token-e2e-x86_64" \
+      -output "$stage_dir/bin/portable-token-e2e"
+  fi
   lipo "$stage_dir/bin/openssl" -verify_arch arm64 x86_64
   lipo "$stage_dir/bin/gostprov.dylib" -verify_arch arm64 x86_64
   lipo "$stage_dir/bin/libcrypto.3.dylib" -verify_arch arm64 x86_64
   lipo "$stage_dir/bin/libssl.3.dylib" -verify_arch arm64 x86_64
-  lipo "$stage_dir/bin/portable-token-e2e" -verify_arch arm64 x86_64
+  if [[ ${OPENSSL_GOST_BUNDLE_ONLY:-} != 1 ]]; then
+    lipo "$stage_dir/bin/portable-token-e2e" -verify_arch arm64 x86_64
+  fi
   codesign --force --sign - "$stage_dir/bin/libcrypto.3.dylib"
   codesign --force --sign - "$stage_dir/bin/libssl.3.dylib"
   codesign --force --sign - "$stage_dir/bin/gostprov.dylib"
   codesign --force --sign - "$stage_dir/bin/openssl"
-  codesign --force --sign - "$stage_dir/bin/portable-token-e2e"
+  if [[ ${OPENSSL_GOST_BUNDLE_ONLY:-} != 1 ]]; then
+    codesign --force --sign - "$stage_dir/bin/portable-token-e2e"
+  fi
 else
   prefix="$work_dir/install"
   pushd "$source_dir"
@@ -141,13 +153,24 @@ else
   for binary in openssl libssl.so.3 gostprov.so; do
     patchelf --set-rpath '$ORIGIN' "$stage_dir/bin/$binary"
   done
-  c++ -std=c++17 -O2 -Wall -Wextra -Werror -static-libstdc++ -static-libgcc \
-    -I"$root_dir/src/lib/pkcs11" "$root_dir/tests/portable/portable-token-e2e.cpp" \
-    -ldl -o "$stage_dir/bin/portable-token-e2e"
+  if [[ ${OPENSSL_GOST_BUNDLE_ONLY:-} != 1 ]]; then
+    c++ -std=c++17 -O2 -Wall -Wextra -Werror -static-libstdc++ -static-libgcc \
+      -I"$root_dir/src/lib/pkcs11" "$root_dir/tests/portable/portable-token-e2e.cpp" \
+      -ldl -o "$stage_dir/bin/portable-token-e2e"
+  fi
 fi
 
 cp "$source_dir/apps/openssl.cnf" "$stage_dir/config/openssl.cnf"
 cp "$engine_dir/test/provider.cnf" "$stage_dir/config/openssl-gost.cnf"
+if [[ ${OPENSSL_GOST_BUNDLE_ONLY:-} == 1 ]]; then
+  cp "$source_dir/LICENSE.txt" "$stage_dir/LICENSE-OpenSSL.txt"
+  cp "$engine_dir/LICENSE" "$stage_dir/LICENSE-GOST-Provider.txt"
+  cp "$engine_dir/libprov/LICENSE" "$stage_dir/LICENSE-libprov.txt"
+  bundle="$output_dir/openssl-gost-$platform.zip"
+  (cd "$stage_dir" && zip -X -9 -r "$bundle" bin config \
+    LICENSE-OpenSSL.txt LICENSE-GOST-Provider.txt LICENSE-libprov.txt)
+  exit 0
+fi
 cp "$root_dir/tests/portable/run-test-kit.sh" "$stage_dir/run-test.sh"
 cp "$root_dir/tests/portable/verify-gost-openssl.sh" "$stage_dir/scripts/verify-gost-openssl.sh"
 cp "$root_dir/tests/portable/run-fresh-integration.sh" "$stage_dir/scripts/run-fresh-integration.sh"
