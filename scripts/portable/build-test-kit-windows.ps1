@@ -46,6 +46,28 @@ New-Item -ItemType Directory -Force -Path $WorkDir, $StageDir, $OutputDir,
     (Join-Path $StageDir "bin"), (Join-Path $StageDir "config"),
     (Join-Path $StageDir "scripts"), (Join-Path $StageDir "src"),
     (Join-Path $StageDir "src/pkcs11") | Out-Null
+$UseBundle = $env:OPENSSL_GOST_USE_BUNDLE -eq '1'
+if ($UseBundle) {
+    $LockPath = Join-Path $RootDir 'scripts/portable/openssl-gost-bundle.lock'
+    $LockLines = @(Get-Content -LiteralPath $LockPath)
+    $TagLine = @($LockLines | Where-Object { $_ -match '^tag ' })
+    if ($TagLine.Count -ne 1) { throw 'expected one bundle tag' }
+    $BundleTag = ($TagLine[0] -split ' +')[1]
+    $BundleName = "openssl-gost-$Platform.zip"
+    $HashPattern = '^[0-9a-f]{64}  ' + [regex]::Escape($BundleName) + '$'
+    $HashLine = @($LockLines | Where-Object { $_ -match $HashPattern })
+    if ($HashLine.Count -ne 1) { throw "expected one SHA256 for $BundleName" }
+    $BundleHash = ($HashLine[0] -split ' +')[0]
+    $BundleArchive = Join-Path $WorkDir $BundleName
+    Invoke-WebRequest -Uri "https://github.com/code-agent-43824/SoftHSMv2/releases/download/$BundleTag/$BundleName" `
+        -OutFile $BundleArchive
+    $ActualHash = (Get-FileHash -Algorithm SHA256 $BundleArchive).Hash.ToLowerInvariant()
+    if ($ActualHash -ne $BundleHash) { throw "OpenSSL GOST bundle checksum mismatch: $BundleName" }
+    Expand-Archive -LiteralPath $BundleArchive -DestinationPath $StageDir
+    $CryptoDlls = @(Get-ChildItem -LiteralPath (Join-Path $StageDir 'bin') -File |
+        Where-Object { $_.Name -match '^lib(crypto|ssl).*\.dll$' })
+    if ($CryptoDlls.Count -ne 2) { throw 'bundle must contain libcrypto and libssl DLLs' }
+} else {
 $Url = "https://github.com/openssl/openssl/releases/download/openssl-$($env:OPENSSL_VERSION)/openssl-$($env:OPENSSL_VERSION).tar.gz"
 Invoke-WebRequest -Uri $Url -OutFile $OpenSSLArchive
 $ActualHash = (Get-FileHash -Algorithm SHA256 $OpenSSLArchive).Hash.ToLowerInvariant()
@@ -170,17 +192,6 @@ cmake --build $EngineBuild --target gost_prov
 if ($LASTEXITCODE -ne 0) { throw "GOST provider build failed" }
 $env:CL = $PreviousCl
 
-if ($env:OPENSSL_GOST_BUNDLE_ONLY -ne '1') {
-    $Client = Join-Path $StageDir "bin/portable-token-e2e.exe"
-    $CompileArgs = @(
-        "/nologo", "/std:c++17", "/O2", "/EHsc", "/W4", "/MT",
-        "/I$(Join-Path $RootDir 'src/lib/pkcs11')",
-        (Join-Path $RootDir "tests/portable/portable-token-e2e.cpp"),
-        "/Fe:$Client"
-    )
-    & cl @CompileArgs
-    if ($LASTEXITCODE -ne 0) { throw "test client compile failed" }
-}
 
 Copy-Item (Join-Path $OpenSSLPrefix "bin/openssl.exe") (Join-Path $StageDir "bin/openssl.exe")
 $CryptoDlls = @(Get-ChildItem -LiteralPath (Join-Path $OpenSSLPrefix "bin") -File |
@@ -228,6 +239,21 @@ if ($env:OPENSSL_GOST_BUNDLE_ONLY -eq '1') {
     Get-FileHash -Algorithm SHA256 $ArchivePath
     exit 0
 }
+}
+
+if ($env:OPENSSL_GOST_BUNDLE_ONLY -ne '1') {
+    $Client = Join-Path $StageDir "bin/portable-token-e2e.exe"
+    $CompileArgs = @(
+        "/nologo", "/std:c++17", "/O2", "/EHsc", "/W4", "/MT",
+        "/I$(Join-Path $RootDir 'src/lib/pkcs11')",
+        (Join-Path $RootDir "tests/portable/portable-token-e2e.cpp"),
+        "/Fe:$Client"
+    )
+    & cl @CompileArgs
+    if ($LASTEXITCODE -ne 0) { throw "test client compile failed" }
+}
+
+
 Copy-Item (Join-Path $RootDir "tests/portable/run-test-kit.ps1") (Join-Path $StageDir "run-test.ps1")
 Copy-Item (Join-Path $RootDir "tests/portable/verify-gost-openssl.ps1") (Join-Path $StageDir "scripts/verify-gost-openssl.ps1")
 Copy-Item (Join-Path $RootDir "tests/portable/run-test-kit.cmd") (Join-Path $StageDir "run-test.cmd")
@@ -238,9 +264,11 @@ Copy-Item (Join-Path $RootDir "src/lib/pkcs11/*.h") (Join-Path $StageDir "src/pk
 Copy-Item (Join-Path $RootDir "packaging/portable/TEST-KIT-README.txt") (Join-Path $StageDir "README.txt")
 Copy-Item (Join-Path $RootDir "packaging/portable/testkit.conf") (Join-Path $StageDir "testkit.conf")
 Copy-Item (Join-Path $RootDir "LICENSE") (Join-Path $StageDir "LICENSE-TestClient.txt")
-Copy-Item (Join-Path $OpenSSLSource "LICENSE.txt") (Join-Path $StageDir "LICENSE-OpenSSL.txt")
-Copy-Item (Join-Path $EngineSource "LICENSE") (Join-Path $StageDir "LICENSE-GOST-Provider.txt")
-Copy-Item (Join-Path $EngineSource "libprov/LICENSE") (Join-Path $StageDir "LICENSE-libprov.txt")
+if (-not $UseBundle) {
+    Copy-Item (Join-Path $OpenSSLSource "LICENSE.txt") (Join-Path $StageDir "LICENSE-OpenSSL.txt")
+    Copy-Item (Join-Path $EngineSource "LICENSE") (Join-Path $StageDir "LICENSE-GOST-Provider.txt")
+    Copy-Item (Join-Path $EngineSource "libprov/LICENSE") (Join-Path $StageDir "LICENSE-libprov.txt")
+}
 $RequiredProductFiles = @("softhsm2.dll", "LICENSE-SoftHSM.txt", "LICENSE-Botan.txt")
 foreach ($Name in $RequiredProductFiles) {
     $Source = Join-Path $ProductDir $Name
@@ -263,12 +291,14 @@ if (Test-Path -LiteralPath $ProductReadme -PathType Leaf) {
 & (Join-Path $RootDir "scripts/portable/bundle-opensc-windows.ps1") `
     -StageDir $StageDir -ExpectedMachinePattern $ExpectedMachinePattern
 $OpenSCVersion = (Get-Content -LiteralPath (Join-Path $StageDir "OPENSC-VERSION.txt") -First 1).Trim()
-@(
+$TestKitEnvironment = @(
     "PLATFORM=$Platform",
     "MODULE_NAME=softhsm2.dll",
     "OPENSSL_VERSION=$($env:OPENSSL_VERSION)",
     "OPENSC_VERSION=$OpenSCVersion"
-) | Set-Content -Encoding ascii (Join-Path $StageDir "testkit.env")
+)
+if ($UseBundle) { $TestKitEnvironment += "OPENSSL_GOST_BUNDLE_TAG=$BundleTag" }
+$TestKitEnvironment | Set-Content -Encoding ascii (Join-Path $StageDir "testkit.env")
 
 $OpenSSLExe = Join-Path $StageDir "bin/openssl.exe"
 $env:OPENSSL_CONF = Join-Path $StageDir "config/openssl.cnf"

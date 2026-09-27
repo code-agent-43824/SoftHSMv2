@@ -40,6 +40,24 @@ engine_dir="$work_dir/engine"
 
 mkdir -p "$work_dir" "$stage_dir/bin" "$stage_dir/config" "$stage_dir/scripts" \
   "$stage_dir/src/pkcs11" "$output_dir"
+if [[ ${OPENSSL_GOST_USE_BUNDLE:-0} == 1 ]]; then
+  lock="$root_dir/scripts/portable/openssl-gost-bundle.lock"
+  bundle_tag=$(awk '$1 == "tag" { print $2 }' "$lock")
+  bundle_name="openssl-gost-$platform.zip"
+  bundle_sha=$(awk -v name="$bundle_name" '$2 == name { print $1 }' "$lock")
+  [[ -n $bundle_tag && -n $bundle_sha ]] || {
+    echo "missing bundle tag or checksum for $platform" >&2; exit 1;
+  }
+  bundle_archive="$work_dir/$bundle_name"
+  curl --fail --location --retry 5 --output "$bundle_archive" \
+    "https://github.com/code-agent-43824/SoftHSMv2/releases/download/$bundle_tag/$bundle_name"
+  if [[ $(uname -s) == Darwin ]]; then
+    printf '%s  %s\n' "$bundle_sha" "$bundle_archive" | shasum -a 256 --check
+  else
+    printf '%s  %s\n' "$bundle_sha" "$bundle_archive" | sha256sum --check
+  fi
+  /usr/bin/unzip -q "$bundle_archive" -d "$stage_dir"
+else
 curl --fail --location --retry 5 --output "$archive" \
   "https://github.com/openssl/openssl/releases/download/openssl-$OPENSSL_VERSION/openssl-$OPENSSL_VERSION.tar.gz"
 if [[ $(uname -s) == Darwin ]]; then
@@ -105,12 +123,6 @@ if [[ "$platform" == macos-universal ]]; then
     for library in libcrypto.3.dylib libssl.3.dylib; do
       install_name_tool -id "@loader_path/$library" "$patched/$library"
     done
-    if [[ ${OPENSSL_GOST_BUNDLE_ONLY:-} != 1 ]]; then
-      clang++ -std=c++17 -O2 -Wall -Wextra -Werror -arch "$arch" \
-        -mmacosx-version-min=11.0 -I"$root_dir/src/lib/pkcs11" \
-        "$root_dir/tests/portable/portable-token-e2e.cpp" \
-        -o "$work_dir/portable-token-e2e-$arch"
-    fi
   done
   lipo -create "$work_dir/patched-arm64/openssl" "$work_dir/patched-x86_64/openssl" \
     -output "$stage_dir/bin/openssl"
@@ -121,24 +133,14 @@ if [[ "$platform" == macos-universal ]]; then
   lipo -create "$work_dir/patched-arm64/gostprov.dylib" \
     "$work_dir/patched-x86_64/gostprov.dylib" \
     -output "$stage_dir/bin/gostprov.dylib"
-  if [[ ${OPENSSL_GOST_BUNDLE_ONLY:-} != 1 ]]; then
-    lipo -create "$work_dir/portable-token-e2e-arm64" "$work_dir/portable-token-e2e-x86_64" \
-      -output "$stage_dir/bin/portable-token-e2e"
-  fi
   lipo "$stage_dir/bin/openssl" -verify_arch arm64 x86_64
   lipo "$stage_dir/bin/gostprov.dylib" -verify_arch arm64 x86_64
   lipo "$stage_dir/bin/libcrypto.3.dylib" -verify_arch arm64 x86_64
   lipo "$stage_dir/bin/libssl.3.dylib" -verify_arch arm64 x86_64
-  if [[ ${OPENSSL_GOST_BUNDLE_ONLY:-} != 1 ]]; then
-    lipo "$stage_dir/bin/portable-token-e2e" -verify_arch arm64 x86_64
-  fi
   codesign --force --sign - "$stage_dir/bin/libcrypto.3.dylib"
   codesign --force --sign - "$stage_dir/bin/libssl.3.dylib"
   codesign --force --sign - "$stage_dir/bin/gostprov.dylib"
   codesign --force --sign - "$stage_dir/bin/openssl"
-  if [[ ${OPENSSL_GOST_BUNDLE_ONLY:-} != 1 ]]; then
-    codesign --force --sign - "$stage_dir/bin/portable-token-e2e"
-  fi
 else
   prefix="$work_dir/install"
   pushd "$source_dir"
@@ -153,11 +155,6 @@ else
   for binary in openssl libssl.so.3 gostprov.so; do
     patchelf --set-rpath '$ORIGIN' "$stage_dir/bin/$binary"
   done
-  if [[ ${OPENSSL_GOST_BUNDLE_ONLY:-} != 1 ]]; then
-    c++ -std=c++17 -O2 -Wall -Wextra -Werror -static-libstdc++ -static-libgcc \
-      -I"$root_dir/src/lib/pkcs11" "$root_dir/tests/portable/portable-token-e2e.cpp" \
-      -ldl -o "$stage_dir/bin/portable-token-e2e"
-  fi
 fi
 
 cp "$source_dir/apps/openssl.cnf" "$stage_dir/config/openssl.cnf"
@@ -171,6 +168,25 @@ if [[ ${OPENSSL_GOST_BUNDLE_ONLY:-} == 1 ]]; then
     LICENSE-OpenSSL.txt LICENSE-GOST-Provider.txt LICENSE-libprov.txt)
   exit 0
 fi
+fi
+
+if [[ "$platform" == macos-universal ]]; then
+  for arch in arm64 x86_64; do
+    clang++ -std=c++17 -O2 -Wall -Wextra -Werror -arch "$arch" \
+      -mmacosx-version-min=11.0 -I"$root_dir/src/lib/pkcs11" \
+      "$root_dir/tests/portable/portable-token-e2e.cpp" \
+      -o "$work_dir/portable-token-e2e-$arch"
+  done
+  lipo -create "$work_dir/portable-token-e2e-arm64" "$work_dir/portable-token-e2e-x86_64" \
+    -output "$stage_dir/bin/portable-token-e2e"
+  lipo "$stage_dir/bin/portable-token-e2e" -verify_arch arm64 x86_64
+  codesign --force --sign - "$stage_dir/bin/portable-token-e2e"
+else
+  c++ -std=c++17 -O2 -Wall -Wextra -Werror -static-libstdc++ -static-libgcc \
+    -I"$root_dir/src/lib/pkcs11" "$root_dir/tests/portable/portable-token-e2e.cpp" \
+    -ldl -o "$stage_dir/bin/portable-token-e2e"
+fi
+
 cp "$root_dir/tests/portable/run-test-kit.sh" "$stage_dir/run-test.sh"
 cp "$root_dir/tests/portable/verify-gost-openssl.sh" "$stage_dir/scripts/verify-gost-openssl.sh"
 cp "$root_dir/tests/portable/run-fresh-integration.sh" "$stage_dir/scripts/run-fresh-integration.sh"
@@ -180,9 +196,11 @@ cp "$root_dir/src/lib/pkcs11/"*.h "$stage_dir/src/pkcs11/"
 cp "$root_dir/packaging/portable/TEST-KIT-README.txt" "$stage_dir/README.txt"
 cp "$root_dir/packaging/portable/testkit.conf" "$stage_dir/testkit.conf"
 cp "$root_dir/LICENSE" "$stage_dir/LICENSE-TestClient.txt"
-cp "$source_dir/LICENSE.txt" "$stage_dir/LICENSE-OpenSSL.txt"
-cp "$engine_dir/LICENSE" "$stage_dir/LICENSE-GOST-Provider.txt"
-cp "$engine_dir/libprov/LICENSE" "$stage_dir/LICENSE-libprov.txt"
+if [[ ${OPENSSL_GOST_USE_BUNDLE:-0} != 1 ]]; then
+  cp "$source_dir/LICENSE.txt" "$stage_dir/LICENSE-OpenSSL.txt"
+  cp "$engine_dir/LICENSE" "$stage_dir/LICENSE-GOST-Provider.txt"
+  cp "$engine_dir/libprov/LICENSE" "$stage_dir/LICENSE-libprov.txt"
+fi
 for required in "$module_name" softhsm2-util softhsm2-export LICENSE-SoftHSM.txt LICENSE-Botan.txt; do
   if [[ ! -f "$product_dir/$required" ]]; then
     echo "required product file is missing: $product_dir/$required" >&2
@@ -201,6 +219,9 @@ fi
 opensc_version=$(sed -n '1p' "$stage_dir/OPENSC-VERSION.txt")
 printf 'PLATFORM=%s\nMODULE_NAME=%s\nOPENSSL_VERSION=%s\nOPENSC_VERSION=%s\n' \
   "$platform" "$module_name" "$OPENSSL_VERSION" "$opensc_version" > "$stage_dir/testkit.env"
+if [[ ${OPENSSL_GOST_USE_BUNDLE:-0} == 1 ]]; then
+  printf 'OPENSSL_GOST_BUNDLE_TAG=%s\n' "$bundle_tag" >> "$stage_dir/testkit.env"
+fi
 {
   printf 'Platform: %s\n' "$platform"
   printf 'Built on fresh GitHub verification runner\n'

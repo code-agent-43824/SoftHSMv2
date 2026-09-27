@@ -1,0 +1,7 @@
+tag openssl-gost-3.5.8.1
+7da3fb553a0888748af64093ed514a7f91c2735e2f3e251d75efaad9ff7c0af3  openssl-gost-linux-arm64.zip
+3b012969875c234f35b8d75a0baffc12c0907dba9f789e536fb3fbbbfb188363  openssl-gost-linux-x64.zip
+9bedbad38b3f5f0b8836af917106e6fbef45ffb71b97b8d93239b870136fd2a8  openssl-gost-macos-universal.zip
+0b70840e969be9f606927857c7ad0f1a46102069d6aa3a4bd1e95090508afe76  openssl-gost-windows-arm64.zip
+66f9ed895e0a143cc4df7de5f8b6dcc373d124087a57a7f37ef0606e03fce0b4  openssl-gost-windows-x64.zip
+84f382dbfe483f2e155ac810e70f04eb67b4186a9274819cc35ff38ea1fadd61  openssl-gost-windows-x86.zip
