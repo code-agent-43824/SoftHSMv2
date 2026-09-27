@@ -200,7 +200,7 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential ca-certificates curl file opensc patchelf perl unzip zip
+            build-essential ca-certificates cmake curl file opensc patchelf perl unzip zip
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
@@ -382,7 +382,7 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential ca-certificates curl file opensc patchelf perl unzip zip
+            build-essential ca-certificates cmake curl file opensc patchelf perl unzip zip
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}

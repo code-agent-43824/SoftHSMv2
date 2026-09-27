@@ -63,6 +63,18 @@ foreach ($Input in @(
     tar -xzf $Archive -C $Input.Destination --strip-components=1
     if ($LASTEXITCODE -ne 0) { throw "$($Input.Name) unpack failed" }
 }
+if ($env:PORTABLE_ARCH -eq "x86") {
+    # On 32-bit MSVC, upstream compares a size_t length to an int expression;
+    # make the intended non-negative comparison explicit without suppressing /WX.
+    $AmethPath = Join-Path $EngineSource "gost_ameth.c"
+    $Ameth = [IO.File]::ReadAllText($AmethPath)
+    $OldComparison = 'if (*len < 2 * half)'
+    if ([regex]::Matches($Ameth, [regex]::Escape($OldComparison)).Count -ne 1) {
+        throw "expected exactly one upstream x86 length comparison"
+    }
+    $Ameth = $Ameth.Replace($OldComparison, 'if (*len < (size_t)(2 * half))')
+    [IO.File]::WriteAllText($AmethPath, $Ameth, [Text.UTF8Encoding]::new($false))
+}
 
 Push-Location $OpenSSLSource
 try {
@@ -109,11 +121,7 @@ Copy-Item -LiteralPath $ProviderDlls[0].FullName -Destination (Join-Path $StageD
 $OpenSSLConfig = [IO.File]::ReadAllText((Join-Path $OpenSSLSource "apps/openssl.cnf"))
 [IO.File]::WriteAllText((Join-Path $StageDir "config/openssl.cnf"), $OpenSSLConfig,
     [Text.UTF8Encoding]::new($false))
-$GOSTConfig = $OpenSSLConfig.Replace("[provider_sect]", "[provider_sect]`ngostprov = gost_sect")
-$GOSTConfig = $GOSTConfig.Replace("[default_sect]", "[default_sect]`nactivate = 1")
-$GOSTConfig += "`n[gost_sect]`nactivate = 1`n"
-[IO.File]::WriteAllText((Join-Path $StageDir "config/openssl-gost.cnf"), $GOSTConfig,
-    [Text.UTF8Encoding]::new($false))
+Copy-Item (Join-Path $EngineSource "test/provider.cnf") (Join-Path $StageDir "config/openssl-gost.cnf")
 Copy-Item (Join-Path $RootDir "tests/portable/run-test-kit.ps1") (Join-Path $StageDir "run-test.ps1")
 Copy-Item (Join-Path $RootDir "tests/portable/verify-gost-openssl.ps1") (Join-Path $StageDir "scripts/verify-gost-openssl.ps1")
 Copy-Item (Join-Path $RootDir "tests/portable/run-test-kit.cmd") (Join-Path $StageDir "run-test.cmd")

@@ -147,12 +147,7 @@ else
 fi
 
 cp "$source_dir/apps/openssl.cnf" "$stage_dir/config/openssl.cnf"
-awk '
-  /^\[provider_sect\]$/ { print; print "gostprov = gost_sect"; next }
-  /^\[default_sect\]$/ { print; print "activate = 1"; next }
-  { print }
-  END { print "\n[gost_sect]\nactivate = 1" }
-' "$source_dir/apps/openssl.cnf" > "$stage_dir/config/openssl-gost.cnf"
+cp "$engine_dir/test/provider.cnf" "$stage_dir/config/openssl-gost.cnf"
 cp "$root_dir/tests/portable/run-test-kit.sh" "$stage_dir/run-test.sh"
 cp "$root_dir/tests/portable/verify-gost-openssl.sh" "$stage_dir/scripts/verify-gost-openssl.sh"
 cp "$root_dir/tests/portable/run-fresh-integration.sh" "$stage_dir/scripts/run-fresh-integration.sh"

@@ -18,6 +18,9 @@ if ($LASTEXITCODE -ne 0) { throw "OpenSSL provider listing failed" }
 $Providers | Set-Content -LiteralPath (Join-Path $Evidence "providers.txt")
 $ProviderText = $Providers -join "`n"
 if ($ProviderText -notmatch 'gostprov' -or $ProviderText -notmatch 'default') {
+    $Providers | ForEach-Object { Write-Host "[GOST-OPENSSL] provider listing: $_" }
+    & $OpenSSL list -providers -provider-path (Join-Path $KitDir "bin") `
+        -provider gostprov -provider default -verbose
     throw "GOST and default providers must both load"
 }
 
