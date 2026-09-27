@@ -17,6 +17,7 @@ function Invoke-OpenSSL([string[]]$Arguments) {
         try {
             $ErrorActionPreference = "Continue"
             & $OpenSSL list -public-key-algorithms -provider gostprov -provider default 2>&1 |
+                Select-String -Pattern 'gost2012_256|gost2012_512|gost2001' |
                 ForEach-Object { Write-Host "[GOST-OPENSSL] algorithm diagnostic: $_" }
         }
         finally { $ErrorActionPreference = $PreviousPreference }

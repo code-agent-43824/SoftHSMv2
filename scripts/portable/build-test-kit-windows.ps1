@@ -99,6 +99,32 @@ if ($env:PORTABLE_ARCH -eq "x86") {
     }
     $Gost2015 = $Gost2015.Replace($OldComparison, 'while (len >= (size_t)bl)')
     [IO.File]::WriteAllText($Gost2015Path, $Gost2015, [Text.UTF8Encoding]::new($false))
+    $KeyxPath = Join-Path $EngineSource "gost_ec_keyx.c"
+    $Keyx = [IO.File]::ReadAllText($KeyxPath)
+    $OldComparison = 'if (*out_len < 2 * half_len)'
+    if ([regex]::Matches($Keyx, [regex]::Escape($OldComparison)).Count -ne 1) {
+        throw "expected exactly one upstream x86 key exchange length comparison"
+    }
+    $Keyx = $Keyx.Replace($OldComparison, 'if (*out_len < (size_t)(2 * half_len))')
+    [IO.File]::WriteAllText($KeyxPath, $Keyx, [Text.UTF8Encoding]::new($false))
+}
+if ($env:PORTABLE_ARCH -eq "arm64") {
+    # The pinned provider's optimized curve multiplication fast-fails during
+    # GOST genpkey on Windows ARM64. Use OpenSSL's generic EC path on that ABI.
+    $SignPath = Join-Path $EngineSource "gost_ec_sign.c"
+    $Sign = [IO.File]::ReadAllText($SignPath)
+    $OldDispatch = "    if (group == NULL || r == NULL || ctx == NULL)`n        return 0;"
+    if ([regex]::Matches($Sign, [regex]::Escape($OldDispatch)).Count -ne 1) {
+        throw "expected exactly one upstream EC multiplication dispatch"
+    }
+    $Sign = $Sign.Replace($OldDispatch,
+        "$OldDispatch`n`n#if defined(_M_ARM64)`n    return EC_POINT_mul(group, r, n, q, m, ctx);`n#else")
+    $OldEnd = "    return 0;`n}`n`n/*`n *`n * Generates GOST"
+    if ([regex]::Matches($Sign, [regex]::Escape($OldEnd)).Count -ne 1) {
+        throw "expected exactly one upstream EC dispatch end"
+    }
+    $Sign = $Sign.Replace($OldEnd, "    return 0;`n#endif`n}`n`n/*`n *`n * Generates GOST")
+    [IO.File]::WriteAllText($SignPath, $Sign, [Text.UTF8Encoding]::new($false))
 }
 
 Push-Location $OpenSSLSource
