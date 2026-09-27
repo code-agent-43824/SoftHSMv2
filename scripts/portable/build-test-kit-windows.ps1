@@ -91,6 +91,14 @@ if ($env:PORTABLE_ARCH -eq "x86") {
     $Crypt = $Crypt.Replace($OldComparison,
         "int processed = magma_cipher_do_ctr(ctx, out, in, inl);`n  if (processed < 0 || (size_t)processed != inl)")
     [IO.File]::WriteAllText($CryptPath, $Crypt, [Text.UTF8Encoding]::new($false))
+    $Gost2015Path = Join-Path $EngineSource "gost_gost2015.c"
+    $Gost2015 = [IO.File]::ReadAllText($Gost2015Path)
+    $OldComparison = 'while (len >= bl)'
+    if ([regex]::Matches($Gost2015, [regex]::Escape($OldComparison)).Count -ne 1) {
+        throw "expected exactly one upstream x86 GOST block length comparison"
+    }
+    $Gost2015 = $Gost2015.Replace($OldComparison, 'while (len >= (size_t)bl)')
+    [IO.File]::WriteAllText($Gost2015Path, $Gost2015, [Text.UTF8Encoding]::new($false))
 }
 
 Push-Location $OpenSSLSource

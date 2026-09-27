@@ -10,7 +10,18 @@ New-Item -ItemType Directory -Force -Path $Evidence | Out-Null
 
 function Invoke-OpenSSL([string[]]$Arguments) {
     & $OpenSSL @Arguments
-    if ($LASTEXITCODE -ne 0) { throw "OpenSSL failed: $($Arguments[0])" }
+    if ($LASTEXITCODE -ne 0) {
+        $ExitCode = $LASTEXITCODE
+        Write-Host "[GOST-OPENSSL] failed command: $($Arguments -join ' ') (exit $ExitCode)"
+        $PreviousPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            & $OpenSSL list -public-key-algorithms -provider gostprov -provider default 2>&1 |
+                ForEach-Object { Write-Host "[GOST-OPENSSL] algorithm diagnostic: $_" }
+        }
+        finally { $ErrorActionPreference = $PreviousPreference }
+        throw "OpenSSL failed: $($Arguments[0]) (exit $ExitCode)"
+    }
 }
 
 $Providers = @(& $OpenSSL list -providers)
