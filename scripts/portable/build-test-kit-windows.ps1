@@ -82,16 +82,16 @@ if ($env:PORTABLE_ARCH -eq "x86") {
     }
     $Pmeth = $Pmeth.Replace($OldComparison, 'if (*siglen < (size_t)order)')
     [IO.File]::WriteAllText($PmethPath, $Pmeth, [Text.UTF8Encoding]::new($false))
+    $CryptPath = Join-Path $EngineSource "gost_crypt.c"
+    $Crypt = [IO.File]::ReadAllText($CryptPath)
+    $OldComparison = 'if (magma_cipher_do_ctr(ctx, out, in, inl) != inl)'
+    if ([regex]::Matches($Crypt, [regex]::Escape($OldComparison)).Count -ne 1) {
+        throw "expected exactly one upstream x86 Magma length comparison"
+    }
+    $Crypt = $Crypt.Replace($OldComparison,
+        "int processed = magma_cipher_do_ctr(ctx, out, in, inl);`n  if (processed < 0 || (size_t)processed != inl)")
+    [IO.File]::WriteAllText($CryptPath, $Crypt, [Text.UTF8Encoding]::new($false))
 }
-# Upstream's OPENSSL_EXPORT does not export the entry point from MSVC modules.
-$ProviderPath = Join-Path $EngineSource "gost_prov.c"
-$Provider = [IO.File]::ReadAllText($ProviderPath)
-$OldExport = "OPENSSL_EXPORT`nint OSSL_provider_init("
-if ([regex]::Matches($Provider, [regex]::Escape($OldExport)).Count -ne 1) {
-    throw "expected exactly one upstream provider entry point"
-}
-$Provider = $Provider.Replace($OldExport, "__declspec(dllexport)`nint OSSL_provider_init(")
-[IO.File]::WriteAllText($ProviderPath, $Provider, [Text.UTF8Encoding]::new($false))
 
 Push-Location $OpenSSLSource
 try {
@@ -108,6 +108,7 @@ finally { Pop-Location }
 cmake -S $EngineSource -B $EngineBuild -G "NMake Makefiles" `
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_DEFAULT_CMP0091=NEW `
     -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
+    "-DCMAKE_MODULE_LINKER_FLAGS=/EXPORT:OSSL_provider_init" `
     "-DOPENSSL_ROOT_DIR=$OpenSSLPrefix" `
     -DOPENSSL_ENGINES_DIR=bin -DGOST_BUILD_ENGINE=OFF `
     -DGOST_BUILD_STATIC_ENGINE=OFF -DGOST_BUILD_PROVIDER=ON
