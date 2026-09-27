@@ -101,6 +101,25 @@ if (-not (Test-Path -LiteralPath $Module -PathType Leaf)) {
 }
 $env:P11_TEST_CLIENT = $Client
 $env:OPENSSL_CONF = (Resolve-Path (Join-Path $KitDir "config/openssl.cnf")).Path
+function Invoke-GostVerifier([string]$ExportedKey) {
+    $PreviousConfig = $env:OPENSSL_CONF
+    $PreviousModules = $env:OPENSSL_MODULES
+    try {
+        $env:OPENSSL_CONF = (Resolve-Path (Join-Path $KitDir "config/openssl-gost.cnf")).Path
+        $env:OPENSSL_MODULES = (Resolve-Path (Join-Path $KitDir "bin")).Path
+        $Arguments = @{ KitDir = $KitDir }
+        if ($ExportedKey) { $Arguments.ExportedKey = $ExportedKey }
+        & (Join-Path $KitDir "scripts/verify-gost-openssl.ps1") @Arguments
+        if ($LASTEXITCODE -ne 0) { throw "GOST OpenSSL verification failed" }
+    }
+    finally {
+        $env:OPENSSL_CONF = $PreviousConfig
+        if ($null -eq $PreviousModules) {
+            Remove-Item Env:OPENSSL_MODULES -ErrorAction SilentlyContinue
+        }
+        else { $env:OPENSSL_MODULES = $PreviousModules }
+    }
+}
 
 Write-Host "[TEST-KIT] platform=$($Settings.PLATFORM)"
 Write-Host "[TEST-KIT] settings=$ConfigPath"
@@ -113,6 +132,8 @@ Write-Host "[TEST-KIT] bundled OpenSSL=$OpenSSL"
 Write-Host "[TEST-KIT] bundled OpenSC pkcs11-tool=$Pkcs11Tool"
 Write-Host "[TEST-KIT] bundled SoftHSM utilities=$SoftHSMUtil, $SoftHSMExport"
 Write-Host "[TEST-KIT] all test evidence remains under=$(Join-Path $KitDir 'test-output')"
+
+Invoke-GostVerifier
 
 & (Join-Path $KitDir "scripts/run-fresh-integration.ps1") $Module $OpenSSL $BundledMode
 if ($LASTEXITCODE -ne 0) { throw "downloadable test kit failed" }
@@ -198,6 +219,7 @@ if ($BundledMode -eq "YES") {
     )) {
         if ($GostAsn1Text -notmatch $Pattern) { throw "exported GOST PKCS#8 is missing an expected OID" }
     }
+    Invoke-GostVerifier $ExportedGost
     $UtilityLines.Add("[UTIL] PASS: autonomous util and forced RSA/ECDSA/GOST PKCS#8 export")
     $UtilityLines | Set-Content -Encoding utf8 -LiteralPath $UtilityLog
     Write-Host "[UTIL] PASS: autonomous util and forced RSA/ECDSA/GOST PKCS#8 export"

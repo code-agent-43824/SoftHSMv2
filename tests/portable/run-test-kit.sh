@@ -138,6 +138,9 @@ printf '[TEST-KIT] bundled SoftHSM utilities=%s, %s\n' \
   "$kit_dir/bin/softhsm2-util" "$kit_dir/bin/softhsm2-export"
 printf '[TEST-KIT] all test evidence remains under=%s\n' "$kit_dir/test-output"
 
+OPENSSL_CONF="$kit_dir/config/openssl-gost.cnf" OPENSSL_MODULES="$kit_dir/bin" \
+  bash "$kit_dir/scripts/verify-gost-openssl.sh" "$kit_dir"
+
 "$kit_dir/scripts/run-fresh-integration.sh" "$module" \
   "$kit_dir/bin/openssl" "$bundled_mode"
 
@@ -209,6 +212,9 @@ if [[ "$bundled_mode" == YES ]]; then
       "$kit_dir/test-output/exported-gost-asn1.txt"
     grep -E 'GOST R 34\.11-2012 with 256 bit hash|id-tc26-gost3411-12-256|1\.2\.643\.7\.1\.1\.2\.2' \
       "$kit_dir/test-output/exported-gost-asn1.txt"
+    OPENSSL_CONF="$kit_dir/config/openssl-gost.cnf" OPENSSL_MODULES="$kit_dir/bin" \
+      bash "$kit_dir/scripts/verify-gost-openssl.sh" "$kit_dir" \
+        "$kit_dir/test-output/exported-gost.der"
     printf '[UTIL] PASS: autonomous util and forced RSA/ECDSA/GOST PKCS#8 export\n'
   } 2>&1 | tee "$utility_log"
 fi

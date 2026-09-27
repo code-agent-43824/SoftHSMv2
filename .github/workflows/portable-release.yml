@@ -24,8 +24,12 @@ permissions:
   contents: read
 
 env:
-  OPENSSL_VERSION: 3.5.7
-  OPENSSL_SHA256: a8c0d28a529ca480f9f36cf5792e2cd21984552a3c8e4aa11a24aa31aeac98e8
+  OPENSSL_VERSION: 3.5.8
+  OPENSSL_SHA256: a8f84a39918ec6415ce765d9b429d313ba97b8143169c172e734b9514464f5b2
+  GOST_ENGINE_COMMIT: 4632029f872981c9f969f1cee8b4fb590dab598b
+  GOST_ENGINE_SHA256: f217905951fa5c2daed547a3795d2223891d88014157d16097da6cdb9e61133a
+  GOST_LIBPROV_COMMIT: d5d381f71c90fe0c91f861784b715b189554f1f2
+  GOST_LIBPROV_SHA256: 8514c1b4b1f88242c487d2afce4f1d8953f94294f37bfbf029c9b43175030666
   BOTAN_VERSION: 2.19.5
   BOTAN_SHA256: dfeea0e0a6f26d6724c4af01da9a7b88487adb2d81ba7c72fcaf52db522c9ad4
   OPENSC_VERSION: 0.27.1
@@ -736,6 +740,16 @@ jobs:
           count=0
           for source in release-input/softhsm-*; do
             name=$(basename "$source")
+            case "$name" in
+              softhsm-testkit-windows-*|softhsm-portable-windows-*) ;;
+              softhsm-testkit-*)
+                chmod +x "$source/run-test.sh" "$source/bin/openssl" \
+                  "$source/bin/pkcs11-tool" "$source/bin/portable-token-e2e" \
+                  "$source/bin/softhsm2-util" "$source/bin/softhsm2-export" \
+                  "$source/scripts/"*.sh ;;
+              softhsm-portable-*)
+                chmod +x "$source/softhsm2-util" "$source/softhsm2-export" ;;
+            esac
             (cd "$source" && zip -X -9 -r "$GITHUB_WORKSPACE/release-assets/$name.zip" .)
             count=$((count + 1))
           done
@@ -755,13 +769,28 @@ jobs:
                 zipinfo -1 "$archive" | grep -Fx 'bin/pkcs11-tool.exe' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'bin/softhsm2-util.exe' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'bin/softhsm2-export.exe' >/dev/null
+                zipinfo -1 "$archive" | grep -Fx 'bin/gostprov.dll' >/dev/null
+                zipinfo -1 "$archive" | grep -E '^bin/libcrypto.*\.dll$' >/dev/null
+                zipinfo -1 "$archive" | grep -E '^bin/libssl.*\.dll$' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'LICENSE-OpenSC.txt' >/dev/null
+                zipinfo -1 "$archive" | grep -Fx 'LICENSE-GOST-Provider.txt' >/dev/null
                 ;;
               softhsm-testkit-*.zip)
                 zipinfo -1 "$archive" | grep -Fx 'bin/pkcs11-tool' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'bin/softhsm2-util' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'bin/softhsm2-export' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'LICENSE-OpenSC.txt' >/dev/null
+                zipinfo -1 "$archive" | grep -Fx 'LICENSE-GOST-Provider.txt' >/dev/null
+                case "$(basename "$archive")" in
+                  *macos-*)
+                    zipinfo -1 "$archive" | grep -Fx 'bin/gostprov.dylib' >/dev/null
+                    zipinfo -1 "$archive" | grep -Fx 'bin/libcrypto.3.dylib' >/dev/null
+                    zipinfo -1 "$archive" | grep -Fx 'bin/libssl.3.dylib' >/dev/null ;;
+                  *)
+                    zipinfo -1 "$archive" | grep -Fx 'bin/gostprov.so' >/dev/null
+                    zipinfo -1 "$archive" | grep -Fx 'bin/libcrypto.so.3' >/dev/null
+                    zipinfo -1 "$archive" | grep -Fx 'bin/libssl.so.3' >/dev/null ;;
+                esac
                 if zipinfo -1 "$archive" | grep -Fx 'bin/opensc-lib/pkcs11-tool' >/dev/null; then
                   echo "duplicate pkcs11-tool found in $archive" >&2
                   exit 1
@@ -777,6 +806,25 @@ jobs:
                 ;;
             esac
           done
+          python3 - <<'PY'
+          import stat
+          import zipfile
+          from pathlib import Path
+
+          for archive in Path('release-assets').glob('*.zip'):
+              name = archive.name
+              if '-windows-' in name:
+                  continue
+              required = (['bin/openssl', 'bin/pkcs11-tool', 'bin/portable-token-e2e',
+                           'bin/softhsm2-util', 'bin/softhsm2-export', 'run-test.sh']
+                          if name.startswith('softhsm-testkit-')
+                          else ['softhsm2-util', 'softhsm2-export'])
+              with zipfile.ZipFile(archive) as package:
+                  for path in required:
+                      mode = package.getinfo(path).external_attr >> 16
+                      if not mode & stat.S_IXUSR:
+                          raise SystemExit(f'{archive}: {path} is not executable')
+          PY
       - name: Publish GitHub Release
         if: steps.release.outputs.publish == 'true'
         env:

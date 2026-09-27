@@ -181,13 +181,19 @@ executes that exact packaged environment. Only a successful kit is uploaded to
 Actions and made eligible for the release aggregation job.
 
 The kit includes the matching portable SoftHSM module and configuration, the
-precompiled C++ client, a pinned statically linked OpenSSL CLI, a prebuilt
+precompiled C++ client, a pinned OpenSSL CLI with its private shared libraries
+and pinned GOST provider, a prebuilt
 OpenSC `pkcs11-tool` with its non-system dependencies, all runtime launchers,
 the test source and PKCS #11 headers, licenses, and `ENVIRONMENT.txt` with the
 runner and tool versions. No compiler, SDK, Java, Botan, separately installed
 OpenSSL, or separately installed OpenSC is needed to run it. Normal platform
 system libraries remain required. After the main E2E, the launcher requires
 both `pkcs11-tool -I` and `pkcs11-tool -T` to load the selected module.
+It also verifies Streebog-256/512 reference values, GOST-2012 256/512
+signatures and tamper rejection, Kuznyechik/Magma CTR and CTR-ACPKM round
+trips, and a signature made with an exported SoftHSM GOST key in bundled mode.
+This is independent interoperability coverage, not a claim of complete
+one-to-one PKCS #11 mechanism parity with OpenSSL.
 
 The downloadable GitHub Actions artifacts contain their files directly; there
 is no ZIP nested inside the artifact ZIP. Release assets remain ordinary ZIPs.

@@ -8,7 +8,8 @@ archive so either file can be downloaded independently.
 The kit contains:
 - the matching portable SoftHSM module;
 - a precompiled dependency-light C++ PKCS #11 client;
-- a pinned, statically linked OpenSSL CLI used as the independent reference;
+- a pinned OpenSSL CLI, its private shared libraries and a pinned GOST provider,
+  used as an independent reference (the SoftHSM module remains self-contained);
 - a prebuilt OpenSC pkcs11-tool plus its non-system runtime dependencies;
 - the portable softhsm2-util and softhsm2-export debug tools;
 - shell or PowerShell launchers;
@@ -43,8 +44,12 @@ For the bundled module only, the launcher then runs softhsm2-util without a
 key, imports a P-256 EC fixture with softhsm2-util, force-exports it, validates
 both PKCS#8 files with the bundled OpenSSL, and compares their public keys to
 independent references. It also force-exports the persistent sensitive/non-
-extractable GOST R 34.10-2012/256 key and validates its PKCS#8 structure and
-algorithm, curve, and digest OIDs with the bundled OpenSSL.
+extractable GOST R 34.10-2012/256 key, validates its PKCS#8 structure and
+algorithm, curve, and digest OIDs, then signs and verifies with the bundled
+OpenSSL provider. Every run also checks Streebog-256/512 reference vectors,
+GOST-2012 256/512 signatures and tamper rejection, and Kuznyechik/Magma CTR
+and CTR-ACPKM encryption round trips. These checks do not claim that all
+SoftHSM mechanisms have one-to-one OpenSSL provider equivalents.
 
 Linux or macOS:
   bash run-test.sh
@@ -73,5 +78,10 @@ Windows:
 No compiler, SDK, Java, Botan, separately installed OpenSSL, or separately
 installed OpenSC is required at runtime. Normal operating-system libraries are
 still required.
+For manual GOST OpenSSL commands, set OPENSSL_CONF to config/openssl-gost.cnf
+and OPENSSL_MODULES to bin in the extracted kit. Do not apply that config
+globally to SoftHSM utilities: they use their own statically linked OpenSSL.
+The launcher scopes it to independent CLI checks. The bundled libraries must
+stay next to bin/openssl.
 The shell launcher restores executable permissions if the ZIP extractor did
 not preserve them.
