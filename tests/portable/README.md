@@ -187,7 +187,8 @@ OpenSC `pkcs11-tool` with its non-system dependencies, all runtime launchers,
 the test source and PKCS #11 headers, licenses, and `ENVIRONMENT.txt` with the
 runner and tool versions. No compiler, SDK, Java, Botan, separately installed
 OpenSSL, or separately installed OpenSC is needed to run it. Normal platform
-system libraries remain required. After the main E2E, the launcher requires
+system libraries remain required. The Windows ARM64 kit bundles its native
+VC runtime DLL alongside OpenSSL. After the main E2E, the launcher requires
 both `pkcs11-tool -I` and `pkcs11-tool -T` to load the selected module.
 It also verifies Streebog-256/512 reference values, GOST-2012 256/512
 signatures and tamper rejection, Kuznyechik/Magma CTR and CTR-ACPKM round
