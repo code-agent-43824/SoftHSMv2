@@ -102,6 +102,7 @@ const char* defaultLibraryPath()
 		std::vector<std::string> candidates;
 		candidates.push_back(directory + separator + moduleName);
 		candidates.push_back(directory + separator + ".." + separator + moduleName);
+		candidates.push_back(directory + separator + ".." + separator + ".." + separator + moduleName);
 		for (std::vector<std::string>::const_iterator it = candidates.begin();
 			it != candidates.end(); ++it)
 		{

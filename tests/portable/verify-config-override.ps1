@@ -59,6 +59,93 @@ try {
     $env:SOFTHSM2_CONF = $Bundle
     & $Client first-run $Module (Join-Path (Join-Path $DirectoryHome 'softhsm') 'tokens')
     if ($LASTEXITCODE -ne 0) { throw 'directory override did not fall back' }
+
+    $ModuleName = Split-Path -Leaf $Module
+    $Adjacent = Join-Path $CaseDir 'adjacent'
+    $AdjacentUtilDir = Join-Path $Adjacent 'tools/bin'
+    $AdjacentHome = Join-Path $CaseDir 'adjacent-home'
+    $Elsewhere = Join-Path $CaseDir 'elsewhere'
+    @($AdjacentUtilDir, $AdjacentHome, $Elsewhere) |
+        ForEach-Object { New-Item -ItemType Directory -Force -Path $_ | Out-Null }
+    Copy-Item -LiteralPath $Module -Destination (Join-Path $Adjacent $ModuleName)
+    Copy-Item -LiteralPath $Util -Destination (Join-Path $AdjacentUtilDir 'softhsm2-util.exe')
+    @('directories.tokendir = tokens', 'objectstore.backend = file',
+      'FAKE_RUTOKEN_ECP = true', 'log.level = ERROR') |
+        Set-Content -LiteralPath (Join-Path $Adjacent 'softhsm.conf') -Encoding Ascii
+    'directories.tokendir = alias-tokens' |
+        Set-Content -LiteralPath (Join-Path $Adjacent 'softhsm2.conf') -Encoding Ascii
+    'invalid config in process working directory' |
+        Set-Content -LiteralPath (Join-Path $Elsewhere 'softhsm.conf') -Encoding Ascii
+    $env:USERPROFILE = $AdjacentHome
+    Remove-Item Env:SOFTHSM2_CONF -ErrorAction SilentlyContinue
+    Push-Location $Elsewhere
+    try {
+        $SelectedModule = & (Join-Path $AdjacentUtilDir 'softhsm2-util.exe') --show-config default-pkcs11-lib
+        if ($LASTEXITCODE -ne 0 -or [IO.Path]::GetFullPath($SelectedModule.Trim()) -ne
+            [IO.Path]::GetFullPath((Join-Path $Adjacent $ModuleName))) {
+            throw 'utility did not find the module two directories above tools/bin'
+        }
+        $Slots = & (Join-Path $AdjacentUtilDir 'softhsm2-util.exe') --show-slots
+        if ($LASTEXITCODE -ne 0 -or ($Slots -join "`n") -notmatch 'Slot 14') {
+            throw 'utility did not use the adjacent Rutoken configuration'
+        }
+        & $Client probe (Join-Path $Adjacent $ModuleName)
+        if ($LASTEXITCODE -ne 0) { throw 'module did not use its adjacent configuration' }
+        $env:SOFTHSM2_CONF = Join-Path $CaseDir 'missing.conf'
+        & $Client probe (Join-Path $Adjacent $ModuleName)
+        if ($LASTEXITCODE -ne 0) { throw 'missing override did not fall back to adjacent config' }
+        Remove-Item Env:SOFTHSM2_CONF -ErrorAction SilentlyContinue
+    }
+    finally { Pop-Location }
+    if (-not (Test-Path -LiteralPath (Join-Path $Adjacent 'tokens')) -or
+        (Test-Path -LiteralPath (Join-Path $Adjacent 'alias-tokens')) -or
+        (Test-Path -LiteralPath (Join-Path $AdjacentHome 'softhsm'))) {
+        throw 'adjacent lookup touched the wrong token store'
+    }
+
+    $OverrideModule = Join-Path $CaseDir 'override-module'
+    $OverrideStore = Join-Path $CaseDir 'override-store'
+    $OverrideHome = Join-Path $CaseDir 'override-home'
+    @($OverrideModule, $OverrideStore, $OverrideHome) |
+        ForEach-Object { New-Item -ItemType Directory -Force -Path $_ | Out-Null }
+    Copy-Item -LiteralPath $Module -Destination (Join-Path $OverrideModule $ModuleName)
+    'directories.tokendir = tokens' | Set-Content -LiteralPath (Join-Path $OverrideModule 'softhsm.conf') -Encoding Ascii
+    'directories.tokendir = tokens' | Set-Content -LiteralPath (Join-Path $OverrideStore 'softhsm.conf') -Encoding Ascii
+    $env:USERPROFILE = $OverrideHome
+    $env:SOFTHSM2_CONF = Join-Path $OverrideStore 'softhsm.conf'
+    & $Client first-run (Join-Path $OverrideModule $ModuleName) (Join-Path $OverrideStore 'tokens')
+    if ($LASTEXITCODE -ne 0 -or (Test-Path -LiteralPath (Join-Path $OverrideModule 'tokens')) -or
+        (Test-Path -LiteralPath (Join-Path $OverrideHome 'softhsm'))) {
+        throw 'explicit override did not outrank adjacent configuration'
+    }
+
+    $AliasModule = Join-Path $CaseDir 'alias-module'
+    $AliasHome = Join-Path $CaseDir 'alias-home'
+    @($AliasModule, $AliasHome) |
+        ForEach-Object { New-Item -ItemType Directory -Force -Path $_ | Out-Null }
+    Copy-Item -LiteralPath $Module -Destination (Join-Path $AliasModule $ModuleName)
+    'directories.tokendir = tokens' | Set-Content -LiteralPath (Join-Path $AliasModule 'softhsm2.conf') -Encoding Ascii
+    $env:USERPROFILE = $AliasHome
+    Remove-Item Env:SOFTHSM2_CONF -ErrorAction SilentlyContinue
+    & $Client first-run (Join-Path $AliasModule $ModuleName) (Join-Path $AliasModule 'tokens')
+    if ($LASTEXITCODE -ne 0 -or (Test-Path -LiteralPath (Join-Path $AliasHome 'softhsm'))) {
+        throw 'legacy adjacent configuration alias failed'
+    }
+
+    $PlainModule = Join-Path $CaseDir 'plain-module'
+    $PlainHome = Join-Path $CaseDir 'plain-home'
+    $PlainUtilDir = Join-Path $PlainModule 'tools/bin'
+    @($PlainUtilDir, $PlainHome) |
+        ForEach-Object { New-Item -ItemType Directory -Force -Path $_ | Out-Null }
+    Copy-Item -LiteralPath $Module -Destination (Join-Path $PlainModule $ModuleName)
+    Copy-Item -LiteralPath $Util -Destination (Join-Path $PlainUtilDir 'softhsm2-util.exe')
+    $env:USERPROFILE = $PlainHome
+    & $Client first-run (Join-Path $PlainModule $ModuleName) (Join-Path (Join-Path $PlainHome 'softhsm') 'tokens')
+    if ($LASTEXITCODE -ne 0) { throw 'no-adjacent per-user fallback failed' }
+    & (Join-Path $PlainUtilDir 'softhsm2-util.exe') --show-slots | Out-Null
+    if ($LASTEXITCODE -ne 0 -or (Test-Path -LiteralPath (Join-Path $PlainModule 'tokens'))) {
+        throw 'utility did not preserve per-user fallback'
+    }
 }
 finally {
     if ($null -eq $PreviousProfile) { Remove-Item Env:USERPROFILE -ErrorAction SilentlyContinue }
@@ -66,4 +153,4 @@ finally {
     if ($null -eq $PreviousConfig) { Remove-Item Env:SOFTHSM2_CONF -ErrorAction SilentlyContinue }
     else { $env:SOFTHSM2_CONF = $PreviousConfig }
 }
-Write-Host '[CONFIG] PASS: readable override isolates the store; invalid override falls back'
+Write-Host '[CONFIG] PASS: override > adjacent module config > per-user; utility and foreign CWD agree'

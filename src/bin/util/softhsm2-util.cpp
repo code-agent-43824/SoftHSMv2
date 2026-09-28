@@ -348,6 +348,10 @@ int main(int argc, char* argv[])
 		exit(1);
 	}
 
+#if defined(SOFTHSM2_PORTABLE_TOOL)
+	SimpleConfigLoader::setPortableModulePath(module ? module : defaultLibraryPath());
+#endif
+
 	if (needP11)
 	{
 		// Check the basic setup of SoftHSM

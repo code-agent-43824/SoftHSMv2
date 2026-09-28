@@ -33,12 +33,14 @@ token store by mistake.
 For an explicitly supplied alternate module it preserves that variable; with
 a readable override AUTO is refused, and you must choose YES or NO deliberately.
 The portable module itself accepts a readable SOFTHSM2_CONF outside the
-bundled launcher; see the product README for its priority and fallback.
+bundled launcher, then checks softhsm.conf or softhsm2.conf beside the loaded
+module before falling back to the per-user store; see the product README.
 
 Edit testkit.conf to select token handling and PINs. INITIALIZE_TOKEN=AUTO
 initializes the selected SoftHSM when its canonical token store is empty,
 whether the bundled module or an explicitly supplied module is used. An
-explicitly supplied module with a readable SOFTHSM2_CONF must use YES or NO;
+explicitly supplied module with a readable SOFTHSM2_CONF or adjacent config
+must use YES or NO;
 AUTO refuses that combination. Successful initialization leaves
 a fully initialized token with a working user PIN and persistent test objects.
 Later runs reuse the token and replace only objects with the configured test

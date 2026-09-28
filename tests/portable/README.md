@@ -144,8 +144,7 @@ other two control only the coupled private-key export/import round trips.
 Ordinary RSA/GOST generation, CSR/CMS, and signing checks remain mandatory.
 
 The client also provides `probe <module>`, a PIN-free initialization and slot
-enumeration check used by CI to verify first-use configuration creation when no
-adjacent template exists.
+enumeration check used by CI to verify first-use configuration selection.
 
 The trace contains explicit `BEGIN GOST`/`END GOST`, `BEGIN RSA PREPARE`/
 `END RSA PREPARE`, and `BEGIN RSA FINISH`/`END RSA FINISH` boundaries. The
@@ -273,10 +272,11 @@ clears an inherited `SOFTHSM2_CONF` before `AUTO` to avoid reinitializing an
 application's isolated store. For an explicitly supplied alternate module the
 variable is preserved. Outside the launcher, a readable `SOFTHSM2_CONF`
 selects an isolated config first; see `packaging/portable/README.txt`.
-With an alternate module and a readable override, `AUTO` is refused:
+With an alternate module and a readable override or module-adjacent config,
+`AUTO` is refused:
 explicitly choose `INITIALIZE_TOKEN=NO` for an existing store or `YES`
 only for a disposable store, since initialization may erase its objects. Without
-an override, `AUTO` initializes the canonical store only when empty and
+either, `AUTO` initializes the canonical store only when empty and
 otherwise reuses it. Existing-token mode
 still generates test keys and certificate objects on the selected token. Use a
 disposable home/profile directory before running if the current store or token

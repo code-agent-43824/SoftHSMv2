@@ -46,6 +46,13 @@ if ($args.Count -eq 1 -and $InitializeSetting -eq "AUTO" -and $env:SOFTHSM2_CONF
     (Test-Path -LiteralPath $env:SOFTHSM2_CONF -PathType Leaf)) {
     throw "AUTO cannot select an explicitly configured token store; set INITIALIZE_TOKEN=NO or YES"
 }
+if ($args.Count -eq 1 -and $InitializeSetting -eq "AUTO") {
+    $AlternateDir = Split-Path -Parent (Resolve-Path -LiteralPath $args[0]).Path
+    if ((Test-Path -LiteralPath (Join-Path $AlternateDir 'softhsm.conf') -PathType Leaf) -or
+        (Test-Path -LiteralPath (Join-Path $AlternateDir 'softhsm2.conf') -PathType Leaf)) {
+        throw "AUTO cannot select a module-adjacent token store; set INITIALIZE_TOKEN=NO or YES"
+    }
+}
 switch ($InitializeSetting) {
     "AUTO" {
         $TokenDirectory = Join-Path (Split-Path -Parent $UserConfig) "tokens"

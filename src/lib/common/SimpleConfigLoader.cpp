@@ -84,6 +84,13 @@ SimpleConfigLoader::SimpleConfigLoader()
 {
 }
 
+static std::string portableModulePath;
+
+void SimpleConfigLoader::setPortableModulePath(const char* path)
+{
+	portableModulePath = path == NULL ? "" : path;
+}
+
 #define PORTABLE_CONFIG_FILE "softhsm.conf"
 #define LEGACY_PORTABLE_CONFIG_FILE "softhsm2.conf"
 #ifdef SOFTHSM2_PORTABLE_USER_CONFIG
@@ -108,9 +115,7 @@ static const char DEFAULT_USER_CONFIGURATION[] =
 
 namespace
 {
-#ifndef SOFTHSM2_PORTABLE_USER_CONFIG
 	static int moduleAnchor;
-#endif
 
 	static bool isPathSeparator(char c)
 	{
@@ -352,9 +357,27 @@ namespace
 		return installFileAtomically(userPath, contents);
 	}
 
-#ifndef SOFTHSM2_PORTABLE_USER_CONFIG
 	static std::string moduleFilePath()
 	{
+		if (!portableModulePath.empty())
+		{
+#ifdef _WIN32
+			char* resolved = _fullpath(NULL, portableModulePath.c_str(), 0);
+			if (resolved != NULL)
+			{
+				const std::string result(resolved);
+				free(resolved);
+				return result;
+			}
+#else
+			char resolved[PATH_MAX];
+			if (realpath(portableModulePath.c_str(), resolved) != NULL)
+			{
+				return std::string(resolved);
+			}
+#endif
+			return portableModulePath;
+		}
 #ifdef _WIN32
 		HMODULE module = NULL;
 		if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
@@ -414,7 +437,6 @@ namespace
 		}
 		return NULL;
 	}
-#endif
 }
 
 // Load the configuration
@@ -774,6 +796,11 @@ char* SimpleConfigLoader::getConfigPath()
 			return configPath;
 		}
 		free(configPath);
+	}
+	char* portablePath = getPortableConfigPath();
+	if (portablePath != NULL)
+	{
+		return portablePath;
 	}
 	char* userPath = get_user_path();
 	if (userPath == NULL)

@@ -66,8 +66,9 @@ This fork provides installer-free ZIP archives for Linux x64, Linux ARM64,
 Windows x86, Windows x64, Windows ARM64, and universal macOS. Extract one archive and point
 the application directly at the PKCS #11 module. If `SOFTHSM2_CONF` names an
 existing readable configuration file, that file takes priority. Otherwise the
-module creates and reuses its standard per-user configuration. In that default
-mode, modules in different directories and 32/64-bit processes share one token
+module uses `softhsm.conf` (or `softhsm2.conf`) beside the loaded module if
+readable; only then does it create and reuse its standard per-user configuration.
+In that fallback mode, modules in different directories and 32/64-bit processes share one token
 store. The locations are
 `%USERPROFILE%\softhsm\softhsm.conf` on Windows and
 `~/softhsm/softhsm.conf` on Unix/macOS. The default relative
@@ -83,8 +84,8 @@ the object store and cryptographic behavior stay unchanged. See
 
 Portable builds statically include OpenSSL. Linux and Windows also statically
 include their C/C++ runtime; macOS uses the system libc++. Portable modules
-ignore adjacent files and system configuration paths; a readable
-`SOFTHSM2_CONF` remains the explicit override. See
+ignore the process working directory and system configuration paths; a readable
+`SOFTHSM2_CONF` remains the explicit override over an adjacent config. See
 `packaging/portable/README.txt` for the archive layout.
 
 Each platform archive is produced and uploaded by a build job. A separate,
@@ -94,9 +95,10 @@ as an external consumer. The dependency-light client in
 uses only PKCS #11 calls to run separate GOST digest/key/signing checks and RSA
 key/import/export/CSR/CMS checks. The two key families use distinct labels and
 IDs, key-type-qualified searches, and explicit trace boundaries. Shell and
-PowerShell launchers use the OpenSSL command line as the independent RSA CSR,
-CA, certificate, and CMS verifier. The release job runs only after all six
-fresh-runner verification jobs have passed.
+PowerShell launchers use the bundled OpenSSL command line to independently
+check SoftHSM GOST digests, signatures and matching cipher output, as well as
+RSA CSR, CA, certificate, and CMS results. The release job runs only after all
+six fresh-runner verification jobs have passed.
 
 Each release also provides a self-contained test-kit ZIP per platform. Extract
 it and run `run-test.cmd` or `bash run-test.sh` with no arguments; the bundled

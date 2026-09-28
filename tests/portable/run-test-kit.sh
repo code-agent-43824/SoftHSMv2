@@ -52,6 +52,13 @@ if [[ $# -eq 1 && "$initialize_setting" == AUTO && -n ${SOFTHSM2_CONF:-} &&
   echo 'AUTO cannot select an explicitly configured token store; set INITIALIZE_TOKEN=NO or YES' >&2
   exit 2
 fi
+if [[ $# -eq 1 && "$initialize_setting" == AUTO ]]; then
+  alternate_dir=$(cd "$(dirname "$1")" && pwd)
+  if [[ -r "$alternate_dir/softhsm.conf" || -r "$alternate_dir/softhsm2.conf" ]]; then
+    echo 'AUTO cannot select a module-adjacent token store; set INITIALIZE_TOKEN=NO or YES' >&2
+    exit 2
+  fi
+fi
 case "$initialize_setting" in
   AUTO)
     token_dir=$(dirname "$user_config")/tokens

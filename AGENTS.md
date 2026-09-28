@@ -333,14 +333,14 @@ name.
   `C_Initialize` — too late for a function that, like `C_GetFunctionList`, has
   to work before it. Returning the table claims nothing on its own;
   `C_EX_GetTokenInfoExtended` is the claim, and it is gated.
-- **Portable modules use a readable `SOFTHSM2_CONF` file first; otherwise
-  they use the fixed per-user configuration and token store**
-  (`%USERPROFILE%\softhsm\softhsm.conf`, `~/softhsm/softhsm.conf`).
-  Adjacent and system configuration paths are not searched. *Reason:* the
-  owner's 28 September 2026 decision allows bundled applications to isolate
-  their tokens while retaining the shared 32-/64-bit per-user default when
-  no explicit override exists. An invalid or unreadable override falls back;
-  the rationale and scope change are recorded in `docs/JOURNAL.md`.
+- **Portable configuration priority is a readable `SOFTHSM2_CONF`, then
+  `softhsm.conf`/`softhsm2.conf` beside the loaded module, then the fixed
+  per-user store** (`%USERPROFILE%\softhsm\softhsm.conf`,
+  `~/softhsm/softhsm.conf`). The working directory and system config paths
+  are not searched. *Reason:* the owner's second decision on 28 September
+  2026 lets an application and its utility share an isolated bundled store
+  without a shell variable while preserving the canonical fallback when no
+  adjacent config exists. The explicit override still wins; see `JOURNAL`.
 - **GOST 2012 is implemented with Botan even in the OpenSSL-backend portable
   build.** *Reason:* a deliberate choice; the OpenSSL backend has no usable
   GOST 2012 and the alternative was a GOST engine dependency that portable

@@ -19,7 +19,8 @@ The archive also contains two command-line tools:
 
 On Windows both names have the .exe suffix. In a product archive the tools
 find the module beside themselves automatically. In a test kit they find it in
-the parent directory. softhsm2-util still accepts --module to select another
+the parent directory; from tools/bin they also find it two directories above.
+softhsm2-util still accepts --module to select another
 PKCS #11 library explicitly. All three portable programs use the same
 configuration precedence described below.
 
@@ -37,7 +38,8 @@ The output is unencrypted PKCS#8 PEM by default; use --format der for DER.
 The PIN is prompted once unless --pin is supplied. Treat this utility and every exported file as secret-bearing
 test material, not as an HSM security boundary.
 
-The module uses one standard configuration per operating-system user:
+Without an explicit or adjacent configuration, the module uses one standard
+configuration per operating-system user:
 
   Windows:  %USERPROFILE%\softhsm\softhsm.conf
   Linux:    ~/softhsm/softhsm.conf
@@ -63,9 +65,15 @@ softhsm2-export when run with the variable. Do not set it only after the
 module has initialized; config selection happens at initialization.
 
 If the variable is unset, empty, or names a missing, unreadable or non-file
-path, the module uses the canonical per-user path above. On first use it
+path, the module checks for a readable softhsm.conf beside the loaded module
+file, then for softhsm2.conf in the same directory. It does not search beside
+the utility or in the process working directory. With an adjacent config,
+directories.tokendir = tokens creates tokens beside that config without
+reading or creating the per-user store. softhsm2-util uses the selected
+module's path even when run from tools/bin without --module. If neither
+adjacent file qualifies, the module uses the canonical per-user path above. On first use it
 creates a safe default user configuration and the configured token directory.
-Without an override, modules extracted into different directories and
+Without an override or adjacent config, modules extracted into different directories and
 32/64-bit processes see the same token store. The default relative
 directories.tokendir = tokens puts tokens beside the active configuration.
 Relative paths are resolved from the active config file, not the process
@@ -78,9 +86,9 @@ directory made by hand. Nothing has to be created by hand now.
 
 The module does not infer whether it was loaded from an application bundle or
 from an external library path. The application controls DLL/shared-library
-search and, when isolation is wanted, sets SOFTHSM2_CONF itself. The module
-does not search adjacent files, the process working directory, or system
-config paths automatically. The bundled test-kit launcher clears an inherited
+search and, when isolation is wanted, may set SOFTHSM2_CONF itself. Adjacent
+lookup applies to any loaded portable module with a readable config beside it;
+the process working directory and system paths are never searched. The bundled test-kit launcher clears an inherited
 SOFTHSM2_CONF for its own AUTO run to keep its canonical-store semantics;
 tests against an explicitly supplied alternate module preserve the variable.
 

@@ -41,6 +41,9 @@ class SimpleConfigLoader : public ConfigLoader
 {
 public:
 	static SimpleConfigLoader* i();
+	// Portable utilities have a statically linked loader; point it at the
+	// selected PKCS #11 module before their own configuration is read.
+	static void setPortableModulePath(const char* path);
 
 	virtual ~SimpleConfigLoader() { }
 
@@ -60,4 +63,3 @@ private:
 };
 
 #endif // !_SOFTHSM_V2_SIMPLECONFIGLOADER_H
-
