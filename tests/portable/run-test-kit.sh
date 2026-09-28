@@ -47,6 +47,11 @@ done < "$config_file"
 
 initialize_setting=${P11_TEST_INITIALIZE_TOKEN:-$cfg_initialize}
 initialize_setting=$(printf '%s' "$initialize_setting" | tr '[:lower:]' '[:upper:]')
+if [[ $# -eq 1 && "$initialize_setting" == AUTO && -n ${SOFTHSM2_CONF:-} &&
+      -f "$SOFTHSM2_CONF" && -r "$SOFTHSM2_CONF" ]]; then
+  echo 'AUTO cannot select an explicitly configured token store; set INITIALIZE_TOKEN=NO or YES' >&2
+  exit 2
+fi
 case "$initialize_setting" in
   AUTO)
     token_dir=$(dirname "$user_config")/tokens
@@ -108,6 +113,9 @@ if [[ $# -eq 1 ]]; then
 else
   module="$kit_dir/$module_name"
   bundled_mode=YES
+  # AUTO selects the canonical user store. Do not inherit an app's explicit
+  # override and accidentally initialize its separate token store.
+  unset SOFTHSM2_CONF
 fi
 if [[ ! -f "$module" ]]; then
   printf 'PKCS #11 library is not a file: %s\n' "$module" >&2
@@ -137,6 +145,11 @@ printf '[TEST-KIT] bundled OpenSC pkcs11-tool=%s\n' "$kit_dir/bin/pkcs11-tool"
 printf '[TEST-KIT] bundled SoftHSM utilities=%s, %s\n' \
   "$kit_dir/bin/softhsm2-util" "$kit_dir/bin/softhsm2-export"
 printf '[TEST-KIT] all test evidence remains under=%s\n' "$kit_dir/test-output"
+
+if [[ "$bundled_mode" == YES ]]; then
+  bash "$kit_dir/scripts/verify-config-override.sh" "$module" \
+    "$P11_TEST_CLIENT" "$kit_dir/bin/softhsm2-util" "$kit_dir/test-output"
+fi
 
 OPENSSL_CONF="$kit_dir/config/openssl-gost.cnf" OPENSSL_MODULES="$kit_dir/bin" \
   bash "$kit_dir/scripts/verify-gost-openssl.sh" "$kit_dir"

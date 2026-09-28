@@ -265,7 +265,14 @@ The launcher loads the bundled module directly from the extracted test kit and
 an alternate library directly from its original path; it does not make a
 disposable module or token-store copy. In both modes the scenario evidence stays
 under `test-output` in the extracted kit. The bundled portable module uses the
-canonical `~/softhsm` store (`%USERPROFILE%\softhsm` on Windows): `AUTO`
+canonical `~/softhsm` store (`%USERPROFILE%\softhsm` on Windows): its launcher
+clears an inherited `SOFTHSM2_CONF` before `AUTO` to avoid reinitializing an
+application's isolated store. For an explicitly supplied alternate module the
+variable is preserved. Outside the launcher, a readable `SOFTHSM2_CONF`
+selects an isolated config first; see `packaging/portable/README.txt`.
+With an alternate module and a readable override, `AUTO` is refused:
+explicitly choose `INITIALIZE_TOKEN=NO` for an existing store or `YES`
+only for a disposable store, since initialization may erase its objects. `AUTO`
 initializes it only when empty and otherwise reuses it. Existing-token mode
 still generates test keys and certificate objects on the selected token. Use a
 disposable home/profile directory before running if the current store or token

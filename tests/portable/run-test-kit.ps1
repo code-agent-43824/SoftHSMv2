@@ -42,6 +42,10 @@ function Set-OptionalEnvironment([string]$Name, [string]$Value) {
 }
 
 $InitializeSetting = (Get-EffectiveSetting "P11_TEST_INITIALIZE_TOKEN" "INITIALIZE_TOKEN" "AUTO").ToUpperInvariant()
+if ($args.Count -eq 1 -and $InitializeSetting -eq "AUTO" -and $env:SOFTHSM2_CONF -and
+    (Test-Path -LiteralPath $env:SOFTHSM2_CONF -PathType Leaf)) {
+    throw "AUTO cannot select an explicitly configured token store; set INITIALIZE_TOKEN=NO or YES"
+}
 switch ($InitializeSetting) {
     "AUTO" {
         $TokenDirectory = Join-Path (Split-Path -Parent $UserConfig) "tokens"
@@ -96,6 +100,10 @@ else {
     (Resolve-Path -LiteralPath (Join-Path $KitDir $Settings.MODULE_NAME)).Path
 }
 $BundledMode = if ($args.Count -eq 0) { "YES" } else { "NO" }
+if ($BundledMode -eq "YES") {
+    # AUTO selects the canonical store, not a caller application's override.
+    Remove-Item Env:SOFTHSM2_CONF -ErrorAction SilentlyContinue
+}
 if (-not (Test-Path -LiteralPath $Module -PathType Leaf)) {
     throw "PKCS #11 library is not a file: $Module"
 }
@@ -132,6 +140,10 @@ Write-Host "[TEST-KIT] bundled OpenSSL=$OpenSSL"
 Write-Host "[TEST-KIT] bundled OpenSC pkcs11-tool=$Pkcs11Tool"
 Write-Host "[TEST-KIT] bundled SoftHSM utilities=$SoftHSMUtil, $SoftHSMExport"
 Write-Host "[TEST-KIT] all test evidence remains under=$(Join-Path $KitDir 'test-output')"
+
+if ($BundledMode -eq "YES") {
+    & (Join-Path $KitDir "scripts/verify-config-override.ps1") $Module $Client $SoftHSMUtil (Join-Path $KitDir "test-output")
+}
 
 Invoke-GostVerifier
 

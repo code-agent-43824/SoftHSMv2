@@ -179,10 +179,25 @@ namespace
 	static bool isReadableFile(const std::string& path)
 	{
 #ifdef _WIN32
-		return _access(path.c_str(), 4) == 0;
+		struct _stat status;
+		if (_stat(path.c_str(), &status) != 0 || (status.st_mode & _S_IFREG) == 0)
+		{
+			return false;
+		}
 #else
-		return access(path.c_str(), R_OK) == 0;
+		struct stat status;
+		if (stat(path.c_str(), &status) != 0 || !S_ISREG(status.st_mode))
+		{
+			return false;
+		}
 #endif
+		FILE* stream = fopen(path.c_str(), "rb");
+		if (stream == NULL)
+		{
+			return false;
+		}
+		fclose(stream);
+		return true;
 	}
 
 	static bool isDirectory(const std::string& path)
@@ -710,7 +725,6 @@ static char *get_user_path(void)
 	return NULL;
 }
 
-#ifndef SOFTHSM2_PORTABLE_USER_CONFIG
 static char *get_env_var_path(void)
 {
 #ifdef _WIN32
@@ -747,11 +761,20 @@ static char *get_env_var_path(void)
 
 #endif
 }
-#endif
 
 char* SimpleConfigLoader::getConfigPath()
 {
+	char* configPath = get_env_var_path();
 #ifdef SOFTHSM2_PORTABLE_USER_CONFIG
+	// An explicit readable file isolates this process from the per-user store.
+	if (configPath != NULL)
+	{
+		if (isReadableFile(configPath))
+		{
+			return configPath;
+		}
+		free(configPath);
+	}
 	char* userPath = get_user_path();
 	if (userPath == NULL)
 	{
@@ -764,8 +787,6 @@ char* SimpleConfigLoader::getConfigPath()
 	}
 	return userPath;
 #else
-	char* configPath = get_env_var_path();
-
 	if (configPath != NULL)
 	{
 		return configPath;

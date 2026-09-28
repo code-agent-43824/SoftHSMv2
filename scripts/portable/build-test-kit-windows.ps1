@@ -256,6 +256,7 @@ if ($env:OPENSSL_GOST_BUNDLE_ONLY -ne '1') {
 
 Copy-Item (Join-Path $RootDir "tests/portable/run-test-kit.ps1") (Join-Path $StageDir "run-test.ps1")
 Copy-Item (Join-Path $RootDir "tests/portable/verify-gost-openssl.ps1") (Join-Path $StageDir "scripts/verify-gost-openssl.ps1")
+Copy-Item (Join-Path $RootDir "tests/portable/verify-config-override.ps1") (Join-Path $StageDir "scripts/verify-config-override.ps1")
 Copy-Item (Join-Path $RootDir "tests/portable/run-test-kit.cmd") (Join-Path $StageDir "run-test.cmd")
 Copy-Item (Join-Path $RootDir "tests/portable/run-fresh-integration.ps1") (Join-Path $StageDir "scripts/run-fresh-integration.ps1")
 Copy-Item (Join-Path $RootDir "tests/portable/run-pkcs11-integration.ps1") (Join-Path $StageDir "scripts/run-pkcs11-integration.ps1")

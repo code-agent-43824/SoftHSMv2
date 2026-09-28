@@ -28,6 +28,12 @@ is loaded directly from that path and is not copied. The bundled module is also
 loaded in place. Test evidence is written only to test-output inside the
 extracted test-kit directory. Portable SoftHSM copies always use
 ~/softhsm/softhsm.conf and ~/softhsm/tokens (under %USERPROFILE% on Windows).
+For the bundled module the launcher clears an inherited SOFTHSM2_CONF before
+AUTO so it never initializes an application's isolated token store by mistake.
+For an explicitly supplied alternate module it preserves that variable; with
+a readable override AUTO is refused, and you must choose YES or NO deliberately.
+The portable module itself accepts a readable SOFTHSM2_CONF outside the
+bundled launcher; see the product README for its priority and fallback.
 
 Edit testkit.conf to select token handling and PINs. INITIALIZE_TOKEN=AUTO
 initializes the selected SoftHSM when its canonical token store is empty,

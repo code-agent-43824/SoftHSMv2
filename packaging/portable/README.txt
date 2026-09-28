@@ -20,8 +20,8 @@ The archive also contains two command-line tools:
 On Windows both names have the .exe suffix. In a product archive the tools
 find the module beside themselves automatically. In a test kit they find it in
 the parent directory. softhsm2-util still accepts --module to select another
-PKCS #11 library explicitly. All three portable programs use the same fixed
-per-user configuration described below.
+PKCS #11 library explicitly. All three portable programs use the same
+configuration precedence described below.
 
 softhsm2-export is deliberately a debug escape hatch for this software token.
 After login it exports a matching RSA, EC, or GOST private key even when the object
@@ -43,24 +43,46 @@ The module uses one standard configuration per operating-system user:
   Linux:    ~/softhsm/softhsm.conf
   macOS:    ~/softhsm/softhsm.conf
 
-On first use the module creates a safe default user configuration if that exact
-file does not exist, and creates the token directory the configuration names.
-Every later load uses only that user file, so modules extracted into different
-directories and 32/64-bit processes see the same token store. The default
-relative directories.tokendir = tokens puts the token directory beside the user
-configuration; no token directory is copied from or created beside the module.
-Relative paths are resolved from the active configuration file, not from the
-application's working directory.
+If SOFTHSM2_CONF points to an existing readable regular file, that file has
+highest priority. Set it in the application process before loading the module,
+using an absolute path to the application's own softhsm.conf. For example:
+
+  Linux/macOS: SOFTHSM2_CONF=/path/to/app/softhsm.conf
+  Windows:     SOFTHSM2_CONF=C:\path\to\app\softhsm.conf
+
+For example, the app can create this file before loading the library:
+
+  directories.tokendir = tokens
+  objectstore.backend = file
+  log.level = ERROR
+
+With directories.tokendir = tokens in that file, the token directory is
+created beside the file. The per-user configuration and store are neither
+read nor created by that process. The same rule applies to softhsm2-util and
+softhsm2-export when run with the variable. Do not set it only after the
+module has initialized; config selection happens at initialization.
+
+If the variable is unset, empty, or names a missing, unreadable or non-file
+path, the module uses the canonical per-user path above. On first use it
+creates a safe default user configuration and the configured token directory.
+Without an override, modules extracted into different directories and
+32/64-bit processes see the same token store. The default relative
+directories.tokendir = tokens puts tokens beside the active configuration.
+Relative paths are resolved from the active config file, not the process
+working directory.
 
 softhsm2-util and softhsm2-export create it as well. Until this release only
 the module did, so on a machine where the module had never been loaded the two
 utilities failed with "Failed to enumerate object store" and needed the
 directory made by hand. Nothing has to be created by hand now.
 
-The portable module deliberately ignores SOFTHSM2_CONF, adjacent configuration
-files, the process working directory, and system configuration paths. Editing
-the one file above changes the mode for every portable module copy used by that
-operating-system account.
+The module does not infer whether it was loaded from an application bundle or
+from an external library path. The application controls DLL/shared-library
+search and, when isolation is wanted, sets SOFTHSM2_CONF itself. The module
+does not search adjacent files, the process working directory, or system
+config paths automatically. The bundled test-kit launcher clears an inherited
+SOFTHSM2_CONF for its own AUTO run to keep its canonical-store semantics;
+tests against an explicitly supplied alternate module preserve the variable.
 
 Each token appears on its own slot. The profile shows fifteen readers, as the
 reference device does. Initialized tokens occupy the first of them, one each,

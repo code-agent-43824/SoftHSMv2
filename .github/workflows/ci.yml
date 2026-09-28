@@ -105,6 +105,13 @@ jobs:
         run: |
           c++ -std=c++17 -fsyntax-only -I src/lib/pkcs11 -I tests/portable \
             tests/portable/windows-macro-guard.cpp
+      - name: Verify explicit portable configuration isolation and fallback
+        run: |
+          bash tests/portable/verify-config-override.sh \
+            "$GITHUB_WORKSPACE/portable-product/libsofthsm2.so" \
+            "$GITHUB_WORKSPACE/portable-token-e2e" \
+            "$GITHUB_WORKSPACE/portable-product/softhsm2-util" \
+            "$GITHUB_WORKSPACE/config-override-evidence"
       - name: Verify a cold start creates the token directory
         run: |
           export HOME="$GITHUB_WORKSPACE/first-run-home"

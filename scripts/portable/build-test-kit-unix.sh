@@ -189,6 +189,7 @@ fi
 
 cp "$root_dir/tests/portable/run-test-kit.sh" "$stage_dir/run-test.sh"
 cp "$root_dir/tests/portable/verify-gost-openssl.sh" "$stage_dir/scripts/verify-gost-openssl.sh"
+cp "$root_dir/tests/portable/verify-config-override.sh" "$stage_dir/scripts/verify-config-override.sh"
 cp "$root_dir/tests/portable/run-fresh-integration.sh" "$stage_dir/scripts/run-fresh-integration.sh"
 cp "$root_dir/tests/portable/run-pkcs11-integration.sh" "$stage_dir/scripts/run-pkcs11-integration.sh"
 cp "$root_dir/tests/portable/portable-token-e2e.cpp" "$stage_dir/src/portable-token-e2e.cpp"
