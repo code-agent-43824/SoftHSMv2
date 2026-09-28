@@ -273,6 +273,7 @@ static Bytes readFile(const fs::path& path)
 
 static void writeFile(const fs::path& path, const Bytes& bytes)
 {
+    if (!path.parent_path().empty()) fs::create_directories(path.parent_path());
     std::ofstream output(path, std::ios::binary);
     if (!output) fail("cannot create " + path.string());
     output.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
