@@ -171,6 +171,12 @@ retain the settings selected by `testkit.conf` and call the same generic runner.
 
 ## Downloadable test kits
 
+The practical guide to the bundled OpenSSL CLI is
+[`packaging/portable/OPENSSL-GUIDE.md`](../../packaging/portable/OPENSSL-GUIDE.md).
+It is also copied to the root of every downloadable test-kit ZIP as
+`OPENSSL-GUIDE.md`; it covers Linux, macOS and Windows commands, provider
+configuration, GOST/RSA/X.509/CMS examples and interoperability limits.
+
 Every portable release publishes a separate self-contained test kit for each
 product platform:
 

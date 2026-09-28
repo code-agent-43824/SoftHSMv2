@@ -5,6 +5,10 @@ This archive is the exact precompiled test environment produced and executed
 by a fresh GitHub Actions verification runner. It is separate from the product
 archive so either file can be downloaded independently.
 
+For copyable OpenSSL commands (GOST digests, keys, signatures, ciphers,
+RSA/X.509/CMS) on Linux, macOS and Windows, see OPENSSL-GUIDE.md in this
+directory. The guide is in Russian and covers the bundled provider setup.
+
 The kit contains:
 - the matching portable SoftHSM module;
 - a precompiled dependency-light C++ PKCS #11 client;

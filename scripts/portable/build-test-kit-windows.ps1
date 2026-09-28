@@ -262,6 +262,7 @@ Copy-Item (Join-Path $RootDir "tests/portable/run-pkcs11-integration.ps1") (Join
 Copy-Item (Join-Path $RootDir "tests/portable/portable-token-e2e.cpp") (Join-Path $StageDir "src/portable-token-e2e.cpp")
 Copy-Item (Join-Path $RootDir "src/lib/pkcs11/*.h") (Join-Path $StageDir "src/pkcs11")
 Copy-Item (Join-Path $RootDir "packaging/portable/TEST-KIT-README.txt") (Join-Path $StageDir "README.txt")
+Copy-Item (Join-Path $RootDir "packaging/portable/OPENSSL-GUIDE.md") (Join-Path $StageDir "OPENSSL-GUIDE.md")
 Copy-Item (Join-Path $RootDir "packaging/portable/testkit.conf") (Join-Path $StageDir "testkit.conf")
 Copy-Item (Join-Path $RootDir "LICENSE") (Join-Path $StageDir "LICENSE-TestClient.txt")
 if (-not $UseBundle) {
