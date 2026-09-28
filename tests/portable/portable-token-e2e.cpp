@@ -352,6 +352,18 @@ static Bytes sha256WithRsaAlgorithm()
     return sequence({oid({0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b}), nullValue()});
 }
 
+static Bytes gostPublicKeyDer(const Bytes& point, const Bytes& curve,
+                              const Bytes& digestParam, size_t bits)
+{
+    if (point.size() != bits / 4) fail("unexpected GOST public point length");
+    const Bytes algorithm = bits == 256
+        ? oid({0x2a, 0x85, 0x03, 0x07, 0x01, 0x01, 0x01, 0x01})
+        : oid({0x2a, 0x85, 0x03, 0x07, 0x01, 0x01, 0x01, 0x02});
+    Bytes bitString{0};
+    append(bitString, der(0x04, point));
+    return sequence({sequence({algorithm, sequence({curve, digestParam})}), der(0x03, bitString)});
+}
+
 static Bytes cmsDataOid() { return oid({0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x01}); }
 static Bytes cmsSignedDataOid() { return oid({0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x02}); }
 
@@ -1013,6 +1025,12 @@ static void verifyStreebog256(Module& module, CK_SESSION_HANDLE session)
     if (multipart512 != expected512)
         fail("multipart GOST R 34.11-2012/512 digest does not match RFC 6986");
     trace("REFERENCE", "multipart GOST R 34.11-2012/512 matches RFC 6986 section 10.1.1");
+    fs::create_directories("gost-pkcs11");
+    writeFile("gost-pkcs11/message.bin", message);
+    writeFile("gost-pkcs11/digest256.bin", oneShot);
+    writeFile("gost-pkcs11/digest256-multipart.bin", multipart);
+    writeFile("gost-pkcs11/digest512.bin", oneShot512);
+    writeFile("gost-pkcs11/digest512-multipart.bin", multipart512);
 }
 
 static CK_ULONG ulongAttribute(Module& module, CK_SESSION_HANDLE session,
@@ -1661,6 +1679,13 @@ static void verifyGOST2012Signing(Module& module, CK_SESSION_HANDLE session,
     if (!verifyGOST2012Signature(keyPair.publicPoint, digestValue, multipartSignature))
         fail("independent GOST verifier rejected multipart signature");
     trace("REFERENCE", "independent verifier confirmed C_SignUpdate/C_SignFinal signature");
+    writeFile("gost-pkcs11/public256.der",
+              gostPublicKeyDer(keyPair.publicPoint,
+                  attribute(module, session, keyPair.publicKey, CKA_GOSTR3410_PARAMS),
+                  attribute(module, session, keyPair.publicKey, CKA_GOSTR3411_PARAMS), 256));
+    writeFile("gost-pkcs11/signature256.bin", combinedSignature);
+    writeFile("gost-pkcs11/signature256-multipart.bin", multipartSignature);
+    writeFile("gost-pkcs11/signature256-paramset.bin", paramsetSignature);
 }
 
 static CK_OBJECT_HANDLE createObject(Module& module, CK_SESSION_HANDLE session,
@@ -1894,6 +1919,11 @@ static void verifyGOST2012_512(Module& module, CK_SESSION_HANDLE session)
            [&] { return module->C_FindObjectsFinal(session); });
     if (foundCount == 0)
         fail("a search by CKK_GOSTR3410_512 did not find the key just generated");
+
+    writeFile("gost-pkcs11/message512.bin", message);
+    writeFile("gost-pkcs11/public512.der",
+              gostPublicKeyDer(publicPoint, curve, digestParam, 512));
+    writeFile("gost-pkcs11/signature512.bin", signature);
 
     destroyObject(module, session, privateKey);
     destroyObject(module, session, publicKey);
@@ -4360,6 +4390,14 @@ static void verifyCTRACPKMPeriodIsInBits(Module& module, CK_SESSION_HANDLE sessi
             fail(name + " CTR-ACPKM does not decrypt its own output");
         trace("REFERENCE", name + " CTR-ACPKM with period 512 matches the reference device "
                                   "on all 16384 bytes");
+        // The OpenSSL enc interface has no section-length option. Compare the
+        // first 32 bytes (before the first 64-byte key change); the full stream
+        // remains checked against the captured device digest above.
+        const std::string evidenceName = c == 0 ? "magma" : "kuznyechik";
+        writeFile("gost-pkcs11/" + evidenceName + "-plain.bin", Bytes(plain.begin(), plain.begin() + 32));
+        writeFile("gost-pkcs11/" + evidenceName + "-cipher.bin", Bytes(produced.begin(), produced.begin() + 32));
+        writeFile("gost-pkcs11/" + evidenceName + "-key.bin", deviceKey);
+        writeFile("gost-pkcs11/" + evidenceName + "-iv.bin", iv);
 
         // The same section length written the old way - 512 bytes - is now the
         // field 4096.  Both streams share their first section and part exactly

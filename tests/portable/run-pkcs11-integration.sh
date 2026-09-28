@@ -63,8 +63,20 @@ else
   fi
 fi
 
+rm -rf -- "$scenario_dir/gost-pkcs11"
 log "PKCS #11 prepare phase: select token, optionally initialize it, run isolated GOST checks, then generate RSA-2048 and create CSR"
 (cd "$scenario_dir" && run "$tester" prepare "$module" "$scenario_dir")
+
+log "independently verify SoftHSM GOST results with the bundled OpenSSL provider"
+openssl_kit=$(cd "$(dirname "$openssl")/.." && pwd)
+if [[ -f "$openssl_kit/config/openssl-gost.cnf" ]]; then
+  OPENSSL_CONF="$openssl_kit/config/openssl-gost.cnf" \
+    OPENSSL_MODULES="$openssl_kit/bin" \
+    run bash "$(dirname "${BASH_SOURCE[0]}")/verify-gost-openssl.sh" \
+      "$openssl_kit" --pkcs11 "$scenario_dir"
+else
+  log 'SKIP: supplied OpenSSL has no bundled GOST provider configuration'
+fi
 
 log "independently verify the token-signed PKCS#10 request"
 run "$openssl" req -in "$scenario_dir/request.pem" -verify -noout

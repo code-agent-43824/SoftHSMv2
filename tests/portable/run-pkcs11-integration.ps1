@@ -70,9 +70,31 @@ if ($env:P11_TEST_CLIENT) {
 
 Push-Location $ScenarioDir
 try {
+    $GostEvidence = Join-Path $ScenarioDir 'gost-pkcs11'
+    if (Test-Path -LiteralPath $GostEvidence) { Remove-Item -LiteralPath $GostEvidence -Recurse -Force }
     Invoke-Native $Tester @("prepare", $Module, $ScenarioDir) `
         "PKCS #11 prepare phase: select token, optionally initialize it, run isolated GOST checks, then generate RSA-2048 and create CSR"
 } finally { Pop-Location }
+
+$OpenSSLKit = Split-Path -Parent (Split-Path -Parent $OpenSSL)
+$GostConfig = Join-Path $OpenSSLKit 'config/openssl-gost.cnf'
+if (Test-Path -LiteralPath $GostConfig) {
+    Write-Step 'independently verify SoftHSM GOST results with the bundled OpenSSL provider'
+    $PreviousConfig = $env:OPENSSL_CONF
+    $PreviousModules = $env:OPENSSL_MODULES
+    try {
+        $env:OPENSSL_CONF = $GostConfig
+        $env:OPENSSL_MODULES = Join-Path $OpenSSLKit 'bin'
+        & (Join-Path $PSScriptRoot 'verify-gost-openssl.ps1') -KitDir $OpenSSLKit -ScenarioDir $ScenarioDir
+        if ($LASTEXITCODE -ne 0) { throw 'SoftHSM GOST verification with OpenSSL failed' }
+    }
+    finally {
+        $env:OPENSSL_CONF = $PreviousConfig
+        if ($null -eq $PreviousModules) { Remove-Item Env:OPENSSL_MODULES -ErrorAction SilentlyContinue }
+        else { $env:OPENSSL_MODULES = $PreviousModules }
+    }
+}
+else { Write-Step 'SKIP: supplied OpenSSL has no bundled GOST provider configuration' }
 
 Invoke-Native $OpenSSL @("req", "-in", (Join-Path $ScenarioDir "request.pem"), "-verify", "-noout") `
     "independently verify the token-signed PKCS#10 request"

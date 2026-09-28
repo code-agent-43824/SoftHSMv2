@@ -43,6 +43,12 @@ The GOST scenario generates a persistent 2012/256 key pair, signs a
 precomputed Streebog-256 digest, signs and hashes the same message in one-shot
 and multipart forms, and checks all three randomized signatures with a small
 independent implementation of the GOST verification equation in the C++ test.
+The packaged OpenSSL GOST provider independently checks the token's
+Streebog-256/512 digests, verifies its 256/512-bit signatures against the
+PKCS #11 public points, rejects changed messages and signatures, and compares
+the first CTR-ACPKM section of Kuznechik and Magma ciphertext byte-for-byte.
+The full rekeyed CTR-ACPKM stream remains checked against device captures;
+OpenSSL `enc` has no section-length option for that comparison.
 For the bundled SoftHSM module the same generic scenario also checks known-answer
 encryption and decryption vectors for GOST 28147-89 ECB/CFB, Kuznechik ECB,
 Magma ECB, and both MGM variants; CTR-ACPKM against the answers read off the
@@ -193,6 +199,8 @@ both `pkcs11-tool -I` and `pkcs11-tool -T` to load the selected module.
 It also verifies Streebog-256/512 reference values, GOST-2012 256/512
 signatures and tamper rejection, Kuznyechik/Magma CTR and CTR-ACPKM round
 trips, and a signature made with an exported SoftHSM GOST key in bundled mode.
+After the PKCS #11 prepare phase, the same OpenSSL also verifies the actual
+SoftHSM digests, signatures and matching cipher output, not only its own keys.
 This is independent interoperability coverage, not a claim of complete
 one-to-one PKCS #11 mechanism parity with OpenSSL.
 

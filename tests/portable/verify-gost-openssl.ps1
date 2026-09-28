@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$KitDir,
-    [string]$ExportedKey
+    [string]$ExportedKey,
+    [string]$ScenarioDir
 )
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
@@ -34,6 +35,70 @@ if ($ProviderText -notmatch 'gostprov' -or $ProviderText -notmatch 'default') {
     & $OpenSSL list -providers -provider-path (Join-Path $KitDir "bin") `
         -provider gostprov -provider default -verbose
     throw "GOST and default providers must both load"
+}
+
+if ($ScenarioDir) {
+    $InputDir = Join-Path $ScenarioDir 'gost-pkcs11'
+    $DigestMessage = Join-Path $InputDir 'message.bin'
+    foreach ($Bits in @(256, 512)) {
+        if ($Bits -eq 512 -and $env:P11_TEST_REQUIRE_GOST_IMPORT_EXPORT -eq 'NO') { continue }
+        $MessageFile = if ($Bits -eq 512) { Join-Path $InputDir 'message512.bin' } else { $DigestMessage }
+        $DigestFile = Join-Path $InputDir "digest$Bits.bin"
+        $OpenSSLDigest = Join-Path $Evidence "openssl-digest$Bits.bin"
+        Invoke-OpenSSL -Arguments @('dgst', "-md_gost12_$Bits", '-binary', '-out', $OpenSSLDigest, $DigestMessage)
+        foreach ($Other in @($OpenSSLDigest, (Join-Path $InputDir "digest$Bits-multipart.bin"))) {
+            if ((Get-FileHash -Algorithm SHA256 $DigestFile).Hash -ne (Get-FileHash -Algorithm SHA256 $Other).Hash) {
+                throw "SoftHSM Streebog-$Bits differs from OpenSSL or its multipart result"
+            }
+        }
+        $Public = Join-Path $Evidence "softhsm-public$Bits.pem"
+        Invoke-OpenSSL -Arguments @('pkey', '-pubin', '-inform', 'DER',
+            '-in', (Join-Path $InputDir "public$Bits.der"), '-out', $Public)
+        $Variants = if ($Bits -eq 256) { @('', '-multipart', '-paramset') } else { @('') }
+        foreach ($Variant in $Variants) {
+            $Signature = Join-Path $InputDir "signature$Bits$Variant.bin"
+            Invoke-OpenSSL -Arguments @('dgst', "-md_gost12_$Bits", '-verify', $Public,
+                '-signature', $Signature, $MessageFile)
+            $Changed = Join-Path $Evidence "changed-message$Bits.bin"
+            $Bytes = [IO.File]::ReadAllBytes($MessageFile)
+            $Bytes[0] = $Bytes[0] -bxor 1
+            [IO.File]::WriteAllBytes($Changed, $Bytes)
+            $PreviousPreference = $ErrorActionPreference
+            try {
+                $ErrorActionPreference = 'Continue'
+                & $OpenSSL dgst "-md_gost12_$Bits" -verify $Public -signature $Signature $Changed *> $null
+                $NegativeCode = $LASTEXITCODE
+            }
+            finally { $ErrorActionPreference = $PreviousPreference }
+            if ($NegativeCode -eq 0) { throw "SoftHSM GOST-$Bits signature accepted a changed message" }
+            $SignatureBytes = [IO.File]::ReadAllBytes($Signature)
+            $Damaged = Join-Path $Evidence "damaged-signature$Bits$Variant.bin"
+            [IO.File]::WriteAllBytes($Damaged, [byte[]]($SignatureBytes[0..($SignatureBytes.Length - 2)]))
+            try {
+                $ErrorActionPreference = 'Continue'
+                & $OpenSSL dgst "-md_gost12_$Bits" -verify $Public -signature $Damaged $MessageFile *> $null
+                $NegativeCode = $LASTEXITCODE
+            }
+            finally { $ErrorActionPreference = $PreviousPreference }
+            if ($NegativeCode -eq 0) { throw "SoftHSM GOST-$Bits accepted a truncated signature" }
+        }
+    }
+    if ($env:P11_TEST_REQUIRE_GOST_SYMMETRIC -ne 'NO') {
+        foreach ($Algorithm in @('magma', 'kuznyechik')) {
+            $Key = [BitConverter]::ToString([IO.File]::ReadAllBytes((Join-Path $InputDir "$Algorithm-key.bin"))).Replace('-', '')
+            $IV = [BitConverter]::ToString([IO.File]::ReadAllBytes((Join-Path $InputDir "$Algorithm-iv.bin"))).Replace('-', '')
+            $Cipher = Join-Path $Evidence "openssl-$Algorithm.bin"
+            Invoke-OpenSSL -Arguments @('enc', "-$Algorithm-ctr-acpkm", '-K', $Key, '-iv', $IV,
+                '-in', (Join-Path $InputDir "$Algorithm-plain.bin"), '-out', $Cipher)
+            if ((Get-FileHash -Algorithm SHA256 $Cipher).Hash -ne
+                (Get-FileHash -Algorithm SHA256 (Join-Path $InputDir "$Algorithm-cipher.bin")).Hash) {
+                throw "SoftHSM $Algorithm CTR-ACPKM differs from OpenSSL"
+            }
+        }
+    }
+    Write-Host '[GOST-OPENSSL] PASS: SoftHSM PKCS #11 digests, signatures and shared ciphers'
+    $global:LASTEXITCODE = 0
+    return
 }
 
 $Message = Join-Path $Evidence "m1.bin"

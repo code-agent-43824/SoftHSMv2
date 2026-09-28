@@ -39,6 +39,10 @@ The trace runs GOST and RSA as explicitly separated scenarios. Persistent GOST
 and RSA pairs use different labels and IDs, and every persistent-key search
 also specifies the key type. CKA_KEY_GEN_MECHANISM is not queried because the
 functional result is established by key attributes, persistence, and signing.
+PKCS #11 digests, signatures and Kuznechik/Magma CTR-ACPKM output are also
+checked against the bundled OpenSSL GOST provider. The external check includes
+changed messages and truncated signatures; mechanism-only cases remain tested
+with reference vectors where OpenSSL has no matching interface.
 For the bundled module only, the launcher then runs softhsm2-util without a
 --module argument, force-exports the persistent sensitive/non-extractable RSA
 key, imports a P-256 EC fixture with softhsm2-util, force-exports it, validates
