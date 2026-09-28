@@ -164,9 +164,12 @@ names and blocks matching calls before the module receives them.
 The `run-fresh-integration.*` wrappers are test-kit adapters. The bundled
 module is loaded in place and every scenario file is retained under
 `test-output` in the extracted test kit; nothing is copied to temporary
-directories. Portable SoftHSM modules always use the single canonical
-`~/softhsm/softhsm.conf` and `~/softhsm/tokens` paths. An explicitly supplied
-alternate library is also loaded directly from its original path. Both modes
+directories. The bundled launcher clears an inherited `SOFTHSM2_CONF`, so its
+SoftHSM run uses the canonical `~/softhsm/softhsm.conf` and
+`~/softhsm/tokens` paths. Outside that launcher, a readable override selects
+the configuration and resolves a relative token directory from that file.
+An explicitly supplied alternate library is also loaded directly from its
+original path. Both modes
 retain the settings selected by `testkit.conf` and call the same generic runner.
 
 ## Downloadable test kits
@@ -272,8 +275,9 @@ variable is preserved. Outside the launcher, a readable `SOFTHSM2_CONF`
 selects an isolated config first; see `packaging/portable/README.txt`.
 With an alternate module and a readable override, `AUTO` is refused:
 explicitly choose `INITIALIZE_TOKEN=NO` for an existing store or `YES`
-only for a disposable store, since initialization may erase its objects. `AUTO`
-initializes it only when empty and otherwise reuses it. Existing-token mode
+only for a disposable store, since initialization may erase its objects. Without
+an override, `AUTO` initializes the canonical store only when empty and
+otherwise reuses it. Existing-token mode
 still generates test keys and certificate objects on the selected token. Use a
 disposable home/profile directory before running if the current store or token
 contains anything valuable.

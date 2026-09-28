@@ -26,10 +26,10 @@ the launcher with no arguments. To test another SoftHSM/PKCS #11 module, pass
 the path to that library as the only argument. An explicitly supplied library
 is loaded directly from that path and is not copied. The bundled module is also
 loaded in place. Test evidence is written only to test-output inside the
-extracted test-kit directory. Portable SoftHSM copies always use
-~/softhsm/softhsm.conf and ~/softhsm/tokens (under %USERPROFILE% on Windows).
-For the bundled module the launcher clears an inherited SOFTHSM2_CONF before
-AUTO so it never initializes an application's isolated token store by mistake.
+extracted test-kit directory. With no argument, the launcher clears an inherited
+SOFTHSM2_CONF and uses ~/softhsm/softhsm.conf and ~/softhsm/tokens (under
+%USERPROFILE% on Windows), so AUTO never initializes an application's isolated
+token store by mistake.
 For an explicitly supplied alternate module it preserves that variable; with
 a readable override AUTO is refused, and you must choose YES or NO deliberately.
 The portable module itself accepts a readable SOFTHSM2_CONF outside the
@@ -37,7 +37,9 @@ bundled launcher; see the product README for its priority and fallback.
 
 Edit testkit.conf to select token handling and PINs. INITIALIZE_TOKEN=AUTO
 initializes the selected SoftHSM when its canonical token store is empty,
-whether the bundled module or an explicitly supplied module is used. It leaves
+whether the bundled module or an explicitly supplied module is used. An
+explicitly supplied module with a readable SOFTHSM2_CONF must use YES or NO;
+AUTO refuses that combination. Successful initialization leaves
 a fully initialized token with a working user PIN and persistent test objects.
 Later runs reuse the token and replace only objects with the configured test
 IDs. YES enables destructive C_InitToken and C_InitPIN. NO disables them and automatically blocks
