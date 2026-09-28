@@ -28,7 +28,7 @@
       `softhsm2utiltest-ml-dsa` и `softhsm2utiltest-ml-kem`; назвать
       зависимость CppUnit (`libcppunit-dev`).
       Команда и список целей исправлены; обычная сборка видит семь тестов.
-- [~] **`softhsm2utiltest-ml-dsa` и `-ml-kem` красные в обычной
+- [x] **`softhsm2utiltest-ml-dsa` и `-ml-kem` красные в обычной
       CMake-сборке.** Апстримный
       `src/bin/util/test/import-key-test-common.sh:39` ищет модуль в
       `../../../lib/.libs/` (раскладка autotools), а CMake кладёт его в
@@ -40,8 +40,9 @@
       обычной сборки зелёный без `CI=true`.
       Обычная сборка прошла 7/7; путь к модулю в CMake-раскладке исправлен.
       На OpenSSL 3.0 оба скрипта теперь доходят до штатного пропуска 77.
-      Криптографический путь с OpenSSL ≥ 3.5 пока не проверен.
-- [~] **Поиск модуля в ML-скриптах сломал раскладку autotools.** С `868c73c`
+      Включённые цели на OpenSSL 3.5.8 прошли с реальной генерацией и
+      импортом ML-DSA-44 и ML-KEM-512; полный `ctest` прошёл 9/9.
+- [x] **Поиск модуля в ML-скриптах сломал раскладку autotools.** С `868c73c`
       `import-key-test-common.sh` при заданном `top_builddir` берёт
       `$top_builddir/src/lib`. `make check` тоже задаёт `top_builddir`, а
       libtool кладёт модуль в `src/lib/.libs`: на имитации этой раскладки
@@ -50,6 +51,9 @@
       `src/lib/.libs`, затем `src/lib`, затем прежний относительный путь.
       Готово, когда модуль находят и имитация autotools, и CMake-сборка;
       заодно прогнать включённые ML-цели на OpenSSL 3.5.8 из `ci.yml`.
+      Поиск исправлен с приоритетом `.libs` → CMake `src/lib` → прежний
+      относительный путь. Имитация обеих раскладок прошла; включённая
+      CMake-сборка с OpenSSL 3.5.8 прошла `ctest` 9/9, включая обе ML-цели.
 - [x] **`-Wunused-function` в обычной сборке.** `libraryExists` и
       `executableDirectory` (`src/bin/common/library.cpp:52`, `:63`)
       вызываются только внутри `#if defined(SOFTHSM2_PORTABLE_TOOL)`;

@@ -36,7 +36,9 @@ if test "$RUNNER_OS" = "Windows" ; then
 		fi
 	done
 else
-	if test -n "${top_builddir:-}" && test -d "$top_builddir/src/lib" ; then
+	if test -n "${top_builddir:-}" && test -d "$top_builddir/src/lib/.libs" ; then
+		D=$(cd "$top_builddir/src/lib/.libs" && pwd)
+	elif test -n "${top_builddir:-}" && test -d "$top_builddir/src/lib" ; then
 		D=$(cd "$top_builddir/src/lib" && pwd)
 	elif ! D=$(cd ../../../lib/.libs/ 2>/dev/null && pwd) ; then
 		D=
