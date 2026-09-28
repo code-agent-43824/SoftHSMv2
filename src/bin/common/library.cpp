@@ -49,6 +49,7 @@
 #include <dlfcn.h>
 #endif
 
+#if defined(SOFTHSM2_PORTABLE_TOOL)
 static bool libraryExists(const std::string& path)
 {
 #if defined(HAVE_LOADLIBRARY)
@@ -79,6 +80,7 @@ static std::string executableDirectory()
 	size_t slash = result.find_last_of("/\\");
 	return slash == std::string::npos ? std::string() : result.substr(0, slash);
 }
+#endif
 
 const char* defaultLibraryPath()
 {

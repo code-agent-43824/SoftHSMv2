@@ -8,7 +8,7 @@
 Причины — `docs/JOURNAL.md` за 28.09, порядок и предосторожности —
 `HANDOFF.md`.
 
-- [~] **`p11test` зависает: привести `InfoTests::testWaitForSlotEvent` к
+- [x] **`p11test` зависает: привести `InfoTests::testWaitForSlotEvent` к
       блокирующему `C_WaitForSlotEvent`.** Строки 465–467
       `src/lib/test/InfoTests.cpp` (апстрим, форком не менялись) ждут от
       `C_WaitForSlotEvent(0, …)` ответа `CKR_FUNCTION_NOT_SUPPORTED`, а с
@@ -19,13 +19,15 @@
       код отвечает по-старому — там оставить прежнее ожидание. Проверки с
       `CKF_DONT_BLOCK` оставить. Готово, когда `p11test` проходит целиком;
       без этой проверки сейчас `OK (81 tests)`.
-- [~] **Команда юнит-тестов в `AGENTS.md` не собирает тестов.** `BUILD_TESTS`
+      Локально исправленный `p11test` прошёл три повтора подряд.
+- [x] **Команда юнит-тестов в `AGENTS.md` не собирает тестов.** `BUILD_TESTS`
       по умолчанию `OFF` (`CMakeLists.txt:5`), `ctest` отвечает
       `Total Tests: 0`. Добавить `-DBUILD_TESTS=ON` в строку «Unit tests»
       приложения `AGENTS.md` и в пункт «Прогонять локально» ниже; в списке
       целей ctest `softhsm2utiltest` заменить фактическими
       `softhsm2utiltest-ml-dsa` и `softhsm2utiltest-ml-kem`; назвать
       зависимость CppUnit (`libcppunit-dev`).
+      Команда и список целей исправлены; обычная сборка видит семь тестов.
 - [~] **`softhsm2utiltest-ml-dsa` и `-ml-kem` красные в обычной
       CMake-сборке.** Апстримный
       `src/bin/util/test/import-key-test-common.sh:39` ищет модуль в
@@ -36,10 +38,14 @@
       регистрировать их в `src/bin/util/test/CMakeLists.txt` только при
       `WITH_ML_DSA`/`WITH_ML_KEM` и проверить обе ветки. Готово, когда `ctest`
       обычной сборки зелёный без `CI=true`.
-- [~] **`-Wunused-function` в обычной сборке.** `libraryExists` и
+      Обычная сборка прошла 7/7; путь к модулю в CMake-раскладке исправлен.
+      На OpenSSL 3.0 оба скрипта теперь доходят до штатного пропуска 77.
+      Криптографический путь с OpenSSL ≥ 3.5 пока не проверен.
+- [x] **`-Wunused-function` в обычной сборке.** `libraryExists` и
       `executableDirectory` (`src/bin/common/library.cpp:52`, `:63`)
       вызываются только внутри `#if defined(SOFTHSM2_PORTABLE_TOOL)`;
       перенести их под тот же `#if`.
+      Перенесено; предупреждения в обычной сборке больше нет.
 - [ ] **Release notes `.48` и `.49` противоречат коду:** пишут «deliberately
       ignores SOFTHSM2_CONF», хотя override работает с `1a91846`. Текст — в
       `--notes` шага публикации `portable-release.yml`, исправлен только в
@@ -393,8 +399,9 @@
       параметры кривой, сериализация.
 - [ ] Юнит-тесты на `BotanGOST2012Signer`: подпись и проверка, в том числе
       отрицательные случаи.
-- [ ] Прогонять локально: `ctest --test-dir build --output-on-failure`. CI
+- [x] Прогонять локально: `cmake -S . -B build -DBUILD_TESTS=ON && ctest --test-dir build --output-on-failure`. CI
       юнит-тесты не вызывает — это осознанное решение владельца.
+      Прогон 28.09.2026: 7/7 локальных целей прошли.
 
 ## Замечено по дороге, не реализовано
 

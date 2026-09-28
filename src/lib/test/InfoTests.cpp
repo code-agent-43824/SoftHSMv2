@@ -35,6 +35,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include "InfoTests.h"
+#ifdef HAVE_CXX11
+#include <chrono>
+#include <future>
+#include <thread>
+#endif
 
 CPPUNIT_TEST_SUITE_REGISTRATION(InfoTests);
 
@@ -462,9 +467,29 @@ void InfoTests::testWaitForSlotEvent()
 	rv = CRYPTOKI_F_PTR( C_Initialize(NULL_PTR) );
 	CPPUNIT_ASSERT(rv == CKR_OK);
 
-	// Blocking version should fail
+#ifdef HAVE_CXX11
+	std::promise<CK_RV> result;
+	std::future<CK_RV> waited = result.get_future();
+	std::promise<void> started;
+	std::future<void> entered = started.get_future();
+	std::thread waiter([&] {
+		started.set_value();
+		result.set_value(CRYPTOKI_F_PTR( C_WaitForSlotEvent(0, &slot, NULL_PTR) ));
+	});
+	entered.wait();
+	const bool blocked = waited.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout;
+	rv = CRYPTOKI_F_PTR( C_Finalize(NULL_PTR) );
+	waiter.join();
+	CPPUNIT_ASSERT(blocked);
+	CPPUNIT_ASSERT(rv == CKR_OK);
+	CPPUNIT_ASSERT(waited.get() == CKR_CRYPTOKI_NOT_INITIALIZED);
+	rv = CRYPTOKI_F_PTR( C_Initialize(NULL_PTR) );
+	CPPUNIT_ASSERT(rv == CKR_OK);
+#else
+	// Without C++11 the blocking form is not implemented.
 	rv = CRYPTOKI_F_PTR( C_WaitForSlotEvent(0, &slot, NULL_PTR) );
 	CPPUNIT_ASSERT(rv == CKR_FUNCTION_NOT_SUPPORTED);
+#endif
 
 	// Should always return CKR_NO_EVENT
 	rv = CRYPTOKI_F_PTR( C_WaitForSlotEvent(CKF_DONT_BLOCK, &slot, NULL_PTR) );

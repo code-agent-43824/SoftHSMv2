@@ -226,13 +226,14 @@ environment and fail without them.
 | Ordinary build | `cmake -S . -B build && cmake --build build --parallel` |
 | Portable build (Linux) | `PORTABLE_ARCH=x64 OPENSSL_VERSION=… OPENSSL_SHA256=… BOTAN_VERSION=… BOTAN_SHA256=… scripts/portable/build-linux.sh` |
 | Portable build (macOS / Windows) | `scripts/portable/build-macos.sh`, `scripts/portable/build-windows.ps1` |
-| Unit tests | `cmake -S . -B build && cmake --build build --parallel && ctest --test-dir build --output-on-failure` |
+| Unit tests | Install CppUnit (`libcppunit-dev`), then `cmake -S . -B build -DBUILD_TESTS=ON && cmake --build build --parallel && ctest --test-dir build --output-on-failure` |
 | A single unit test | `ctest --test-dir build -R cryptotest --output-on-failure` |
 | End-to-end PKCS #11 test | unpack a test kit, then `bash run-test.sh` (`run-test.cmd` on Windows) |
 | E2E against another vendor's module | `tests/portable/run-pkcs11-integration.sh <module.so>` — see `tests/portable/README.md` |
 
 ctest targets: `cryptotest`, `p11test`, `objstoretest`, `datamgrtest`,
-`sessionmgrtest`, `slotmgrtest`, `handlemgrtest`, `softhsm2utiltest`.
+`sessionmgrtest`, `slotmgrtest`, `handlemgrtest`; the two
+`softhsm2utiltest-ml-*` targets appear only when their ML algorithms are enabled.
 
 There is no linter or formatter configured. `ENABLE_STRICT` is ON by default;
 the portable builds compile with warnings-as-errors settings from
