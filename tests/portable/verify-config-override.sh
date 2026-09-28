@@ -62,11 +62,15 @@ printf 'invalid config in process working directory\n' > "$case_dir/elsewhere/so
     > "$case_dir/adjacent-slots.txt"
   grep -F 'Slot 14' "$case_dir/adjacent-slots.txt" >/dev/null
   HOME="$case_dir/adjacent-home" env -u SOFTHSM2_CONF \
+    "$case_dir/adjacent/tools/bin/softhsm2-util" --init-token --slot 0 \
+    --label adjacent-test --so-pin 1234 --pin 12345678
+  HOME="$case_dir/adjacent-home" env -u SOFTHSM2_CONF \
     "$client" probe "$case_dir/adjacent/$module_name"
   HOME="$case_dir/adjacent-home" SOFTHSM2_CONF="$case_dir/missing.conf" \
     "$client" probe "$case_dir/adjacent/$module_name"
 )
 test -d "$case_dir/adjacent/tokens"
+find "$case_dir/adjacent/tokens" -name token.object -print -quit | grep -q .
 test ! -e "$case_dir/adjacent/alias-tokens"
 test ! -e "$case_dir/adjacent-home/softhsm"
 

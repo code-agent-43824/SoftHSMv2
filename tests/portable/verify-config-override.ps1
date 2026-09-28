@@ -89,6 +89,9 @@ try {
         if ($LASTEXITCODE -ne 0 -or ($Slots -join "`n") -notmatch 'Slot 14') {
             throw 'utility did not use the adjacent Rutoken configuration'
         }
+        & (Join-Path $AdjacentUtilDir 'softhsm2-util.exe') --init-token --slot 0 `
+            --label adjacent-test --so-pin 1234 --pin 12345678
+        if ($LASTEXITCODE -ne 0) { throw 'utility could not initialize a token beside the module' }
         & $Client probe (Join-Path $Adjacent $ModuleName)
         if ($LASTEXITCODE -ne 0) { throw 'module did not use its adjacent configuration' }
         $env:SOFTHSM2_CONF = Join-Path $CaseDir 'missing.conf'
@@ -98,6 +101,7 @@ try {
     }
     finally { Pop-Location }
     if (-not (Test-Path -LiteralPath (Join-Path $Adjacent 'tokens')) -or
+        @((Get-ChildItem -LiteralPath (Join-Path $Adjacent 'tokens') -Filter 'token.object' -Recurse -ErrorAction SilentlyContinue)).Count -eq 0 -or
         (Test-Path -LiteralPath (Join-Path $Adjacent 'alias-tokens')) -or
         (Test-Path -LiteralPath (Join-Path $AdjacentHome 'softhsm'))) {
         throw 'adjacent lookup touched the wrong token store'
