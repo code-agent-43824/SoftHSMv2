@@ -236,6 +236,25 @@ The
 .I PIN
 for the Security Officer (SO).
 .TP
+.B \-\-so-pin-retries \fIN\fR
+Set SO PIN attempts when initializing a SoftHSM token. Range 3 to 15;
+default 10. At zero the SO PIN is locked and the token cannot be
+reinitialized; delete the token store to recover.
+.TP
+.B \-\-user-pin-retries \fIN\fR
+Set user PIN attempts when initializing a SoftHSM token. Range 3 to 15;
+default 10. A logged-in SO can restore the user count through
+.BR C_EX_UnblockUserPIN
+in the Rutoken compatibility profile.
+.TP
+.B \-\-min-pin-len \fIN\fR
+Set the minimum length for newly set SO and user PINs. Range 6 to 32;
+default 6.
+.TP
+.B \-\-max-pin-len \fIN\fR
+Set the maximum length for newly set SO and user PINs. Range 6 to 32;
+default 32. It must be at least the chosen minimum.
+.TP
 .B \-\-token \fIlabel\fR
 Will use the token with a matching token label.
 .SH EXAMPLES

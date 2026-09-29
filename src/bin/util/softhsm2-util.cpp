@@ -143,6 +143,10 @@ void usage()
 	printf("  --serial <number> Will use the token with a matching serial number.\n");
 	printf("  --slot <number>   The slot where the token is located.\n");
 	printf("  --so-pin <PIN>    The PIN for the Security Officer (SO).\n");
+	printf("  --so-pin-retries <3..15>   SO PIN attempts at initialization (default 10).\n");
+	printf("  --user-pin-retries <3..15> User PIN attempts (default 10).\n");
+	printf("  --min-pin-len <6..32>     Minimum PIN length (default 6).\n");
+	printf("  --max-pin-len <6..32>     Maximum PIN length (default 32).\n");
 	printf("  --token <label>   Will use the token with a matching token label.\n");
 }
 
@@ -176,6 +180,7 @@ enum {
 	OPT_TOKEN,
 	OPT_VERSION,
 	OPT_AES
+	, OPT_SO_PIN_RETRIES, OPT_USER_PIN_RETRIES, OPT_MIN_PIN_LEN, OPT_MAX_PIN_LEN
 };
 
 // Text representation of the long options
@@ -198,6 +203,10 @@ static const struct option long_options[] = {
 	{ "show-config",     1, NULL, OPT_SHOW_CONFIG },
 	{ "slot",            1, NULL, OPT_SLOT },
 	{ "so-pin",          1, NULL, OPT_SO_PIN },
+	{ "so-pin-retries",  1, NULL, OPT_SO_PIN_RETRIES },
+	{ "user-pin-retries", 1, NULL, OPT_USER_PIN_RETRIES },
+	{ "min-pin-len",     1, NULL, OPT_MIN_PIN_LEN },
+	{ "max-pin-len",     1, NULL, OPT_MAX_PIN_LEN },
 	{ "token",           1, NULL, OPT_TOKEN },
 	{ "version",         0, NULL, OPT_VERSION },
 	{ "aes",             0, NULL, OPT_AES },
@@ -205,6 +214,16 @@ static const struct option long_options[] = {
 };
 
 CK_FUNCTION_LIST_PTR p11;
+
+static bool parsePolicyNumber(const char* value, int low, int high, int& result)
+{
+	char* end;
+	const long parsed = strtol(value, &end, 10);
+	if (*value == '\0' || *end != '\0' || parsed < low || parsed > high)
+		return false;
+	result = static_cast<int>(parsed);
+	return true;
+}
 
 // The main function
 int main(int argc, char* argv[])
@@ -227,6 +246,8 @@ int main(int argc, char* argv[])
 	bool freeToken = false;
 	int noPublicKey = 0;
 	int importType = IMPORT_TYPE_KEYPAIR;
+	int soRetries = 10, userRetries = 10, minPinLen = 6, maxPinLen = 32;
+	bool customPinPolicy = false;
 
 	int doInitToken = 0;
 	int doShowSlots = 0;
@@ -315,6 +336,38 @@ int main(int argc, char* argv[])
 			case OPT_SO_PIN:
 				soPIN = optarg;
 				break;
+			case OPT_SO_PIN_RETRIES:
+				customPinPolicy = true;
+				if (!parsePolicyNumber(optarg, 3, 15, soRetries))
+				{
+					fprintf(stderr, "ERROR: SO retry count must be 3..15.\n");
+					return 1;
+				}
+				break;
+			case OPT_USER_PIN_RETRIES:
+				customPinPolicy = true;
+				if (!parsePolicyNumber(optarg, 3, 15, userRetries))
+				{
+					fprintf(stderr, "ERROR: user retry count must be 3..15.\n");
+					return 1;
+				}
+				break;
+			case OPT_MIN_PIN_LEN:
+				customPinPolicy = true;
+				if (!parsePolicyNumber(optarg, 6, 32, minPinLen))
+				{
+					fprintf(stderr, "ERROR: minimum PIN length must be 6..32.\n");
+					return 1;
+				}
+				break;
+			case OPT_MAX_PIN_LEN:
+				customPinPolicy = true;
+				if (!parsePolicyNumber(optarg, 6, 32, maxPinLen))
+				{
+					fprintf(stderr, "ERROR: maximum PIN length must be 6..32.\n");
+					return 1;
+				}
+				break;
 			case OPT_PIN:
 				userPIN = optarg;
 				break;
@@ -346,6 +399,11 @@ int main(int argc, char* argv[])
 	{
 		usage();
 		exit(1);
+	}
+	if (minPinLen > maxPinLen || (customPinPolicy && !doInitToken))
+	{
+		fprintf(stderr, "ERROR: PIN policy options require --init-token and a valid length range.\n");
+		return 1;
 	}
 
 #if defined(SOFTHSM2_PORTABLE_TOOL)
@@ -390,7 +448,8 @@ int main(int argc, char* argv[])
 		rv = findSlot(slot, serial, token, freeToken, slotID);
 		if (!rv)
 		{
-			rv = initToken(slotID, label, soPIN, userPIN);
+			rv = initToken(slotID, label, soPIN, userPIN,
+			               soRetries, userRetries, minPinLen, maxPinLen);
 		}
 	}
 
@@ -475,7 +534,8 @@ bool checkSetup()
 }
 
 // Initialize the token
-int initToken(CK_SLOT_ID slotID, char* label, char* soPIN, char* userPIN)
+int initToken(CK_SLOT_ID slotID, char* label, char* soPIN, char* userPIN,
+	      int soRetries, int userRetries, int minPinLen, int maxPinLen)
 {
 	char so_pin_copy[MAX_PIN_LEN+1];
 	char user_pin_copy[MAX_PIN_LEN+1];
@@ -505,13 +565,40 @@ int initToken(CK_SLOT_ID slotID, char* label, char* soPIN, char* userPIN)
 		fprintf(stderr, "ERROR: Could not get user PIN\n");
 		return 1;
 	}
+	if (strlen(so_pin_copy) < static_cast<size_t>(minPinLen) ||
+	    strlen(so_pin_copy) > static_cast<size_t>(maxPinLen) ||
+	    strlen(user_pin_copy) < static_cast<size_t>(minPinLen) ||
+	    strlen(user_pin_copy) > static_cast<size_t>(maxPinLen))
+	{
+		fprintf(stderr, "ERROR: both PIN lengths must be within %d..%d.\n",
+		        minPinLen, maxPinLen);
+		return 1;
+	}
 
 	// Load the variables
 	CK_UTF8CHAR paddedLabel[32];
 	memset(paddedLabel, ' ', sizeof(paddedLabel));
 	memcpy(paddedLabel, label, strlen(label));
 
+	// Internal initialization channel; no PKCS#11 public ABI change. The
+	// module validates the values again before creating/resetting the token.
+	char policyText[32];
+	snprintf(policyText, sizeof(policyText), "%d:%d:%d:%d",
+	         soRetries, userRetries, minPinLen, maxPinLen);
+	const char* previous = getenv("SOFTHSM2_INIT_PIN_POLICY");
+	const std::string saved = previous == NULL ? "" : previous;
+#ifdef _WIN32
+	_putenv_s("SOFTHSM2_INIT_PIN_POLICY", policyText);
+#else
+	setenv("SOFTHSM2_INIT_PIN_POLICY", policyText, 1);
+#endif
 	CK_RV rv = p11->C_InitToken(slotID, (CK_UTF8CHAR_PTR)so_pin_copy, strlen(so_pin_copy), paddedLabel);
+#ifdef _WIN32
+	_putenv_s("SOFTHSM2_INIT_PIN_POLICY", saved.c_str());
+#else
+	if (previous == NULL) unsetenv("SOFTHSM2_INIT_PIN_POLICY");
+	else setenv("SOFTHSM2_INIT_PIN_POLICY", saved.c_str(), 1);
+#endif
 
 	switch (rv)
 	{

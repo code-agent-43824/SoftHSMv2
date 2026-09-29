@@ -226,7 +226,7 @@ void SlotManagerTests::testInitialiseTokenInLastSlot()
 		CPPUNIT_ASSERT((tokenInfo.flags & CKF_TOKEN_INITIALIZED) != CKF_TOKEN_INITIALIZED);
 
 		// Now initialise the token in the first slot
-		ByteString soPIN((unsigned char*)"1234", 4);
+		ByteString soPIN((unsigned char*)"12345678", 8);
 		CK_UTF8CHAR label[33] = "My test token                   ";
 
 		CPPUNIT_ASSERT(slotManager.getSlots()[testList[0]]->initToken(soPIN, label) == CKR_OK);
@@ -376,7 +376,7 @@ void SlotManagerTests::testReinitialiseExistingToken()
 	CPPUNIT_ASSERT((tokenInfo.flags & CKF_TOKEN_INITIALIZED) != CKF_TOKEN_INITIALIZED);
 
 	// Now reinitialise the token in the second slot
-	ByteString soPIN((unsigned char*)"1234", 4);
+	ByteString soPIN((unsigned char*)"12345678", 8);
 	CK_UTF8CHAR label[33] = "My test token                   ";
 
 	CPPUNIT_ASSERT(slotManager.getSlots()[testList[1]]->initToken(soPIN, label) == CKR_OK);
@@ -419,7 +419,7 @@ void SlotManagerTests::testUninitialisedToken()
 	CPPUNIT_ASSERT(ulCount == 1);
 
 	// Initialise the token in the first slot
-	ByteString soPIN((unsigned char*)"1234", 4);
+	ByteString soPIN((unsigned char*)"12345678", 8);
 	CK_UTF8CHAR label[33] = "My test token                   ";
 	CPPUNIT_ASSERT(slotManager.getSlots()[testList[0]]->initToken(soPIN, label) == CKR_OK);
 

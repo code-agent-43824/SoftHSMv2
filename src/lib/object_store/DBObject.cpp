@@ -385,6 +385,7 @@ static bool isModifiable(CK_ATTRIBUTE_TYPE type)
 	case CKA_UNWRAP:
 	case CKA_EXTRACTABLE:
 	case CKA_OS_TOKENFLAGS:
+	case CKA_OS_PINPOLICY:
 	case CKA_OS_SOPIN:
 	case CKA_OS_USERPIN:
 		return true;
@@ -518,6 +519,7 @@ static AttributeKind attributeKind(CK_ATTRIBUTE_TYPE type)
 	case CKA_OS_TOKENFLAGS: return akInteger;
 	case CKA_OS_SOPIN: return akBinary;
 	case CKA_OS_USERPIN: return akBinary;
+	case CKA_OS_PINPOLICY: return akBinary;
 
 	case CKA_PARAMETER_SET: return akInteger;
 	case CKA_SEED: return akBinary;

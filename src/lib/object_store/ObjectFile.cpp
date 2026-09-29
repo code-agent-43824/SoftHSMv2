@@ -773,26 +773,34 @@ std::string ObjectFile::getLockname() const
 // N.B.: Starting a transaction locks the object!
 bool ObjectFile::startTransaction(Access)
 {
-	MutexLocker lock(objectMutex);
-
-	if (inTransaction)
 	{
-		return false;
+		MutexLocker lock(objectMutex);
+		if (inTransaction) return false;
 	}
 
-	transactionLockFile = new File(lockpath, umask, false, true, true);
-
-	if (!transactionLockFile->isValid() || !transactionLockFile->lock())
+	File* lockFile = new File(lockpath, umask, false, true, true);
+	if (!lockFile->isValid() || !lockFile->lock())
 	{
-		delete transactionLockFile;
-		transactionLockFile = NULL;
-
+		delete lockFile;
 		ERROR_MSG("Failed to lock file %s for attribute transaction", lockpath.c_str());
-
 		return false;
 	}
 
-	inTransaction = true;
+	// The lock protects a read-modify-write transaction across processes.
+	// Reload after acquiring it: otherwise a cached retry counter can overwrite
+	// an attempt recorded by another process just before this transaction.
+	refresh(true);
+	if (!valid)
+	{
+		lockFile->unlock();
+		delete lockFile;
+		return false;
+	}
+	{
+		MutexLocker lock(objectMutex);
+		transactionLockFile = lockFile;
+		inTransaction = true;
+	}
 
 	return true;
 }
@@ -874,4 +882,3 @@ bool ObjectFile::destroyObject()
 
 	return token->deleteObject(this);
 }
-

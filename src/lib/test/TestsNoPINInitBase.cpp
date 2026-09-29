@@ -108,7 +108,7 @@ TestsNoPINInitBase::TestsNoPINInitBase() :
 		m_notInitializedTokenSlotID(m_invalidSlotID),
 		m_soPin1((CK_UTF8CHAR_PTR)"12345678"),
 		m_soPin1Length(strlen((char*)m_soPin1)),
-		m_userPin1((CK_UTF8CHAR_PTR)"1234"),
+		m_userPin1((CK_UTF8CHAR_PTR)"12345678"),
 		m_userPin1Length(strlen((char*)m_userPin1)) {};
 
 void TestsNoPINInitBase::setUp() {

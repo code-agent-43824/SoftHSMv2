@@ -68,6 +68,13 @@ public:
 	// Set the token flags
 	virtual bool setTokenFlags(const CK_ULONG flags) = 0;
 
+	// Seven versioned bytes: version, min/max length, max SO/User tries,
+	// then remaining SO/User tries.
+	virtual bool getPinPolicy(ByteString& policy, bool& exists) = 0;
+	virtual bool setPinPolicy(const ByteString& policy) = 0;
+	// Atomically consume/reset one PIN's attempts. Returns the stored policy.
+	virtual bool advancePinPolicy(bool so, bool success, ByteString& policy) = 0;
+
 	// Retrieve the token label
 	virtual bool getTokenLabel(ByteString& label) = 0;
 
@@ -109,4 +116,3 @@ public:
 };
 
 #endif // !_SOFTHSM_V2_OBJECTSTORETOKEN_H
-

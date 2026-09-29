@@ -691,6 +691,80 @@ bool DBToken::setTokenFlags(const CK_ULONG flags)
 	return true;
 }
 
+bool DBToken::getPinPolicy(ByteString& policy, bool& exists)
+{
+	if (_connection == NULL) return false;
+	DBObject object(_connection);
+	if (!object.startTransaction(DBObject::ReadOnly)) return false;
+	if (!object.find(DBTOKEN_OBJECT_TOKENINFO))
+	{
+		object.abortTransaction();
+		return false;
+	}
+	exists = object.attributeExists(CKA_OS_PINPOLICY);
+	if (exists) policy = object.getAttribute(CKA_OS_PINPOLICY).getByteStringValue();
+	return object.commitTransaction();
+}
+
+bool DBToken::setPinPolicy(const ByteString& policy)
+{
+	if (_connection == NULL) return false;
+	DBObject object(_connection);
+	if (!object.startTransaction(DBObject::ReadWrite)) return false;
+	if (!object.find(DBTOKEN_OBJECT_TOKENINFO) ||
+	    !object.setAttribute(CKA_OS_PINPOLICY, OSAttribute(policy)))
+	{
+		object.abortTransaction();
+		return false;
+	}
+	if (!object.commitTransaction())
+	{
+		object.abortTransaction();
+		return false;
+	}
+	return true;
+}
+
+bool DBToken::advancePinPolicy(bool so, bool success, ByteString& policy)
+{
+	if (_connection == NULL) return false;
+	DBObject object(_connection);
+	if (!object.startTransaction(DBObject::ReadWrite)) return false;
+	if (!object.find(DBTOKEN_OBJECT_TOKENINFO))
+	{
+		object.abortTransaction();
+		return false;
+	}
+	if (object.attributeExists(CKA_OS_PINPOLICY))
+		policy = object.getAttribute(CKA_OS_PINPOLICY).getByteStringValue();
+	else
+	{
+		policy.resize(7);
+		policy[0] = 1; policy[1] = 6; policy[2] = 32;
+		policy[3] = 10; policy[4] = 10; policy[5] = 10; policy[6] = 10;
+	}
+	const size_t leftIndex = so ? 5 : 6;
+	const size_t maxIndex = so ? 3 : 4;
+	if (policy.size() != 7 || policy[0] != 1 ||
+	    policy[leftIndex] > policy[maxIndex])
+	{
+		object.abortTransaction();
+		return false;
+	}
+	if (policy[leftIndex] != 0)
+	{
+		if (success) policy[leftIndex] = policy[maxIndex];
+		else --policy[leftIndex];
+	}
+	if (!object.setAttribute(CKA_OS_PINPOLICY, OSAttribute(policy)) ||
+	    !object.commitTransaction())
+	{
+		object.abortTransaction();
+		return false;
+	}
+	return true;
+}
+
 // Retrieve objects
 std::set<OSObject *> DBToken::getObjects()
 {

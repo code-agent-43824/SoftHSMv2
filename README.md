@@ -196,6 +196,15 @@ it can interact with the token.
 Type in SO PIN and user PIN. Once a token has been initialized, more slots will
 be added automatically with a new uninitialized token.
 
+New tokens allow PIN lengths of 6–32 bytes and 10 failed attempts per SO and
+user PIN by default. `softhsm2-util --init-token` accepts
+`--so-pin-retries N` and `--user-pin-retries N` (3–15), plus
+`--min-pin-len N` and `--max-pin-len N` (bounds within 6–32). The selected
+policy and remaining attempts persist with the token. At zero the PIN is
+locked. In the Rutoken compatibility profile, a logged-in SO can restore the
+user PIN's attempts with `C_EX_UnblockUserPIN`; a locked SO PIN cannot be
+recovered by reinitializing the token and requires deleting the token store.
+
 Initialized tokens will be reassigned to another slot (based on the token
 serial number). It is recommended to find and interact with the token by
 searching for the token label or serial number in the slot list / token info.

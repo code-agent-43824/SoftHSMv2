@@ -57,6 +57,6 @@
 // by builds before this attribute existed do not carry it and are not given
 // one; they sort as the oldest.
 #define CKA_OS_TOKENCREATED	(CKA_VENDOR_SOFTHSM + 6)
+#define CKA_OS_PINPOLICY	(CKA_VENDOR_SOFTHSM + 7)
 
 #endif // !_SOFTHSM_V2_OSATTRIBUTES_H
-

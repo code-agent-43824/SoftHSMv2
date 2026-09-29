@@ -4147,10 +4147,11 @@ static void verifyRutokenExtension(Module& module, const CK_TOKEN_INFO& token)
         closeSession(module, session);
     }
 
-    // Everything else is advertised but not implemented, and has to say so.
+    // This operation is implemented, but an invalid session cannot unblock.
     check(invoke("C_EX_UnblockUserPIN", "hSession=0",
                  [&] { return ex->C_EX_UnblockUserPIN(0); }),
-          CKR_FUNCTION_NOT_SUPPORTED, "C_EX_UnblockUserPIN(unimplemented extension)");
+          CKR_SESSION_HANDLE_INVALID, "C_EX_UnblockUserPIN(invalid session)");
+    // Other advertised operations remain unsupported.
     check(invoke("C_EX_FreeBuffer", "pBuffer=NULL_PTR",
                  [&] { return ex->C_EX_FreeBuffer(nullptr); }),
           CKR_FUNCTION_NOT_SUPPORTED, "C_EX_FreeBuffer(unimplemented extension)");
@@ -5008,7 +5009,7 @@ static void verifyRutokenProfile(const fs::path& modulePath)
         paddedText(reinterpret_cast<const unsigned char*>(token.model), sizeof(token.model)) != "Rutoken ECP" ||
         serial.size() != 8 || !std::all_of(serial.begin(), serial.end(), [](char c) {
             return c >= '0' && c <= '9';
-        }) || token.ulMinPinLen != 6 || token.ulMaxPinLen != 249 ||
+        }) || token.ulMinPinLen != 6 || token.ulMaxPinLen != 32 ||
         token.hardwareVersion.major != 60 || token.hardwareVersion.minor != 1 ||
         token.firmwareVersion.major != 30 || token.firmwareVersion.minor != 2)
         fail("token information does not match the Rutoken ECP reference profile");
@@ -5226,6 +5227,75 @@ static void verifyRutokenProfile(const fs::path& modulePath)
         }
 
         closeSession(module, session);
+
+        const std::string userPinForRetries = environment("P11_TEST_USER_PIN");
+        const std::string soPinForRetries = environment("P11_TEST_SO_PIN");
+        if (!userPinForRetries.empty() && !soPinForRetries.empty())
+        {
+            auto getList = reinterpret_cast<CK_C_EX_GetFunctionListExtended>(
+                module.symbol("C_EX_GetFunctionListExtended"));
+            CK_FUNCTION_LIST_EXTENDED_PTR ex = nullptr;
+            callOk("C_EX_GetFunctionListExtended", "retry test",
+                   [&] { return getList(&ex); });
+            CK_SESSION_HANDLE retrySession = openSession(module, 0);
+            CK_TOKEN_INFO_EXTENDED retries{};
+            retries.ulSizeofThisStructure = sizeof(retries);
+            callOk("C_EX_GetTokenInfoExtended", "before retry test",
+                   [&] { return ex->C_EX_GetTokenInfoExtended(0, &retries); });
+            const CK_ULONG maximum = retries.ulMaxUserRetryCount;
+            if (maximum < 3 || maximum > 15 || retries.ulUserRetryCountLeft != maximum)
+                fail("user PIN retry test did not begin at the configured maximum");
+            const std::string badPin = userPinForRetries == "00000000" ? "99999999" : "00000000";
+            for (CK_ULONG attempt = 1; attempt <= maximum; ++attempt)
+            {
+                const CK_RV expected = attempt == maximum ? CKR_PIN_LOCKED : CKR_PIN_INCORRECT;
+                check(invoke("C_Login", "wrong user PIN, attempt " + std::to_string(attempt),
+                             [&] { return module->C_Login(retrySession, CKU_USER,
+                                 reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(badPin.data())),
+                                 static_cast<CK_ULONG>(badPin.size())); }),
+                      expected, "user PIN retry result");
+                retries.ulSizeofThisStructure = sizeof(retries);
+                callOk("C_EX_GetTokenInfoExtended", "after wrong user PIN",
+                       [&] { return ex->C_EX_GetTokenInfoExtended(0, &retries); });
+                if (retries.ulUserRetryCountLeft != maximum - attempt)
+                    fail("extended user PIN retry count did not decrease exactly");
+                CK_TOKEN_INFO standard = tokenInfo(module, 0);
+                if (((standard.flags & CKF_USER_PIN_LOCKED) != 0) != (attempt == maximum) ||
+                    ((standard.flags & CKF_USER_PIN_FINAL_TRY) != 0) != (attempt + 1 == maximum))
+                    fail("standard PIN flags disagree with exact retry count");
+                if (attempt == 1)
+                {
+                    closeSession(module, retrySession);
+                    callOk("C_Finalize", "PIN retry persistence check",
+                           [&] { return module->C_Finalize(nullptr); });
+                    callOk("C_Initialize", "PIN retry persistence check",
+                           [&] { return module->C_Initialize(nullptr); });
+                    retrySession = openSession(module, 0);
+                    retries.ulSizeofThisStructure = sizeof(retries);
+                    callOk("C_EX_GetTokenInfoExtended", "after module restart",
+                           [&] { return ex->C_EX_GetTokenInfoExtended(0, &retries); });
+                    if (retries.ulUserRetryCountLeft != maximum - 1)
+                        fail("user PIN retry count did not survive module restart");
+                }
+            }
+            check(invoke("C_Login", "correct but locked user PIN",
+                         [&] { return module->C_Login(retrySession, CKU_USER,
+                             reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(userPinForRetries.data())),
+                             static_cast<CK_ULONG>(userPinForRetries.size())); }),
+                  CKR_PIN_LOCKED, "locked user PIN remains locked");
+            login(module, retrySession, CKU_SO, soPinForRetries);
+            callOk("C_EX_UnblockUserPIN", "R/W SO session",
+                   [&] { return ex->C_EX_UnblockUserPIN(retrySession); });
+            logout(module, retrySession, "CKU_SO");
+            retries.ulSizeofThisStructure = sizeof(retries);
+            callOk("C_EX_GetTokenInfoExtended", "after user PIN unblock",
+                   [&] { return ex->C_EX_GetTokenInfoExtended(0, &retries); });
+            if (retries.ulUserRetryCountLeft != maximum)
+                fail("user PIN unblock did not restore all retries");
+            login(module, retrySession, CKU_USER, userPinForRetries);
+            logout(module, retrySession, "CKU_USER");
+            closeSession(module, retrySession);
+        }
     }
     std::cout << "Rutoken ECP compatibility profile verified\n";
 }

@@ -182,7 +182,7 @@ void UserTests::testLogout()
 void UserTests::testSetPIN()
 {
 	CK_RV rv;
-	const CK_UTF8CHAR_PTR pin2((CK_UTF8CHAR_PTR)"12345");
+	const CK_UTF8CHAR_PTR pin2((CK_UTF8CHAR_PTR)"123456");
 	const CK_ULONG pin2Length(strlen((char*)pin2));
 	const CK_UTF8CHAR_PTR so2pin((CK_UTF8CHAR_PTR)"123456789");
 	const CK_ULONG so2pinLength(strlen((char*)so2pin));

@@ -84,6 +84,9 @@ public:
 
 	// Set the token flags
 	virtual bool setTokenFlags(const CK_ULONG flags);
+	virtual bool getPinPolicy(ByteString& policy, bool& exists);
+	virtual bool setPinPolicy(const ByteString& policy);
+	virtual bool advancePinPolicy(bool so, bool success, ByteString& policy);
 
 	// Retrieve the token label
 	virtual bool getTokenLabel(ByteString& label);
@@ -135,4 +138,3 @@ private:
 };
 
 #endif // !_SOFTHSM_V2_DBTOKEN_H
-

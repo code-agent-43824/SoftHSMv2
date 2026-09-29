@@ -70,6 +70,14 @@ Four scenarios exist beside the generic one, all for the bundled module:
 | `gost28147-modes` | `DISABLE_OTHER_28147_MODES` accepts and refuses what the device does; run three times, once per configuration |
 | `rutoken-profile` | the whole `FAKE_RUTOKEN_ECP` presentation, plus `RUTOKEN_FORCE_SENSITIVE` |
 
+The bundled `softhsm2-util --init-token` sets 10 attempts for each PIN and a
+6–32-byte PIN length range by default. Use `--so-pin-retries N` and
+`--user-pin-retries N` (each 3–15), and `--min-pin-len N` / `--max-pin-len N`
+(within 6–32) to choose a different policy for a new token. The policy and
+remaining attempts persist across module restarts. `rutoken-profile` checks
+exact decrement, standard PIN flags, lockout, persistence and SO-authorized
+`C_EX_UnblockUserPIN` recovery on the bundled module.
+
 `portable-token-e2e` with no arguments prints every scenario and every
 environment variable it reads.
 For the bundled SoftHSM module it also generates exportable RSA and GOST pairs,

@@ -87,7 +87,7 @@ void SessionManagerTests::testOpenClose()
 	CPPUNIT_ASSERT(rv == CKR_TOKEN_NOT_RECOGNIZED);
 
 	// Initialize the token
-	ByteString soPIN((unsigned char*)"1234", 4);
+	ByteString soPIN((unsigned char*)"12345678", 8);
 	CK_UTF8CHAR label[33] = "My test token                   ";
 	CPPUNIT_ASSERT(slot->initToken(soPIN, label) == CKR_OK);
 
@@ -174,8 +174,8 @@ void SessionManagerTests::testSessionInfo()
 	Slot* slot = slotManager.getSlot(slotID);
 
 	// Initialize the token
-	ByteString soPIN((unsigned char*)"1234", 4);
-	ByteString userPIN((unsigned char*)"1234", 4);
+	ByteString soPIN((unsigned char*)"12345678", 8);
+	ByteString userPIN((unsigned char*)"12345678", 8);
 	CK_UTF8CHAR label[33] = "My test token                   ";
 	CPPUNIT_ASSERT(slot->initToken(soPIN, label) == CKR_OK);
 	CPPUNIT_ASSERT(slot->getToken()->loginSO(soPIN) == CKR_OK);

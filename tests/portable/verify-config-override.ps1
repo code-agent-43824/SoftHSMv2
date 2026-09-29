@@ -90,7 +90,9 @@ try {
             throw 'utility did not use the adjacent Rutoken configuration'
         }
         & (Join-Path $AdjacentUtilDir 'softhsm2-util.exe') --init-token --slot 0 `
-            --label adjacent-test --so-pin 1234 --pin 12345678
+            --label adjacent-test --so-pin 12345678 --pin 12345678 `
+            --so-pin-retries 4 --user-pin-retries 5 `
+            --min-pin-len 6 --max-pin-len 12
         if ($LASTEXITCODE -ne 0) { throw 'utility could not initialize a token beside the module' }
         & $Client probe (Join-Path $Adjacent $ModuleName)
         if ($LASTEXITCODE -ne 0) { throw 'module did not use its adjacent configuration' }

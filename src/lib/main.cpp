@@ -1825,10 +1825,18 @@ PKCS_API CK_RV C_EX_InitToken
 
 PKCS_API CK_RV C_EX_UnblockUserPIN
 (
-	CK_SESSION_HANDLE /*hSession*/
+	CK_SESSION_HANDLE hSession
 )
 {
-	return CKR_FUNCTION_NOT_SUPPORTED;
+	try
+	{
+		return SoftHSM::i()->C_EX_UnblockUserPIN(hSession);
+	}
+	catch (...)
+	{
+		FatalException();
+	}
+	return CKR_FUNCTION_FAILED;
 }
 
 PKCS_API CK_RV C_EX_SetTokenName

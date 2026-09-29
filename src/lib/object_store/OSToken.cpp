@@ -380,6 +380,54 @@ bool OSToken::setTokenFlags(const CK_ULONG flags)
 	return tokenObject->setAttribute(CKA_OS_TOKENFLAGS, tokenFlags);
 }
 
+bool OSToken::getPinPolicy(ByteString& policy, bool& exists)
+{
+	if (!valid || !tokenObject->isValid()) return false;
+	exists = tokenObject->attributeExists(CKA_OS_PINPOLICY);
+	if (!exists) return true;
+	policy = tokenObject->getAttribute(CKA_OS_PINPOLICY).getByteStringValue();
+	return true;
+}
+
+bool OSToken::setPinPolicy(const ByteString& policy)
+{
+	if (!valid) return false;
+	return tokenObject->setAttribute(CKA_OS_PINPOLICY, OSAttribute(policy));
+}
+
+bool OSToken::advancePinPolicy(bool so, bool success, ByteString& policy)
+{
+	if (!valid || !tokenObject->startTransaction(OSObject::ReadWrite)) return false;
+	if (tokenObject->attributeExists(CKA_OS_PINPOLICY))
+		policy = tokenObject->getAttribute(CKA_OS_PINPOLICY).getByteStringValue();
+	else
+	{
+		policy.resize(7);
+		policy[0] = 1; policy[1] = 6; policy[2] = 32;
+		policy[3] = 10; policy[4] = 10; policy[5] = 10; policy[6] = 10;
+	}
+	const size_t leftIndex = so ? 5 : 6;
+	const size_t maxIndex = so ? 3 : 4;
+	if (policy.size() != 7 || policy[0] != 1 ||
+	    policy[leftIndex] > policy[maxIndex])
+	{
+		tokenObject->abortTransaction();
+		return false;
+	}
+	if (policy[leftIndex] != 0)
+	{
+		if (success) policy[leftIndex] = policy[maxIndex];
+		else --policy[leftIndex];
+	}
+	if (!tokenObject->setAttribute(CKA_OS_PINPOLICY, OSAttribute(policy)) ||
+	    !tokenObject->commitTransaction())
+	{
+		tokenObject->abortTransaction();
+		return false;
+	}
+	return true;
+}
+
 // Retrieve objects
 std::set<OSObject*> OSToken::getObjects()
 {
@@ -800,4 +848,3 @@ bool OSToken::index(bool isFirstTime /* = false */)
 
 	return true;
 }
-

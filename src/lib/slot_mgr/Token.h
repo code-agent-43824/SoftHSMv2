@@ -45,6 +45,13 @@
 class Token
 {
 public:
+	struct PinPolicy
+	{
+		unsigned char minLength, maxLength;
+		unsigned char maxSO, maxUser, leftSO, leftUser;
+		PinPolicy() : minLength(6), maxLength(32), maxSO(10), maxUser(10),
+		              leftSO(10), leftUser(10) {}
+	};
 	// Constructor
 	Token();
 	Token(ObjectStoreToken *inToken);
@@ -79,6 +86,9 @@ public:
 	CK_RV setSOPIN(ByteString& oldPIN, ByteString& newPIN);
 	CK_RV setUserPIN(ByteString& oldPIN, ByteString& newPIN);
 	CK_RV initUserPIN(ByteString& pin);
+	CK_RV unblockUserPIN();
+	bool getPinPolicy(PinPolicy& policy);
+	bool setPinPolicy(const PinPolicy& policy);
 
 	// Retrieve token information for the token
 	CK_RV getTokenInfo(CK_TOKEN_INFO_PTR info);
@@ -103,6 +113,8 @@ public:
 	bool encrypt(const ByteString& plaintext, ByteString& encrypted);
 
 private:
+	CK_RV pinResult(bool so, bool success);
+	bool pinLocked(bool so);
 	// Token validity
 	bool valid;
 
@@ -116,4 +128,3 @@ private:
 };
 
 #endif // !_SOFTHSM_V2_TOKEN_H
-

@@ -1040,8 +1040,6 @@ CK_RV SoftHSM::C_GetTokenInfo(CK_SLOT_ID slotID, CK_TOKEN_INFO_PTR pInfo)
 	// compatibility complaints. The remaining state flags still come from the
 	// backing token, so a genuinely fresh PIN state is still reported.
 	pInfo->flags = CKF_RNG | CKF_LOGIN_REQUIRED | stateFlags;
-	pInfo->ulMinPinLen = 6;
-	pInfo->ulMaxPinLen = 249;
 	pInfo->hardwareVersion.major = 60;
 	pInfo->hardwareVersion.minor = 1;
 	pInfo->firmwareVersion.major = 30;
@@ -1066,12 +1064,6 @@ namespace
 	const CK_ULONG FAKE_RUTOKEN_ORDER_NUMBER     = 2;
 	const CK_ULONG FAKE_RUTOKEN_TOTAL_MEMORY     = 131072;
 	const CK_ULONG FAKE_RUTOKEN_FREE_MEMORY      = 103200;
-	const CK_ULONG FAKE_RUTOKEN_MIN_ADMIN_PIN    = 6;
-	const CK_ULONG FAKE_RUTOKEN_MAX_ADMIN_PIN    = 249;
-	const CK_ULONG FAKE_RUTOKEN_MIN_USER_PIN     = 6;
-	const CK_ULONG FAKE_RUTOKEN_MAX_USER_PIN     = 249;
-	const CK_ULONG FAKE_RUTOKEN_MAX_ADMIN_RETRY  = 10;
-	const CK_ULONG FAKE_RUTOKEN_MAX_USER_RETRY   = 10;
 	const CK_ULONG FAKE_RUTOKEN_BODY_COLOR       = TOKEN_BODY_COLOR_UNKNOWN;
 	const CK_ULONG FAKE_RUTOKEN_FIRMWARE_CHECKSUM = 0x4D27D7A2;
 
@@ -1094,15 +1086,6 @@ namespace
 		TOKEN_FLAGS_SUPPORT_JOURNAL | TOKEN_FLAGS_USER_PIN_UTF8 |
 		TOKEN_FLAGS_ADMIN_PIN_UTF8;
 
-	// How many attempts a PIN has left, as implied by the standard flags.
-	CK_ULONG retriesLeft(CK_FLAGS flags, CK_FLAGS locked, CK_FLAGS finalTry,
-			     CK_FLAGS countLow, CK_ULONG maximum)
-	{
-		if ((flags & locked) != 0) return 0;
-		if ((flags & finalTry) != 0) return 1;
-		if ((flags & countLow) != 0) return 2;
-		return maximum;
-	}
 }
 
 CK_RV SoftHSM::C_EX_GetTokenInfoExtended(CK_SLOT_ID slotID, CK_TOKEN_INFO_EXTENDED_PTR pInfo)
@@ -1123,6 +1106,11 @@ CK_RV SoftHSM::C_EX_GetTokenInfoExtended(CK_SLOT_ID slotID, CK_TOKEN_INFO_EXTEND
 	CK_TOKEN_INFO tokenInfo;
 	const CK_RV rv = C_GetTokenInfo(slotID, &tokenInfo);
 	if (rv != CKR_OK) return rv;
+	Slot* slot = fakeRutokenSlot(slotID);
+	Token* token = slot == NULL ? NULL : slot->getToken();
+	if (token == NULL) return CKR_TOKEN_NOT_PRESENT;
+	Token::PinPolicy policy;
+	if (!token->getPinPolicy(policy)) return CKR_DEVICE_ERROR;
 
 	memset(pInfo, 0, sizeof(*pInfo));
 	pInfo->ulSizeofThisStructure = sizeof(CK_TOKEN_INFO_EXTENDED);
@@ -1137,18 +1125,14 @@ CK_RV SoftHSM::C_EX_GetTokenInfoExtended(CK_SLOT_ID slotID, CK_TOKEN_INFO_EXTEND
 	if ((tokenInfo.flags & CKF_USER_PIN_INITIALIZED) != 0)
 		pInfo->flags |= TOKEN_FLAGS_USER_PIN_NOT_DEFAULT;
 
-	pInfo->ulMaxAdminPinLen = FAKE_RUTOKEN_MAX_ADMIN_PIN;
-	pInfo->ulMinAdminPinLen = FAKE_RUTOKEN_MIN_ADMIN_PIN;
-	pInfo->ulMaxUserPinLen = FAKE_RUTOKEN_MAX_USER_PIN;
-	pInfo->ulMinUserPinLen = FAKE_RUTOKEN_MIN_USER_PIN;
-	pInfo->ulMaxAdminRetryCount = FAKE_RUTOKEN_MAX_ADMIN_RETRY;
-	pInfo->ulMaxUserRetryCount = FAKE_RUTOKEN_MAX_USER_RETRY;
-	pInfo->ulAdminRetryCountLeft = retriesLeft(tokenInfo.flags, CKF_SO_PIN_LOCKED,
-						   CKF_SO_PIN_FINAL_TRY, CKF_SO_PIN_COUNT_LOW,
-						   FAKE_RUTOKEN_MAX_ADMIN_RETRY);
-	pInfo->ulUserRetryCountLeft = retriesLeft(tokenInfo.flags, CKF_USER_PIN_LOCKED,
-						  CKF_USER_PIN_FINAL_TRY, CKF_USER_PIN_COUNT_LOW,
-						  FAKE_RUTOKEN_MAX_USER_RETRY);
+	pInfo->ulMaxAdminPinLen = policy.maxLength;
+	pInfo->ulMinAdminPinLen = policy.minLength;
+	pInfo->ulMaxUserPinLen = policy.maxLength;
+	pInfo->ulMinUserPinLen = policy.minLength;
+	pInfo->ulMaxAdminRetryCount = policy.maxSO;
+	pInfo->ulMaxUserRetryCount = policy.maxUser;
+	pInfo->ulAdminRetryCountLeft = policy.leftSO;
+	pInfo->ulUserRetryCountLeft = policy.leftUser;
 
 	// serialNumber is the device's binary serial, big endian and right
 	// aligned; the eight characters C_GetTokenInfo prints are that number in
@@ -1193,6 +1177,17 @@ CK_RV SoftHSM::C_EX_GetTokenInfoExtended(CK_SLOT_ID slotID, CK_TOKEN_INFO_EXTEND
 	pInfo->ulBatteryFlags = FAKE_RUTOKEN_BATTERY_UNKNOWN;
 
 	return CKR_OK;
+}
+
+CK_RV SoftHSM::C_EX_UnblockUserPIN(CK_SESSION_HANDLE hSession)
+{
+	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;
+	if (!fakeRutokenECP) return CKR_FUNCTION_NOT_SUPPORTED;
+	Session* session = (Session*)handleManager->getSession(hSession);
+	if (session == NULL) return CKR_SESSION_HANDLE_INVALID;
+	if (session->getState() != CKS_RW_SO_FUNCTIONS) return CKR_USER_NOT_LOGGED_IN;
+	Token* token = session->getToken();
+	return token == NULL ? CKR_GENERAL_ERROR : token->unblockUserPIN();
 }
 
 // Return the token's name. Rutoken Control Center calls this immediately after
@@ -2381,8 +2376,10 @@ CK_RV SoftHSM::C_InitPIN(CK_SESSION_HANDLE hSession, CK_UTF8CHAR_PTR pPin, CK_UL
 
 	// Check the PIN
 	if (pPin == NULL_PTR) return CKR_ARGUMENTS_BAD;
-	const CK_ULONG minPinLen = MIN_PIN_LEN;
-	const CK_ULONG maxPinLen = MAX_PIN_LEN;
+	Token::PinPolicy policy;
+	if (!token->getPinPolicy(policy)) return CKR_DEVICE_ERROR;
+	const CK_ULONG minPinLen = policy.minLength;
+	const CK_ULONG maxPinLen = policy.maxLength;
 	if (ulPinLen < minPinLen || ulPinLen > maxPinLen) return CKR_PIN_LEN_RANGE;
 
 	ByteString userPIN(pPin, ulPinLen);
@@ -2404,16 +2401,16 @@ CK_RV SoftHSM::C_SetPIN(CK_SESSION_HANDLE hSession, CK_UTF8CHAR_PTR pOldPin, CK_
 	// Check the new PINs
 	if (pOldPin == NULL_PTR) return CKR_ARGUMENTS_BAD;
 	if (pNewPin == NULL_PTR) return CKR_ARGUMENTS_BAD;
-	const CK_ULONG minPinLen = MIN_PIN_LEN;
-	const CK_ULONG maxPinLen = MAX_PIN_LEN;
-	if (ulNewLen < minPinLen || ulNewLen > maxPinLen) return CKR_PIN_LEN_RANGE;
-
-	ByteString oldPIN(pOldPin, ulOldLen);
-	ByteString newPIN(pNewPin, ulNewLen);
-
 	// Get the token
 	Token* token = session->getToken();
 	if (token == NULL) return CKR_GENERAL_ERROR;
+	Token::PinPolicy policy;
+	if (!token->getPinPolicy(policy)) return CKR_DEVICE_ERROR;
+	if (ulNewLen < policy.minLength || ulNewLen > policy.maxLength)
+		return CKR_PIN_LEN_RANGE;
+
+	ByteString oldPIN(pOldPin, ulOldLen);
+	ByteString newPIN(pNewPin, ulNewLen);
 
 	switch (session->getState())
 	{
