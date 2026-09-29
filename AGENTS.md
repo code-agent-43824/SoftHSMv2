@@ -385,7 +385,8 @@ name.
 - **Commits `1f65ddd`…`c688ea8` (1–11 August 2026) predate these rules in this
   repository** and largely do not follow Conventional Commits. History is
   append-only (§5), so they stand. Every commit from `2ff7bd0` onward follows
-  the convention.
+  the convention except four made by mistake — `a81f8d0`, `ace5373`,
+  `51eee80`, `0d2e7fb` — which stand for the same reason. Do not add more.
 
 ## Version discipline
 
