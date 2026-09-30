@@ -53,6 +53,7 @@ class InfoTests : public TestsNoPINInitBase
 	CPPUNIT_TEST(testGetMechanismNegativeListConfig);
 #endif
 	CPPUNIT_TEST(testWaitForSlotEvent);
+	CPPUNIT_TEST(testWaitForSlotEventFinalizeRace);
 	CPPUNIT_TEST_SUITE_END();
 
 public:
@@ -69,6 +70,7 @@ public:
 	void testGetMechanismNegativeListConfig();
 #endif
 	void testWaitForSlotEvent();
+	void testWaitForSlotEventFinalizeRace();
 };
 
 #endif // !_SOFTHSM_V2_INFOTESTS_H

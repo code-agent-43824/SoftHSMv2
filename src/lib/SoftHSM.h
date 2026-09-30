@@ -66,6 +66,10 @@ public:
 	// This will destroy the one-and-only instance.
 	static void reset();
 
+	// C_WaitForSlotEvent without the instance, which C_Finalize may destroy
+	// while a caller is on its way in.
+	static CK_RV waitForSlotEvent(CK_FLAGS flags, CK_SLOT_ID_PTR pSlot, CK_VOID_PTR pReserved);
+
 	// Destructor
 	virtual ~SoftHSM();
 

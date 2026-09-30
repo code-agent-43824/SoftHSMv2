@@ -497,3 +497,39 @@ void InfoTests::testWaitForSlotEvent()
 
 	CRYPTOKI_F_PTR( C_Finalize(NULL_PTR) );
 }
+
+void InfoTests::testWaitForSlotEventFinalizeRace()
+{
+#ifdef HAVE_CXX11
+	// A blocking C_WaitForSlotEvent that is still on its way to the wait when
+	// C_Finalize runs must be released all the same. The call is started and
+	// the library finalized at once, many times over, so that some of those
+	// calls arrive while C_Finalize is in progress.
+	CRYPTOKI_F_PTR( C_Finalize(NULL_PTR) );
+
+	for (int i = 0; i < 2000; i++)
+	{
+		CK_RV rv = CRYPTOKI_F_PTR( C_Initialize(NULL_PTR) );
+		CPPUNIT_ASSERT(rv == CKR_OK);
+
+		std::promise<CK_RV> result;
+		std::future<CK_RV> waited = result.get_future();
+		std::thread waiter([&] {
+			CK_SLOT_ID slot;
+			result.set_value(CRYPTOKI_F_PTR( C_WaitForSlotEvent(0, &slot, NULL_PTR) ));
+		});
+		rv = CRYPTOKI_F_PTR( C_Finalize(NULL_PTR) );
+		const bool returned = waited.wait_for(std::chrono::seconds(5)) == std::future_status::ready;
+		if (!returned)
+		{
+			// Release the stuck call so the thread can be joined, then fail.
+			CRYPTOKI_F_PTR( C_Initialize(NULL_PTR) );
+			CRYPTOKI_F_PTR( C_Finalize(NULL_PTR) );
+		}
+		waiter.join();
+		CPPUNIT_ASSERT_MESSAGE("blocking C_WaitForSlotEvent missed C_Finalize", returned);
+		CPPUNIT_ASSERT(rv == CKR_OK);
+		CPPUNIT_ASSERT(waited.get() == CKR_CRYPTOKI_NOT_INITIALIZED);
+	}
+#endif
+}

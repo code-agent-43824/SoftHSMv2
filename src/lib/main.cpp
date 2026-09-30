@@ -1293,7 +1293,8 @@ PKCS_API CK_RV C_WaitForSlotEvent(CK_FLAGS flags, CK_SLOT_ID_PTR pSlot, CK_VOID_
 {
 	try
 	{
-		return SoftHSM::i()->C_WaitForSlotEvent(flags, pSlot, pReserved);
+		// Not through SoftHSM::i(): see SoftHSM::waitForSlotEvent.
+		return SoftHSM::waitForSlotEvent(flags, pSlot, pReserved);
 	}
 	catch (...)
 	{

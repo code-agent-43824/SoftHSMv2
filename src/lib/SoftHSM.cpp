@@ -145,10 +145,11 @@ namespace
 		std::mutex lock;
 		std::condition_variable changed;
 		std::deque<CK_SLOT_ID> pending;
+		bool open;		// set by C_Initialize, cleared by C_Finalize
 		bool waiting;		// PKCS #11 allows one blocking caller at a time
 		unsigned long epoch;	// bumped by every C_Finalize
 
-		SlotEventState() : waiting(false), epoch(0) { }
+		SlotEventState() : open(false), waiting(false), epoch(0) { }
 	};
 
 	SlotEventState& slotEvents()
@@ -165,23 +166,46 @@ namespace
 		state.changed.notify_all();
 	}
 
+	// Called by C_Initialize once the library is usable.
+	void beginSlotEventEpoch()
+	{
+		SlotEventState& state = slotEvents();
+		std::lock_guard<std::mutex> guard(state.lock);
+		state.open = true;
+	}
+
 	// Called by C_Finalize. A parked caller has to be released, and PKCS #11
-	// says what it hears: the library it was waiting on is gone.
+	// says what it hears: the library it was waiting on is gone. The epoch is
+	// closed under the same lock that awaitSlotEvent checks it under, so a
+	// caller that arrives while C_Finalize runs cannot slip past the release.
 	void endSlotEventEpoch()
 	{
 		SlotEventState& state = slotEvents();
 		std::lock_guard<std::mutex> guard(state.lock);
+		state.open = false;
 		state.pending.clear();
 		state.epoch++;
 		state.changed.notify_all();
 	}
 
-	// The wait itself. Kept out of the SoftHSM class so that nothing here can
-	// touch an object C_Finalize may have destroyed while this thread slept.
-	CK_RV awaitSlotEvent(CK_FLAGS flags, CK_SLOT_ID_PTR pSlot)
+	// The whole of C_WaitForSlotEvent. Kept out of the SoftHSM class so that
+	// nothing here touches the object C_Finalize destroys: a caller may be
+	// parked here across C_Finalize, or still be on its way in while it runs.
+	// Whether the library is initialised is decided here, under the lock
+	// that C_Finalize closes the epoch under, and before the epoch is read.
+	CK_RV awaitSlotEvent(CK_FLAGS flags, CK_SLOT_ID_PTR pSlot, CK_VOID_PTR pReserved)
 	{
 		SlotEventState& state = slotEvents();
 		std::unique_lock<std::mutex> guard(state.lock);
+
+		if (!state.open) return CKR_CRYPTOKI_NOT_INITIALIZED;
+
+		// Must be set to NULL_PTR in this version of PKCS #11
+		if (pReserved != NULL_PTR) return CKR_ARGUMENTS_BAD;
+
+		// The slot an event happened in is the only thing this call reports,
+		// so there has to be somewhere to put it.
+		if (pSlot == NULL_PTR) return CKR_ARGUMENTS_BAD;
 
 		if (!state.pending.empty())
 		{
@@ -215,6 +239,7 @@ namespace
 namespace
 {
 	void postSlotEvent(CK_SLOT_ID /*slotID*/) { }
+	void beginSlotEventEpoch() { }
 	void endSlotEventEpoch() { }
 }
 #endif
@@ -800,6 +825,7 @@ CK_RV SoftHSM::C_Initialize(CK_VOID_PTR pInitArgs)
 	handleManager = new HandleManager();
 
 	// Set the state to initialised
+	beginSlotEventEpoch();
 	isInitialised = true;
 
 	return CKR_OK;
@@ -10186,6 +10212,10 @@ CK_RV SoftHSM::C_CancelFunction(CK_SESSION_HANDLE hSession)
 // Wait or poll for a slot event on the specified slot
 CK_RV SoftHSM::C_WaitForSlotEvent(CK_FLAGS flags, CK_SLOT_ID_PTR pSlot, CK_VOID_PTR pReserved)
 {
+#ifdef HAVE_CXX11
+	// Does not touch this object at all; see waitForSlotEvent.
+	return awaitSlotEvent(flags, pSlot, pReserved);
+#else
 	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;
 
 	// Must be set to NULL_PTR in this version of PKCS #11
@@ -10195,16 +10225,24 @@ CK_RV SoftHSM::C_WaitForSlotEvent(CK_FLAGS flags, CK_SLOT_ID_PTR pSlot, CK_VOID_
 	// there has to be somewhere to put it.
 	if (pSlot == NULL_PTR) return CKR_ARGUMENTS_BAD;
 
-#ifdef HAVE_CXX11
-	// Nothing beyond this point may touch this object: a blocking caller
-	// sleeps here across C_Finalize, which destroys it, and being woken by
-	// exactly that is one of the two ways this call returns.
-	return awaitSlotEvent(flags, pSlot);
-#else
 	// Without C++11 there is nothing to wait on; keep the old answer rather
 	// than pretend. The product is built with CMake, which requires C++11.
 	if (!(flags & CKF_DONT_BLOCK)) return CKR_FUNCTION_NOT_SUPPORTED;
 	return CKR_NO_EVENT;
+#endif
+}
+
+// The entry point main.cpp uses for C_WaitForSlotEvent. A blocking caller may
+// still be on its way in when another thread's C_Finalize destroys the
+// SoftHSM object, so with C++11 the call must not go through SoftHSM::i():
+// the answer depends only on the slot-event state, which outlives it.
+// This path therefore skips the fork check that SoftHSM::i() does.
+CK_RV SoftHSM::waitForSlotEvent(CK_FLAGS flags, CK_SLOT_ID_PTR pSlot, CK_VOID_PTR pReserved)
+{
+#ifdef HAVE_CXX11
+	return awaitSlotEvent(flags, pSlot, pReserved);
+#else
+	return SoftHSM::i()->C_WaitForSlotEvent(flags, pSlot, pReserved);
 #endif
 }
 
