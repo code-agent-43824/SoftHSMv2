@@ -160,6 +160,24 @@
       путь не сняла (вендор вернул `CKR_ARGUMENTS_BAD`), поэтому поведение
       берём из заглушки OpenSC, а не из трассы.
 
+- [~] **Батарея e2e-тестов на Windows и macOS, не только Linux (запрос
+      владельца 03.10).** Диагноз: полная батарея (`first-run`, `multi-token`,
+      `gost28147-modes` ×3, `rutoken-profile` ×2, `core-behaviour`) гонялась
+      только в `ci.yml` на Linux; verifier на всех 6 платформах (вкл. Windows)
+      запускал лишь subset тест-кита (`prepare`/`finish`/`ready` + экспорт +
+      OpenSC). Причина, по которой батарея была Linux-only, — bash/perl и путь
+      per-user конфига (`HOME` на POSIX, `%USERPROFILE%` на Windows). Решение,
+      без новых сборок: в `portable-token-e2e` добавлена подкоманда `battery
+      <module> <workdir>`, которая гоняет все кейсы сама, изолируя каждый через
+      `SOFTHSM2_CONF` (для `first-run` — через `HOME`/`USERPROFILE`) нативными
+      путями в C++ — одинаково на всех ОС, без шелла и perl. Её зовёт
+      `run-test-kit.sh` и `run-test-kit.ps1` в bundled-режиме, так что battery
+      идёт в verifier на всех 6 платформах против уже собранного архива.
+      Проверено локально на GOST-сборке (Botan 2.19.3): все кейсы прошли.
+      Закрыть по зелёному релизному прогону (verifier Windows/macOS). Отдельно
+      можно будет убрать дублирование батареи из `ci.yml`, сведя её к вызову
+      `battery` (не трогаю сейчас, чтобы не рисковать push-гейтом).
+
 - [x] **Гонка `C_WaitForSlotEvent` с `C_Finalize` — исправлена (слово
       владельца 30.09).** Механизм — `docs/JOURNAL.md` за 29.09: проверка
       `isInitialised` и запоминание `epoch` в `awaitSlotEvent` не атомарны

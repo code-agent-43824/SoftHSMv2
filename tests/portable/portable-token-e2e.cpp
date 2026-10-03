@@ -5691,10 +5691,192 @@ static void verifyFirstRunCreatesTokenDirectory(const fs::path& modulePath,
     std::cout << "first run created the token directory and enumerated slots\n";
 }
 
+// Set or clear a process environment variable with a native value, so the
+// loaded module sees it through getenv (POSIX) or GetEnvironmentVariableA
+// (Windows) alike. This is what lets the battery below isolate each case
+// identically on every platform, without the shell, perl or HOME/USERPROFILE
+// juggling the Linux-only CI steps rely on.
+static void setEnvVar(const char* name, const std::string& value)
+{
+#ifdef _WIN32
+    _putenv_s(name, value.c_str());
+#else
+    setenv(name, value.c_str(), 1);
+#endif
+}
+
+static void clearEnvVar(const char* name)
+{
+#ifdef _WIN32
+    _putenv_s(name, "");
+#else
+    unsetenv(name);
+#endif
+}
+
+// Write an isolated module configuration and return its path. The token
+// directory is created so the object store can be enumerated on first load.
+// Paths are absolute with forward slashes, which both the POSIX and the
+// Windows builds accept.
+static fs::path writeBatteryConfig(const fs::path& dir, bool fakeRutoken,
+                                   const std::string& extraLine = std::string())
+{
+    fs::create_directories(dir);
+    const fs::path tokens = fs::absolute(dir / "tokens");
+    fs::create_directories(tokens);
+    const fs::path config = fs::absolute(dir / "softhsm.conf");
+    std::ofstream out(config, std::ios::binary | std::ios::trunc);
+    out << "directories.tokendir = " << tokens.generic_string() << "\n"
+        << "objectstore.backend = file\n"
+        << "log.level = ERROR\n"
+        << "FAKE_RUTOKEN_ECP = " << (fakeRutoken ? "true" : "false") << "\n";
+    if (!extraLine.empty()) out << extraLine << "\n";
+    out.flush();
+    if (!out) fail("battery: cannot write " + config.string());
+    return config;
+}
+
+// Minimal token creation: format the spare slot and set the user PIN, with no
+// key material. It gives the profile and GOST cases a token to work on, the
+// way the Linux CI seeds them with softhsm2-util or prepare, but without the
+// asymmetric GOST work, so the setup does not depend on the exact Botan build.
+static void batteryInitToken(const fs::path& modulePath, const std::string& label,
+                             const std::string& soPin, const std::string& userPin)
+{
+    Module module(modulePath);
+    const CK_SLOT_ID slot = selectSlotForInitialization(module, label);
+    std::array<CK_UTF8CHAR, 32> labelField{};
+    labelField.fill(' ');
+    std::copy(label.begin(), label.end(), labelField.begin());
+    callOk("C_InitToken", "battery init, slotID=" + std::to_string(slot),
+           [&] { return module->C_InitToken(slot,
+                        reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(soPin.data())),
+                        static_cast<CK_ULONG>(soPin.size()), labelField.data()); });
+    CK_SESSION_HANDLE session = openSession(module, slot);
+    login(module, session, CKU_SO, soPin);
+    callOk("C_InitPIN", "battery init user PIN",
+           [&] { return module->C_InitPIN(session,
+                        reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(userPin.data())),
+                        static_cast<CK_ULONG>(userPin.size())); });
+    logout(module, session, "CKU_SO");
+}
+
+// Run the whole e2e battery that the Linux CI drives with bash: every case,
+// each in its own isolated store, created here in C++ so Windows and macOS
+// run exactly the same thing against the module handed to them - no second
+// build, no shell divergence. Each case points the module at a fresh config
+// through SOFTHSM2_CONF (or, for first-run, at an empty per-user home), so the
+// cases cannot see each other's state.
+static void runBattery(const fs::path& modulePath, const fs::path& workRoot)
+{
+    const std::string soPin = "12345678";
+    const std::string userPin = "12345678";
+    fs::create_directories(workRoot);
+    // Some cases write evidence files relative to the working directory (the
+    // gost28147 case writes a gost-pkcs11/ tree). Run from the work directory
+    // so none of it lands wherever the kit happened to be invoked from.
+    fs::current_path(workRoot);
+    clearEnvVar("P11_TEST_EXCLUDE_FUNCTIONS");
+    clearEnvVar("P11_TEST_SLOT_ID");
+    clearEnvVar("P11_TEST_TOKEN_LABEL");
+
+    // first-run: the per-user fallback must create the store from nothing, so
+    // no SOFTHSM2_CONF and an empty, isolated home (HOME on POSIX, USERPROFILE
+    // on Windows).
+    {
+        trace("BATTERY", "case first-run");
+        clearEnvVar("SOFTHSM2_CONF");
+        const fs::path home = fs::absolute(workRoot / "first-run-home");
+        fs::create_directories(home);
+        setEnvVar("HOME", home.generic_string());
+        setEnvVar("USERPROFILE", home.generic_string());
+        verifyFirstRunCreatesTokenDirectory(modulePath,
+                                            (home / "softhsm" / "tokens").string());
+    }
+
+    // multi-token: an empty store with the profile on; the case creates the
+    // tokens itself and checks the slot layout.
+    {
+        trace("BATTERY", "case multi-token");
+        setEnvVar("SOFTHSM2_CONF",
+                  writeBatteryConfig(workRoot / "multi-token", true).generic_string());
+        setEnvVar("P11_TEST_SO_PIN", soPin);
+        setEnvVar("P11_TEST_USER_PIN", userPin);
+        verifyMultipleTokens(modulePath);
+    }
+
+    // gost28147-modes three ways: the profile default, the profile with
+    // DISABLE_OTHER_28147_MODES turned off, and no profile at all.
+    {
+        const struct { const char* name; bool fake; const char* extra; bool restricted; }
+        cases[] = {
+            { "profile-default", true, "", true },
+            { "profile-off", true, "DISABLE_OTHER_28147_MODES = false", false },
+            { "no-profile", false, "", false },
+        };
+        for (const auto& item : cases)
+        {
+            trace("BATTERY", std::string("case gost28147-modes ") + item.name);
+            setEnvVar("SOFTHSM2_CONF",
+                      writeBatteryConfig(workRoot / (std::string("gost28147-") + item.name),
+                                         item.fake, item.extra).generic_string());
+            setEnvVar("P11_TEST_SO_PIN", soPin);
+            setEnvVar("P11_TEST_USER_PIN", userPin);
+            batteryInitToken(modulePath, "Rutoken ECP", soPin, userPin);
+            setEnvVar("P11_28147_EXPECT_RESTRICTED", item.restricted ? "YES" : "NO");
+            verifyGOST28147Modes(modulePath);
+        }
+        clearEnvVar("P11_28147_EXPECT_RESTRICTED");
+    }
+
+    // rutoken-profile, both label branches: a token created with the profile
+    // off, then read back with it on from the same store.
+    {
+        const struct { const char* name; const char* label; const char* expect; }
+        cases[] = {
+            { "blank-label", "", "Rutoken ECP <no label>" },
+            { "explicit-label", "Rutoken ECP", "Rutoken ECP" },
+        };
+        for (const auto& item : cases)
+        {
+            const fs::path dir = workRoot / (std::string("rutoken-profile-") + item.name);
+            trace("BATTERY", std::string("case rutoken-profile ") + item.name + " (init)");
+            setEnvVar("SOFTHSM2_CONF", writeBatteryConfig(dir, false).generic_string());
+            batteryInitToken(modulePath, item.label, soPin, userPin);
+            trace("BATTERY", std::string("case rutoken-profile ") + item.name);
+            setEnvVar("SOFTHSM2_CONF", writeBatteryConfig(dir, true).generic_string());
+            setEnvVar("P11_PROFILE_EXPECTED_LABEL", item.expect);
+            setEnvVar("P11_TEST_USER_PIN", userPin);
+            verifyRutokenProfile(modulePath);
+        }
+        clearEnvVar("P11_PROFILE_EXPECTED_LABEL");
+    }
+
+    // core-behaviour: plain PKCS #11, profile off, with the store directory
+    // exposed so the case can confirm private attributes are stored encrypted.
+    {
+        trace("BATTERY", "case core-behaviour");
+        const fs::path dir = workRoot / "core-behaviour";
+        setEnvVar("SOFTHSM2_CONF", writeBatteryConfig(dir, false).generic_string());
+        setEnvVar("P11_TEST_SO_PIN", soPin);
+        setEnvVar("P11_TEST_USER_PIN", userPin);
+        setEnvVar("P11_TEST_STORE_DIR", fs::absolute(dir / "tokens").generic_string());
+        verifyCoreBehaviour(modulePath);
+        clearEnvVar("P11_TEST_STORE_DIR");
+    }
+
+    std::cout << "BATTERY: all e2e cases passed\n";
+}
+
 int main(int argc, char** argv)
 {
     try
     {
+        if (argc == 4 && std::string(argv[1]) == "battery")
+        {
+            runBattery(fs::absolute(argv[2]), fs::absolute(argv[3]));
+            return 0;
+        }
         if (argc == 3 && std::string(argv[1]) == "probe")
         {
             Module module(fs::absolute(argv[2]));
@@ -5744,6 +5926,7 @@ int main(int argc, char** argv)
             return 0;
         }
         std::cerr << "usage:\n"
+                  << "  portable-token-e2e battery <module> <work-directory>\n"
                   << "  portable-token-e2e probe <module>\n"
                   << "  portable-token-e2e first-run <module> <expected-token-directory>\n"
                   << "  portable-token-e2e multi-token <module>\n"

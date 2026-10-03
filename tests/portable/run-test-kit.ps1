@@ -244,6 +244,17 @@ if ($BundledMode -eq "YES") {
     Write-Host "[UTIL] PASS: autonomous util and forced RSA/ECDSA/GOST PKCS#8 export"
 }
 
+if ($BundledMode -eq "YES") {
+    # The full vendor-neutral case battery, the same one the Linux push CI
+    # runs, driven by the client itself so Windows runs it against the bundled
+    # module exactly as the other platforms do. Each case is isolated in its
+    # own store under test-output.
+    Write-Host "[BATTERY] running the full e2e case battery against the bundled module"
+    & $Client battery $Module (Join-Path $OutputDir "battery")
+    if ($LASTEXITCODE -ne 0) { throw "e2e case battery failed" }
+    Write-Host "[BATTERY] PASS: full e2e case battery"
+}
+
 function Invoke-OpenSCPkcs11Tool([string]$Option, [string]$LogName) {
     $PreviousErrorActionPreference = $ErrorActionPreference
     try {

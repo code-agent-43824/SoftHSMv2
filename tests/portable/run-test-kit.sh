@@ -239,6 +239,16 @@ if [[ "$bundled_mode" == YES ]]; then
   } 2>&1 | tee "$utility_log"
 fi
 
+if [[ "$bundled_mode" == YES ]]; then
+  # The full vendor-neutral case battery, the same one the Linux push CI runs,
+  # driven here by the client itself so every platform's test kit - Windows
+  # and macOS included - runs it against the bundled module. It isolates each
+  # case in its own store under test-output, so it leaves the rest alone.
+  printf '[BATTERY] running the full e2e case battery against the bundled module\n'
+  "$kit_dir/bin/portable-token-e2e" battery "$module" "$kit_dir/test-output/battery"
+  printf '[BATTERY] PASS: full e2e case battery\n'
+fi
+
 printf '[OPENSC] checking C_Initialize and library information with pkcs11-tool -I\n'
 "$kit_dir/bin/pkcs11-tool" --module "$module" -I 2>&1 | \
   tee "$kit_dir/test-output/pkcs11-tool-I.log"
