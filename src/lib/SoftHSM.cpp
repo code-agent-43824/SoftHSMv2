@@ -1059,6 +1059,10 @@ CK_RV SoftHSM::C_GetTokenInfo(CK_SLOT_ID slotID, CK_TOKEN_INFO_PTR pInfo)
 	memcpy(pInfo->model, "Rutoken ECP", 11);
 	memset(pInfo->serialNumber, ' ', sizeof(pInfo->serialNumber));
 	memcpy(pInfo->serialNumber, serialText, 8);
+	// The reference device leaves utcTime as sixteen zero bytes and does not
+	// set CKF_CLOCK_ON_TOKEN (measured on the device 2026-10-03). Upstream
+	// fills utcTime with the current time; blank it under the profile only.
+	memset(pInfo->utcTime, 0, sizeof(pInfo->utcTime));
 	// A real Rutoken ECP reports "rng, login required, PIN initialized, token
 	// initialized" and nothing more. The two "PIN to be changed" flags were
 	// asserted here unconditionally, which tells an application the token is
@@ -2361,9 +2365,13 @@ CK_RV SoftHSM::C_InitToken(CK_SLOT_ID slotID, CK_UTF8CHAR_PTR pPin, CK_ULONG ulP
 
 	// Check the PIN
 	if (pPin == NULL_PTR) return CKR_ARGUMENTS_BAD;
-	const CK_ULONG minPinLen = MIN_PIN_LEN;
-	const CK_ULONG maxPinLen = MAX_PIN_LEN;
-	if (ulPinLen < minPinLen || ulPinLen > maxPinLen) return CKR_PIN_INCORRECT;
+	// The token's own PIN policy (minimum 6) decides the length, inside
+	// Token::createToken, so a PIN shorter than the minimum yields
+	// CKR_PIN_LEN_RANGE the way the reference Rutoken does (measured on the
+	// device on 2026-10-03) instead of CKR_PIN_INCORRECT from an earlier
+	// MIN_PIN_LEN gate. createToken runs that length check before it verifies
+	// the existing SO PIN, so a wrong SO PIN of valid length still gives
+	// CKR_PIN_INCORRECT.
 
 	ByteString soPIN(pPin, ulPinLen);
 
