@@ -1817,11 +1817,20 @@ PKCS_API CK_RV C_EX_GetTokenInfoExtended(CK_SLOT_ID slotID, CK_TOKEN_INFO_EXTEND
 
 PKCS_API CK_RV C_EX_InitToken
 (
-	CK_SLOT_ID /*slotID*/, CK_UTF8CHAR_PTR /*pPin*/, CK_ULONG /*ulPinLen*/,
-	CK_RUTOKEN_INIT_PARAM_PTR /*pInitInfo*/
+	CK_SLOT_ID slotID, CK_UTF8CHAR_PTR pPin, CK_ULONG ulPinLen,
+	CK_RUTOKEN_INIT_PARAM_PTR pInitInfo
 )
 {
-	return CKR_FUNCTION_NOT_SUPPORTED;
+	try
+	{
+		return SoftHSM::i()->C_EX_InitToken(slotID, pPin, ulPinLen, pInitInfo);
+	}
+	catch (...)
+	{
+		FatalException();
+	}
+
+	return CKR_FUNCTION_FAILED;
 }
 
 PKCS_API CK_RV C_EX_UnblockUserPIN

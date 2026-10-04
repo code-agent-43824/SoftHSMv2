@@ -494,6 +494,100 @@ CK_RV Token::createToken(ObjectStore* objectStore, ByteString& soPIN, CK_UTF8CHA
 	return CKR_OK;
 }
 
+// Full-format initialisation for the Rutoken C_EX_InitToken extension. Unlike
+// createToken this sets both PINs and the complete PIN policy at once, and in
+// repair mode it formats without the old SO PIN. Authorisation is decided here,
+// under the token mutex, so it cannot race a concurrent login.
+CK_RV Token::initTokenExtended(ObjectStore* objectStore, bool repairMode,
+                               ByteString& soPIN, ByteString& newSOPIN,
+                               ByteString& newUserPIN, const PinPolicy& policy,
+                               CK_UTF8CHAR_PTR label)
+{
+	// Lock access to the token
+	MutexLocker lock(tokenMutex);
+
+	if (objectStore == NULL) return CKR_GENERAL_ERROR;
+	if (label == NULL_PTR) return CKR_ARGUMENTS_BAD;
+
+	const bool existing = (token != NULL);
+
+	// Authorise the format.
+	if (repairMode)
+	{
+		// Repair mode formats a token whose SO PIN can no longer be presented,
+		// so it is allowed only once that PIN is locked. While the SO PIN is
+		// still live the device reports a length error rather than admit the
+		// precondition; mirror that exactly.
+		if (existing && !pinLocked(true)) return CKR_PIN_LEN_RANGE;
+	}
+	else if (existing && sdm != NULL && sdm->getSOPINBlob().size() > 0)
+	{
+		if (pinLocked(true)) return CKR_PIN_LOCKED;
+		// Verify the current SO PIN on a throwaway manager, so a wrong PIN still
+		// costs an attempt (pinResult) without leaving the SO logged in.
+		SecureDataManager* verifier = new SecureDataManager(sdm->getSOPINBlob(), sdm->getUserPINBlob());
+		bool ok = verifier->loginSO(soPIN);
+		delete verifier;
+		if (!ok) return pinResult(true, false);
+	}
+
+	// Build a fresh master key sealed under both new PINs first; this touches no
+	// storage, so a failure here leaves the token untouched.
+	SecureDataManager gen;
+	if (!gen.setSOPIN(newSOPIN) || !gen.loginSO(newSOPIN) || !gen.setUserPIN(newUserPIN))
+	{
+		return CKR_GENERAL_ERROR;
+	}
+	gen.logout();
+
+	// Wipe or create the backing store.
+	ByteString labelByteStr((const unsigned char*) label, 32);
+	if (existing)
+	{
+		if (!token->resetToken(labelByteStr))
+		{
+			ERROR_MSG("Could not reset the token");
+			return CKR_DEVICE_ERROR;
+		}
+	}
+	else
+	{
+		ObjectStoreToken* newToken = objectStore->newToken(labelByteStr);
+		if (newToken == NULL)
+		{
+			ERROR_MSG("Could not create the token");
+			return CKR_DEVICE_ERROR;
+		}
+		token = newToken;
+	}
+
+	// Store both PINs; roll a brand-new token back if that somehow fails.
+	if (!token->setSOPIN(gen.getSOPINBlob()) || !token->setUserPIN(gen.getUserPINBlob()))
+	{
+		ERROR_MSG("Failed to store the new PINs");
+		if (!existing)
+		{
+			if (!objectStore->destroyToken(token))
+			{
+				ERROR_MSG("Failed to destroy incomplete token");
+			}
+			token = NULL;
+		}
+		return CKR_DEVICE_ERROR;
+	}
+
+	// Record the requested security parameters, both counters full.
+	if (!setPinPolicy(policy)) return CKR_DEVICE_ERROR;
+
+	// Rebuild the live manager from the stored blobs.
+	ByteString soPINBlob, userPINBlob;
+	valid = token->getSOPIN(soPINBlob) && token->getUserPIN(userPINBlob);
+	if (sdm != NULL) delete sdm;
+	sdm = new SecureDataManager(soPINBlob, userPINBlob);
+
+	return CKR_OK;
+}
+
 // When the token was created, for the Rutoken profile's slot order
 bool Token::getCreationTime(ByteString& created)
 {

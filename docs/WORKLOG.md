@@ -2,6 +2,36 @@
 
 Новые записи сверху. Одна запись на кусок работы: план → сделано → дальше.
 
+## 2026-10-04 — `C_EX_InitToken` (форматирование + параметры безопасности)
+
+**План.** Владелец 04.10: «сейчас сделай только `EX_InitToken`, и запускай
+релиз. остальное отложим». Реализовать по образцу заглушки OpenSC
+(`tests/rutoken-stub.c`, тег `0.27.1-portable.6`): форматирование токена, в т.ч.
+**без SO PIN** в режиме `UseRepairMode`, и установка параметров безопасности из
+`CK_RUTOKEN_INIT_PARAM`. Остальные пункты (копия PIN, KUZNECHIK-twin, память,
+журнал, флаги `*_PIN_NOT_DEFAULT`) — отложены.
+
+**Сделано.** `src/lib/main.cpp:C_EX_InitToken` теперь делегирует в
+`SoftHSM::C_EX_InitToken` (объявление в `SoftHSM.h`). Метод под профиль-гейтом
+`FAKE_RUTOKEN_ECP` (вне профиля — `CKR_FUNCTION_NOT_SUPPORTED`): разбор слота как
+в `C_InitToken`, `CKR_SESSION_EXISTS` при открытой сессии, валидация
+`CK_RUTOKEN_INIT_PARAM` как в заглушке, затем новый `Token::initTokenExtended`
+(+`Slot::initTokenExtended`) делает авторизацию и форматирование под одним
+мьютексом: без repair SO PIN проверяется одноразовым `SecureDataManager`
+(неверный списывает попытку), с repair — формат без SO PIN лишь при
+заблокированном SO PIN (иначе `CKR_PIN_LEN_RANGE`); затем wipe объектов, новый
+SO и user PIN через свежий `SecureDataManager`, свежая PIN-политика, метка.
+Два отступления под нашу модель хранения (JOURNAL 04.10): счётчики попыток
+3–10 (user floor поднят с 1 до 3), метка 32 байта. Покрытие: подкоманда
+`ex-init-token` в `portable-token-e2e` + кейс в battery (Windows/macOS через
+verifier) + шаг в `ci.yml` (Linux). Локально: сборка под `ENABLE_STRICT`
+чистая, клиент `-Werror` чистый, CTest 7/7, `C_EX_InitToken behaviour verified`
+(все вызовы вернули ожидаемый код — трасса в scratchpad).
+
+**Дальше.** Коммит+push в `main`, автоматический `Portable release`. После
+зелёного прогона — прочитать логи, скачать один архив, обновить STATUS новым
+тегом. Отложенные пункты модуля — следующими сессиями.
+
 ## 2026-10-03 — батарея e2e на Windows и macOS
 
 **План.** Владелец: тесты проходят полностью только на Linux, на Windows —

@@ -1209,6 +1209,98 @@ CK_RV SoftHSM::C_EX_GetTokenInfoExtended(CK_SLOT_ID slotID, CK_TOKEN_INFO_EXTEND
 	return CKR_OK;
 }
 
+// Full-format a token the way the Rutoken SDK's C_EX_InitToken does: set the SO
+// PIN, the user PIN and the security parameters in one call, and - its reason
+// for existing - format without the SO PIN when UseRepairMode is set. pPin is
+// the current SO PIN, verified unless repair mode is used. The validation and
+// the repair precondition mirror the reference device (see the OpenSC fork's
+// rutoken-stub.c and docs/RUTOKEN-EXTENSIONS.md); two ranges are clamped to
+// what this model can store, recorded as departures in docs/JOURNAL.md.
+CK_RV SoftHSM::C_EX_InitToken(CK_SLOT_ID slotID, CK_UTF8CHAR_PTR pPin,
+                              CK_ULONG ulPinLen, CK_RUTOKEN_INIT_PARAM_PTR pInitInfo)
+{
+	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;
+
+	// A Rutoken-only entry point: refuse it unless the module is presenting
+	// itself as a Rutoken.
+	if (!fakeRutokenECP) return CKR_FUNCTION_NOT_SUPPORTED;
+
+	if (slotID >= fakeRutokenLayout().size())
+		return slotID < FAKE_RUTOKEN_SLOT_COUNT ? CKR_TOKEN_NOT_PRESENT : CKR_SLOT_ID_INVALID;
+	const CK_SLOT_ID backingSlotID = fakeRutokenBackingSlotID(slotID);
+
+	Slot* slot = fakeRutokenSlot(slotID);
+	if (slot == NULL) return CKR_SLOT_ID_INVALID;
+
+	// Like C_InitToken, a token with an open session cannot be formatted.
+	if (sessionManager->haveSession(backingSlotID)) return CKR_SESSION_EXISTS;
+
+	if (pInitInfo == NULL_PTR) return CKR_ARGUMENTS_BAD;
+
+	// This model stores a single min/max PIN length and a 3..15 retry budget,
+	// so the device's separate admin/user minima collapse onto one floor of 6
+	// and a ceiling of 32, and the retry counts are bounded accordingly.
+	const CK_ULONG modelMinPin = 6;
+	const CK_ULONG modelMaxPin = 32;
+
+	// Validate the full-format parameters, mirroring the reference device.
+	if (pInitInfo->ulSizeofThisStructure != sizeof(CK_RUTOKEN_INIT_PARAM))
+		return CKR_ARGUMENTS_BAD;
+	if (pInitInfo->pNewAdminPin == NULL_PTR || pInitInfo->pNewUserPin == NULL_PTR)
+		return CKR_ARGUMENTS_BAD;
+	if (pInitInfo->ulMinAdminPinLen < modelMinPin || pInitInfo->ulMinAdminPinLen > modelMaxPin ||
+	    pInitInfo->ulMinUserPinLen < modelMinPin || pInitInfo->ulMinUserPinLen > modelMaxPin)
+		return CKR_ARGUMENTS_BAD;
+	if (pInitInfo->ulNewAdminPinLen < pInitInfo->ulMinAdminPinLen ||
+	    pInitInfo->ulNewAdminPinLen > modelMaxPin ||
+	    pInitInfo->ulNewUserPinLen < pInitInfo->ulMinUserPinLen ||
+	    pInitInfo->ulNewUserPinLen > modelMaxPin)
+		return CKR_ARGUMENTS_BAD;
+	// The device's user floor is 1; this model cannot store a retry budget
+	// below 3, so both counts share the 3..10 range (JOURNAL departure).
+	if (pInitInfo->ulMaxAdminRetryCount < 3 || pInitInfo->ulMaxAdminRetryCount > 10 ||
+	    pInitInfo->ulMaxUserRetryCount < 3 || pInitInfo->ulMaxUserRetryCount > 10)
+		return CKR_ARGUMENTS_BAD;
+	const CK_FLAGS changeUserPinBits =
+		TOKEN_FLAGS_ADMIN_CHANGE_USER_PIN | TOKEN_FLAGS_USER_CHANGE_USER_PIN;
+	if ((pInitInfo->ChangeUserPINPolicy & changeUserPinBits) == 0 ||
+	    (pInitInfo->ChangeUserPINPolicy & ~changeUserPinBits) != 0)
+		return CKR_ARGUMENTS_BAD;
+	// The reference label buffer is larger; this model's label is 32 bytes.
+	if (pInitInfo->ulLabelLen > 32 ||
+	    (pInitInfo->pTokenLabel == NULL_PTR && pInitInfo->ulLabelLen != 0))
+		return CKR_ARGUMENTS_BAD;
+
+	// Space-pad the label to 32 bytes as every other label here is.
+	CK_UTF8CHAR label[32];
+	memset(label, ' ', sizeof(label));
+	if (pInitInfo->ulLabelLen != 0)
+		memcpy(label, pInitInfo->pTokenLabel, pInitInfo->ulLabelLen);
+
+	Token::PinPolicy policy;
+	policy.minLength = static_cast<unsigned char>(pInitInfo->ulMinUserPinLen);
+	policy.maxLength = static_cast<unsigned char>(modelMaxPin);
+	policy.maxSO = policy.leftSO = static_cast<unsigned char>(pInitInfo->ulMaxAdminRetryCount);
+	policy.maxUser = policy.leftUser = static_cast<unsigned char>(pInitInfo->ulMaxUserRetryCount);
+
+	ByteString soPIN;
+	if (pPin != NULL_PTR) soPIN = ByteString(pPin, ulPinLen);
+	ByteString newSOPIN(pInitInfo->pNewAdminPin, pInitInfo->ulNewAdminPinLen);
+	ByteString newUserPIN(pInitInfo->pNewUserPin, pInitInfo->ulNewUserPinLen);
+
+	Token* token = slot->getToken();
+	const bool wasInitialised = token != NULL && token->isInitialized();
+
+	const CK_RV rv = slot->initTokenExtended(pInitInfo->UseRepairMode != 0, soPIN,
+	                                         newSOPIN, newUserPIN, policy, label);
+
+	// A previously uninitialised spare joining the visible list is the one
+	// change a watcher would see as a slot event, exactly as in C_InitToken.
+	if (rv == CKR_OK && !wasInitialised) postSlotEvent(slotID);
+
+	return rv;
+}
+
 CK_RV SoftHSM::C_EX_UnblockUserPIN(CK_SESSION_HANDLE hSession)
 {
 	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;

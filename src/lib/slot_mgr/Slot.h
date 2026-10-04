@@ -57,6 +57,11 @@ public:
 	// Initialise the token in the slot
 	CK_RV initToken(ByteString& pin, CK_UTF8CHAR_PTR label);
 
+	// Full-format initialisation for the Rutoken C_EX_InitToken extension
+	CK_RV initTokenExtended(bool repairMode, ByteString& soPIN, ByteString& newSOPIN,
+	                        ByteString& newUserPIN, const Token::PinPolicy& policy,
+	                        CK_UTF8CHAR_PTR label);
+
 	// Retrieve slot information for the slot
 	CK_RV getSlotInfo(CK_SLOT_INFO_PTR info);
 

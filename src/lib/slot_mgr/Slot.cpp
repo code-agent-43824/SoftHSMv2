@@ -73,6 +73,15 @@ CK_RV Slot::initToken(ByteString& soPIN, CK_UTF8CHAR_PTR label)
 	return token->createToken(objectStore, soPIN, label);
 }
 
+// Full-format initialisation for the Rutoken C_EX_InitToken extension
+CK_RV Slot::initTokenExtended(bool repairMode, ByteString& soPIN, ByteString& newSOPIN,
+                              ByteString& newUserPIN, const Token::PinPolicy& policy,
+                              CK_UTF8CHAR_PTR label)
+{
+	return token->initTokenExtended(objectStore, repairMode, soPIN, newSOPIN,
+	                                newUserPIN, policy, label);
+}
+
 // Retrieve slot information for the slot
 CK_RV Slot::getSlotInfo(CK_SLOT_INFO_PTR info)
 {

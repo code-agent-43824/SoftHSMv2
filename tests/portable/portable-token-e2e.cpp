@@ -3878,6 +3878,249 @@ static void verifyCoreBehaviour(const fs::path& modulePath)
     std::cout << "core PKCS #11 behaviour verified\n";
 }
 
+// The Rutoken C_EX_InitToken extension: full-format the token, setting the SO
+// PIN, the user PIN and the security parameters in one call, and - its reason
+// for existing - format without the SO PIN in repair mode once the SO PIN is
+// locked. Runs under the profile, against a token the battery seeds with the
+// current SO and user PIN both P11_TEST_SO_PIN / P11_TEST_USER_PIN.
+static void verifyExtendedInitToken(const fs::path& modulePath)
+{
+    Module module(modulePath);
+
+    // Reach the extended table the way an application does.
+    auto getList = reinterpret_cast<CK_C_EX_GetFunctionListExtended>(
+        module.symbol("C_EX_GetFunctionListExtended"));
+    if (getList == nullptr) fail("C_EX_GetFunctionListExtended was not exported");
+    CK_FUNCTION_LIST_EXTENDED_PTR ex = nullptr;
+    callOk("C_EX_GetFunctionListExtended", "ppFunctionList=&extendedList",
+           [&] { return getList(&ex); });
+    if (ex == nullptr || ex->C_EX_InitToken == nullptr)
+        fail("the extended table does not expose C_EX_InitToken");
+
+    const CK_SLOT_ID slot = selectSlot(module, true);
+    const std::string soPin = environment("P11_TEST_SO_PIN", true);
+    const std::string userPin = environment("P11_TEST_USER_PIN", true);
+    const std::string wrongPin = "00000000";
+
+    auto fillParam = [](CK_RUTOKEN_INIT_PARAM& raw, const std::string& admin,
+                        const std::string& user, CK_ULONG adminRetries,
+                        CK_ULONG userRetries, const std::string& label, CK_ULONG repair) {
+        raw = CK_RUTOKEN_INIT_PARAM{};
+        raw.ulSizeofThisStructure = sizeof(CK_RUTOKEN_INIT_PARAM);
+        raw.UseRepairMode = repair;
+        raw.pNewAdminPin = reinterpret_cast<CK_BYTE_PTR>(const_cast<char*>(admin.data()));
+        raw.ulNewAdminPinLen = static_cast<CK_ULONG>(admin.size());
+        raw.pNewUserPin = reinterpret_cast<CK_BYTE_PTR>(const_cast<char*>(user.data()));
+        raw.ulNewUserPinLen = static_cast<CK_ULONG>(user.size());
+        raw.ChangeUserPINPolicy = TOKEN_FLAGS_ADMIN_CHANGE_USER_PIN | TOKEN_FLAGS_USER_CHANGE_USER_PIN;
+        raw.ulMinAdminPinLen = 6;
+        raw.ulMinUserPinLen = 6;
+        raw.ulMaxAdminRetryCount = adminRetries;
+        raw.ulMaxUserRetryCount = userRetries;
+        raw.pTokenLabel = label.empty() ? nullptr
+            : reinterpret_cast<CK_BYTE_PTR>(const_cast<char*>(label.data()));
+        raw.ulLabelLen = static_cast<CK_ULONG>(label.size());
+        raw.ulSmMode = 0;
+    };
+
+    auto exInit = [&](const char* what, const std::string& pin, CK_RUTOKEN_INIT_PARAM* param,
+                      CK_RV expected) {
+        check(invoke("C_EX_InitToken", what, [&] {
+            return ex->C_EX_InitToken(slot,
+                reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(pin.data())),
+                static_cast<CK_ULONG>(pin.size()), param);
+        }), expected, what);
+    };
+
+    auto loginResult = [&](CK_USER_TYPE user, const std::string& pin) -> CK_RV {
+        CK_SESSION_HANDLE s = openSession(module, slot);
+        CK_RV rv = invoke("C_Login", std::string("probe ") +
+                          (user == CKU_SO ? "CKU_SO" : "CKU_USER") + " login",
+                          [&] { return module->C_Login(s, user,
+                              reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(pin.data())),
+                              static_cast<CK_ULONG>(pin.size())); });
+        if (rv == CKR_OK) logout(module, s, user == CKU_SO ? "CKU_SO" : "CKU_USER");
+        closeSession(module, s);
+        return rv;
+    };
+
+    auto countByLabel = [&](const std::string& withUserPin, const std::string& label) -> CK_ULONG {
+        CK_SESSION_HANDLE s = openSession(module, slot);
+        login(module, s, CKU_USER, withUserPin);
+        CK_ATTRIBUTE query{CKA_LABEL, const_cast<char*>(label.data()),
+                           static_cast<CK_ULONG>(label.size())};
+        callOk("C_FindObjectsInit", "count objects labelled '" + label + "'",
+               [&] { return module->C_FindObjectsInit(s, &query, 1); });
+        CK_ULONG total = 0;
+        for (;;)
+        {
+            CK_OBJECT_HANDLE handle = CK_INVALID_HANDLE;
+            CK_ULONG got = 0;
+            callOk("C_FindObjects", "enumerate labelled objects",
+                   [&] { return module->C_FindObjects(s, &handle, 1, &got); });
+            if (got == 0) break;
+            ++total;
+        }
+        callOk("C_FindObjectsFinal", "finish enumeration",
+               [&] { return module->C_FindObjectsFinal(s); });
+        logout(module, s, "CKU_USER");
+        closeSession(module, s);
+        return total;
+    };
+
+    auto extendedRetries = [&](CK_ULONG& maxAdmin, CK_ULONG& leftAdmin,
+                               CK_ULONG& maxUser, CK_ULONG& leftUser) {
+        CK_TOKEN_INFO_EXTENDED extended{};
+        extended.ulSizeofThisStructure = sizeof(extended);
+        callOk("C_EX_GetTokenInfoExtended", "read back retry counters",
+               [&] { return ex->C_EX_GetTokenInfoExtended(slot, &extended); });
+        maxAdmin = extended.ulMaxAdminRetryCount; leftAdmin = extended.ulAdminRetryCountLeft;
+        maxUser = extended.ulMaxUserRetryCount; leftUser = extended.ulUserRetryCountLeft;
+    };
+
+    // Phase A: leave a private object on the token, to prove the format wipes it.
+    const std::string victimLabel = "ex-init-victim";
+    {
+        CK_SESSION_HANDLE s = openSession(module, slot);
+        login(module, s, CKU_USER, userPin);
+        CK_OBJECT_CLASS dataClass = CKO_DATA;
+        CK_BBOOL yes = CK_TRUE;
+        CK_BYTE value[4] = {0x01, 0x02, 0x03, 0x04};
+        CK_ATTRIBUTE tmpl[] = {
+            {CKA_CLASS, &dataClass, sizeof(dataClass)},
+            {CKA_TOKEN, &yes, sizeof(yes)},
+            {CKA_PRIVATE, &yes, sizeof(yes)},
+            {CKA_LABEL, const_cast<char*>(victimLabel.data()),
+             static_cast<CK_ULONG>(victimLabel.size())},
+            {CKA_VALUE, value, sizeof(value)},
+        };
+        CK_OBJECT_HANDLE object = CK_INVALID_HANDLE;
+        callOk("C_CreateObject", "seed a private data object to be wiped",
+               [&] { return module->C_CreateObject(s, tmpl, 5, &object); });
+        logout(module, s, "CKU_USER");
+        closeSession(module, s);
+    }
+    if (countByLabel(userPin, victimLabel) == 0)
+        fail("the object seeded for the wipe check was not stored");
+
+    // Phase B: every malformed parameter block is refused before the token is
+    // touched. Each starts from a valid block and corrupts one field.
+    const std::string newAdmin = "87654321";
+    const std::string newUser = "11223344";
+    const std::string labelA = "Formatted A";
+    {
+        CK_RUTOKEN_INIT_PARAM good;
+        fillParam(good, newAdmin, newUser, 5, 7, labelA, 0);
+        exInit("C_EX_InitToken(pInitInfo=NULL)", soPin, nullptr, CKR_ARGUMENTS_BAD);
+        CK_RUTOKEN_INIT_PARAM bad;
+        bad = good; bad.ulSizeofThisStructure = sizeof(bad) - 1;
+        exInit("C_EX_InitToken(bad ulSizeofThisStructure)", soPin, &bad, CKR_ARGUMENTS_BAD);
+        bad = good; bad.pNewAdminPin = nullptr;
+        exInit("C_EX_InitToken(null new admin PIN)", soPin, &bad, CKR_ARGUMENTS_BAD);
+        bad = good; bad.pNewUserPin = nullptr;
+        exInit("C_EX_InitToken(null new user PIN)", soPin, &bad, CKR_ARGUMENTS_BAD);
+        bad = good; bad.ulNewUserPinLen = 5;
+        exInit("C_EX_InitToken(new user PIN below minimum)", soPin, &bad, CKR_ARGUMENTS_BAD);
+        bad = good; bad.ulMaxAdminRetryCount = 2;
+        exInit("C_EX_InitToken(admin retry count below range)", soPin, &bad, CKR_ARGUMENTS_BAD);
+        bad = good; bad.ulMaxUserRetryCount = 11;
+        exInit("C_EX_InitToken(user retry count above range)", soPin, &bad, CKR_ARGUMENTS_BAD);
+        bad = good; bad.ChangeUserPINPolicy = 0;
+        exInit("C_EX_InitToken(no change-user-PIN policy bit)", soPin, &bad, CKR_ARGUMENTS_BAD);
+        bad = good; bad.ChangeUserPINPolicy |= 0x10000000UL;
+        exInit("C_EX_InitToken(unknown change-user-PIN policy bit)", soPin, &bad, CKR_ARGUMENTS_BAD);
+        bad = good; bad.ulLabelLen = 33;
+        exInit("C_EX_InitToken(label longer than the field)", soPin, &bad, CKR_ARGUMENTS_BAD);
+    }
+    // The token survived the rejected calls intact.
+    if (countByLabel(userPin, victimLabel) == 0)
+        fail("a rejected C_EX_InitToken call altered the token");
+
+    // Phase C: repair mode is refused while the SO PIN is still live, with the
+    // device's length-error disguise.
+    {
+        CK_RUTOKEN_INIT_PARAM repair;
+        fillParam(repair, newAdmin, newUser, 5, 7, labelA, 1);
+        exInit("C_EX_InitToken(repair mode, SO PIN not locked)", std::string(), &repair,
+               CKR_PIN_LEN_RANGE);
+    }
+
+    // Phase D: a wrong SO PIN in normal mode is refused and costs an attempt.
+    {
+        CK_RUTOKEN_INIT_PARAM good;
+        fillParam(good, newAdmin, newUser, 5, 7, labelA, 0);
+        exInit("C_EX_InitToken(wrong SO PIN)", wrongPin, &good, CKR_PIN_INCORRECT);
+    }
+
+    // Phase E: normal-mode format with the correct SO PIN sets everything.
+    {
+        CK_RUTOKEN_INIT_PARAM good;
+        fillParam(good, newAdmin, newUser, 5, 7, labelA, 0);
+        exInit("C_EX_InitToken(format with the SO PIN)", soPin, &good, CKR_OK);
+
+        const CK_TOKEN_INFO info = tokenInfo(module, slot);
+        if (paddedText(info.label, sizeof(info.label)) != labelA)
+            fail("C_EX_InitToken did not apply the requested label");
+        CK_ULONG maxAdmin = 0, leftAdmin = 0, maxUser = 0, leftUser = 0;
+        extendedRetries(maxAdmin, leftAdmin, maxUser, leftUser);
+        if (maxAdmin != 5 || leftAdmin != 5 || maxUser != 7 || leftUser != 7)
+            fail("C_EX_InitToken did not apply the requested retry counters");
+        if (countByLabel(newUser, victimLabel) != 0)
+            fail("C_EX_InitToken did not wipe the token's objects");
+        if (loginResult(CKU_SO, newAdmin) != CKR_OK)
+            fail("the new SO PIN does not work after C_EX_InitToken");
+        if (loginResult(CKU_USER, newUser) != CKR_OK)
+            fail("the new user PIN does not work after C_EX_InitToken");
+        if (loginResult(CKU_USER, userPin) != CKR_PIN_INCORRECT)
+            fail("the old user PIN still works after C_EX_InitToken");
+    }
+
+    // Phase F: lock the SO PIN, then repair-mode format without presenting it.
+    {
+        CK_SESSION_HANDLE s = openSession(module, slot);
+        bool locked = false;
+        for (int attempt = 0; attempt < 12 && !locked; ++attempt)
+        {
+            CK_RV rv = invoke("C_Login", "lock SO: deliberate wrong attempt",
+                              [&] { return module->C_Login(s, CKU_SO,
+                                  reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(wrongPin.data())),
+                                  static_cast<CK_ULONG>(wrongPin.size())); });
+            if (rv == CKR_PIN_LOCKED) locked = true;
+            else check(rv, CKR_PIN_INCORRECT, "wrong SO attempt before the lock");
+        }
+        if (!locked) fail("the SO PIN never locked after repeated wrong attempts");
+        closeSession(module, s);
+
+        const std::string repairAdmin = "99887766";
+        const std::string repairUser = "55667788";
+        const std::string labelB = "Repaired B";
+        CK_RUTOKEN_INIT_PARAM repair;
+        fillParam(repair, repairAdmin, repairUser, 6, 8, labelB, 1);
+        exInit("C_EX_InitToken(repair mode, SO PIN locked)", std::string(), &repair, CKR_OK);
+
+        CK_ULONG maxAdmin = 0, leftAdmin = 0, maxUser = 0, leftUser = 0;
+        extendedRetries(maxAdmin, leftAdmin, maxUser, leftUser);
+        if (maxAdmin != 6 || leftAdmin != 6 || maxUser != 8 || leftUser != 8)
+            fail("repair-mode C_EX_InitToken did not reset the retry counters");
+        if (loginResult(CKU_SO, repairAdmin) != CKR_OK)
+            fail("the repaired SO PIN does not work");
+        if (loginResult(CKU_USER, repairUser) != CKR_OK)
+            fail("the repaired user PIN does not work");
+    }
+
+    // Phase G: a token with an open session cannot be formatted.
+    {
+        CK_SESSION_HANDLE held = openSession(module, slot);
+        CK_RUTOKEN_INIT_PARAM good;
+        const std::string a = "12121212", u = "34343434", l = "X";
+        fillParam(good, a, u, 5, 5, l, 0);
+        exInit("C_EX_InitToken(session open)", std::string("99887766"), &good, CKR_SESSION_EXISTS);
+        closeSession(module, held);
+    }
+
+    std::cout << "C_EX_InitToken behaviour verified\n";
+}
+
 // The vendor hardware-feature object. Five of Rutoken Plugin's methods begin by
 // searching for it, and read its capability attributes from it in one call
 // with buffers already sized - so both the search and the exact lengths matter.
@@ -5852,6 +6095,18 @@ static void runBattery(const fs::path& modulePath, const fs::path& workRoot)
         clearEnvVar("P11_PROFILE_EXPECTED_LABEL");
     }
 
+    // ex-init-token: the Rutoken C_EX_InitToken extension, profile on, against a
+    // token this case seeds itself so the format has something to wipe.
+    {
+        trace("BATTERY", "case ex-init-token");
+        const fs::path dir = workRoot / "ex-init-token";
+        setEnvVar("SOFTHSM2_CONF", writeBatteryConfig(dir, true).generic_string());
+        setEnvVar("P11_TEST_SO_PIN", soPin);
+        setEnvVar("P11_TEST_USER_PIN", userPin);
+        batteryInitToken(modulePath, "Rutoken ECP", soPin, userPin);
+        verifyExtendedInitToken(modulePath);
+    }
+
     // core-behaviour: plain PKCS #11, profile off, with the store directory
     // exposed so the case can confirm private attributes are stored encrypted.
     {
@@ -5925,6 +6180,11 @@ int main(int argc, char** argv)
             verifyCoreBehaviour(fs::absolute(argv[2]));
             return 0;
         }
+        if (argc == 3 && std::string(argv[1]) == "ex-init-token")
+        {
+            verifyExtendedInitToken(fs::absolute(argv[2]));
+            return 0;
+        }
         std::cerr << "usage:\n"
                   << "  portable-token-e2e battery <module> <work-directory>\n"
                   << "  portable-token-e2e probe <module>\n"
@@ -5936,6 +6196,7 @@ int main(int argc, char** argv)
                   << "  portable-token-e2e finish <module> <work> <leaf.der> <ca.der> <payload> <cms.der>\n"
                   << "  portable-token-e2e ready <module>\n"
                   << "  portable-token-e2e core-behaviour <module>\n"
+                  << "  portable-token-e2e ex-init-token <module>\n"
                   << "environment:\n"
                   << "  P11_TEST_USER_PIN=<required secret>\n"
                   << "  P11_TEST_INITIALIZE_TOKEN=YES|NO (default NO)\n"

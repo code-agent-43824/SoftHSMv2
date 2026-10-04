@@ -230,3 +230,22 @@ jobs:
           P11_TEST_USER_PIN=12345678 \
           P11_TEST_STORE_DIR="$HOME/softhsm/tokens" \
             ./portable-token-e2e core-behaviour "$module"
+      # The Rutoken C_EX_InitToken extension: full-format the token - with the
+      # SO PIN, and in repair mode without it once the SO PIN is locked - and
+      # set the security parameters. Needs an initialized token under the
+      # profile, created here on slot 0 the documented way. Windows and macOS
+      # reach the same check through the battery in the release verifier jobs.
+      - name: Verify the Rutoken C_EX_InitToken extension
+        run: |
+          export HOME="$GITHUB_WORKSPACE/ex-init-token-home"
+          mkdir -p "$HOME"
+          module="$GITHUB_WORKSPACE/portable-product/libsofthsm2.so"
+          ./portable-token-e2e probe "$module"
+          perl -0pi -e 's/FAKE_RUTOKEN_ECP = false/FAKE_RUTOKEN_ECP = true/' \
+            "$HOME/softhsm/softhsm.conf"
+          "$GITHUB_WORKSPACE/portable-product/softhsm2-util" \
+            --module "$module" --init-token --slot 0 --label 'Rutoken ECP' \
+            --so-pin 12345678 --pin 12345678
+          P11_TEST_SO_PIN=12345678 \
+          P11_TEST_USER_PIN=12345678 \
+            ./portable-token-e2e ex-init-token "$module"

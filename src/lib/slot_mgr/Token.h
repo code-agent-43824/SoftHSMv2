@@ -62,6 +62,16 @@ public:
 	// Create a new token
 	CK_RV createToken(ObjectStore* objectStore, ByteString& soPIN, CK_UTF8CHAR_PTR label);
 
+	// Full-format initialisation for the Rutoken C_EX_InitToken extension: wipe
+	// the token and set a fresh SO PIN, user PIN and PIN policy in one step. In
+	// repair mode it formats without the old SO PIN, which is the point of the
+	// call on a real device; otherwise soPIN is the current SO PIN and is
+	// verified first.
+	CK_RV initTokenExtended(ObjectStore* objectStore, bool repairMode,
+	                        ByteString& soPIN, ByteString& newSOPIN,
+	                        ByteString& newUserPIN, const PinPolicy& policy,
+	                        CK_UTF8CHAR_PTR label);
+
 	// Is the token valid?
 	bool isValid();
 

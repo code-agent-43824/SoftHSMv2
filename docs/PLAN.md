@@ -142,23 +142,34 @@
       `CKR_TEMPLATE_INCONSISTENT`; побайтовая сверка с TC26 остаётся на нашем
       модуле (сквозной тест).
 
-- [~] **`C_EX_InitToken` — форматирование токена и параметры безопасности.**
-      Сейчас отвечает `CKR_FUNCTION_NOT_SUPPORTED` (`src/lib/main.cpp`). Задание
-      владельца 03.10: реализовать по образцу соседнего проекта
-      `code-agent-43824/opensc` (заглушка `tests/rutoken-stub.c`,
-      `format_token`/`C_EX_InitToken`, тег `0.27.1-portable.6`). Главный смысл —
-      **форматирование токена без PIN-кода SO** (режим `UseRepairMode`) и
-      установка параметров безопасности из `CK_RUTOKEN_INIT_PARAM` (новые
-      SO/user PIN, максимумы попыток SO 3–10 и user 1–10, минимумы длины,
-      политика смены user PIN, метка). Семантика как в заглушке: открытых
-      сессий быть не должно (`CKR_SESSION_EXISTS`); без repair — проверка SO
-      PIN; с repair — форматирование без SO PIN (на устройстве repair разрешён
-      лишь при заблокированном SO PIN, иначе `CKR_PIN_LEN_RANGE`);
-      форматирование стирает объекты и локальные PIN, сбрасывает счётчики и
-      `*_PIN_NOT_DEFAULT`, ставит метку. Границы длины — наши 6–32. Под
-      профилем; вне профиля — `CKR_FUNCTION_NOT_SUPPORTED`. Проба 03.10 этот
-      путь не сняла (вендор вернул `CKR_ARGUMENTS_BAD`), поэтому поведение
-      берём из заглушки OpenSC, а не из трассы.
+- [x] **`C_EX_InitToken` — форматирование токена и параметры безопасности.**
+      Реализовано по образцу соседнего проекта `code-agent-43824/opensc`
+      (заглушка `tests/rutoken-stub.c`, `format_token`/`C_EX_InitToken`, тег
+      `0.27.1-portable.6`). Главный смысл — **форматирование токена без PIN-кода
+      SO** (режим `UseRepairMode`) и установка параметров безопасности из
+      `CK_RUTOKEN_INIT_PARAM`. `src/lib/main.cpp` делегирует в
+      `SoftHSM::C_EX_InitToken` (профиль-гейт `FAKE_RUTOKEN_ECP`, вне профиля —
+      `CKR_FUNCTION_NOT_SUPPORTED`): разбор слота как в `C_InitToken`,
+      `CKR_SESSION_EXISTS` при открытой сессии, валидация `CK_RUTOKEN_INIT_PARAM`
+      как в заглушке, затем авторизация и форматирование через новый
+      `Token::initTokenExtended` (+`Slot::initTokenExtended`). Без repair SO PIN
+      проверяется через одноразовый `SecureDataManager` (неверный — списывает
+      попытку, `CKR_PIN_INCORRECT`); с repair форматирование идёт без SO PIN, но
+      лишь при заблокированном SO PIN, иначе `CKR_PIN_LEN_RANGE` (как на
+      устройстве). Форматирование стирает объекты и старые PIN, ставит новый SO и
+      user PIN и свежую PIN-политику (счётчики полны), применяет метку; событие
+      слота — как в `C_InitToken`, только когда инициализируется ранее пустой
+      запасной токен. **Два отступления от устройства/заглушки, под нашу модель
+      хранения (JOURNAL 04.10):** нижняя граница попыток user — 3, а не 1
+      (хранилище не держит бюджет меньше 3), поэтому оба счётчика в диапазоне
+      3–10; метка — 32 байта, а не 255. Проба 03.10 этот путь не сняла (вендор
+      вернул `CKR_ARGUMENTS_BAD`), поведение взято из заглушки OpenSC.
+      Покрытие: подкоманда `ex-init-token` в `portable-token-e2e` (фаза wipe,
+      валидация 10 кривых блоков, repair-без-блокировки → `CKR_PIN_LEN_RANGE`,
+      неверный SO → `CKR_PIN_INCORRECT`, штатный формат, блокировка→repair,
+      `CKR_SESSION_EXISTS`); отдельный шаг в `ci.yml` (Linux) и кейс `ex-init-token`
+      в battery (Windows/macOS через verifier). Локально: CTest 7/7,
+      `C_EX_InitToken behaviour verified` на профильной сборке.
 
 - [x] **Батарея e2e-тестов на Windows и macOS, не только Linux (запрос
       владельца 03.10).** Диагноз: полная батарея (`first-run`, `multi-token`,
