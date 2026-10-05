@@ -2,16 +2,15 @@
 
 Обновлено: 2026-10-05.
 
-## В работе: расширения `C_EX_InitToken`, имени и локальных PIN
+## Закрыто: расширения `C_EX_InitToken`, имени и локальных PIN (`.59`)
 
-Плановый коммит `99a2c54` уже в `main`. Код и тесты для раздельных минимумов
-PIN, `ChangeUserPINPolicy`, `C_EX_SetTokenName` и `C_EX_SetLocalPIN` готовы
-локально. E2E `ex-init-token` прошёл на файловом и SQLite backend, SQLite
-CTest — 7/7. Следующий шаг — повторить сценарий после последней правки теста,
-проверить diff и отправить код; затем дождаться и проверить платформенный CI,
-verifier и релиз. Четыре посторонних untracked-файла в корне не трогать.
-CMS-блок и `FreeBuffer` — следующий отдельный этап; `TokenManage` и
-`SlotManage` отложены владельцем.
+План `99a2c54`, код и тесты `dfc27f3` в `main`. E2E `ex-init-token` прошёл
+на файловом и SQLite backend, SQLite CTest — 7/7. CI `37313772605` и
+релизный прогон `37314172371` успешны; шесть verifier jobs подтвердили
+`ex-init-token`. Релиз `v2.7.0-portable.59` опубликован на `dfc27f3`;
+Linux x64 ZIP совпал с `SHA256SUMS` и цел. Четыре посторонних untracked-файла
+в корне не трогать. CMS-блок и `FreeBuffer` — следующий отдельный этап;
+`TokenManage` и `SlotManage` отложены владельцем.
 
 ## Закрыто: `C_EX_InitToken` (`.58`)
 
