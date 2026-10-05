@@ -1851,11 +1851,13 @@ PKCS_API CK_RV C_EX_UnblockUserPIN
 
 PKCS_API CK_RV C_EX_SetTokenName
 (
-	CK_SESSION_HANDLE /*hSession*/, CK_CHAR_PTR /*pLabel*/,
-	CK_ULONG /*ulLabelLen*/
+	CK_SESSION_HANDLE hSession, CK_CHAR_PTR pLabel,
+	CK_ULONG ulLabelLen
 )
 {
-	return CKR_FUNCTION_NOT_SUPPORTED;
+	try { return SoftHSM::i()->C_EX_SetTokenName(hSession, pLabel, ulLabelLen); }
+	catch (...) { FatalException(); }
+	return CKR_FUNCTION_FAILED;
 }
 
 PKCS_API CK_RV C_EX_SetLicense
@@ -1937,12 +1939,15 @@ PKCS_API CK_RV C_EX_GetTokenName
 
 PKCS_API CK_RV C_EX_SetLocalPIN
 (
-	CK_SLOT_ID /*slotID*/, CK_UTF8CHAR_PTR /*pUserPin*/,
-	CK_ULONG /*ulUserPinLen*/, CK_UTF8CHAR_PTR /*pNewLocalPin*/,
-	CK_ULONG /*ulNewLocalPinLen*/, CK_ULONG /*ulLocalID*/
+	CK_SLOT_ID slotID, CK_UTF8CHAR_PTR pUserPin,
+	CK_ULONG ulUserPinLen, CK_UTF8CHAR_PTR pNewLocalPin,
+	CK_ULONG ulNewLocalPinLen, CK_ULONG ulLocalID
 )
 {
-	return CKR_FUNCTION_NOT_SUPPORTED;
+	try { return SoftHSM::i()->C_EX_SetLocalPIN(slotID, pUserPin, ulUserPinLen,
+	                                             pNewLocalPin, ulNewLocalPinLen, ulLocalID); }
+	catch (...) { FatalException(); }
+	return CKR_FUNCTION_FAILED;
 }
 
 PKCS_API CK_RV C_EX_LoadActivationKey

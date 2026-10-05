@@ -90,6 +90,11 @@ public:
 
 	// Retrieve the token label
 	virtual bool getTokenLabel(ByteString& label);
+	virtual bool getTokenName(ByteString& name, bool& exists);
+	virtual bool setTokenName(const ByteString& name, const ByteString& label);
+	virtual bool getLocalPIN(CK_ULONG id, ByteString& record, bool& exists);
+	virtual bool updateLocalPIN(CK_ULONG id, const ByteString& expected,
+	                            const ByteString& replacement, bool& changed);
 
 	// Retrieve the token serial
 	virtual bool getTokenSerial(ByteString& serial);

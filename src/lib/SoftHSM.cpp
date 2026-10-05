@@ -1112,7 +1112,6 @@ namespace
 	// Constant capabilities of the reference Rutoken ECP. The "PIN is not
 	// default" bits are added from the token's own state below.
 	const CK_FLAGS FAKE_RUTOKEN_EXTENDED_FLAGS =
-		TOKEN_FLAGS_ADMIN_CHANGE_USER_PIN | TOKEN_FLAGS_USER_CHANGE_USER_PIN |
 		TOKEN_FLAGS_SUPPORT_JOURNAL | TOKEN_FLAGS_USER_PIN_UTF8 |
 		TOKEN_FLAGS_ADMIN_PIN_UTF8;
 
@@ -1149,14 +1148,14 @@ CK_RV SoftHSM::C_EX_GetTokenInfoExtended(CK_SLOT_ID slotID, CK_TOKEN_INFO_EXTEND
 	pInfo->ulMicrocodeNumber = FAKE_RUTOKEN_MICROCODE_NUMBER;
 	pInfo->ulOrderNumber = FAKE_RUTOKEN_ORDER_NUMBER;
 
-	pInfo->flags = FAKE_RUTOKEN_EXTENDED_FLAGS;
+	pInfo->flags = FAKE_RUTOKEN_EXTENDED_FLAGS | policy.changeUserPINPolicy;
 	if ((tokenInfo.flags & CKF_TOKEN_INITIALIZED) != 0)
 		pInfo->flags |= TOKEN_FLAGS_ADMIN_PIN_NOT_DEFAULT;
 	if ((tokenInfo.flags & CKF_USER_PIN_INITIALIZED) != 0)
 		pInfo->flags |= TOKEN_FLAGS_USER_PIN_NOT_DEFAULT;
 
 	pInfo->ulMaxAdminPinLen = policy.maxLength;
-	pInfo->ulMinAdminPinLen = policy.minLength;
+	pInfo->ulMinAdminPinLen = policy.minSOLength;
 	pInfo->ulMaxUserPinLen = policy.maxLength;
 	pInfo->ulMinUserPinLen = policy.minLength;
 	pInfo->ulMaxAdminRetryCount = policy.maxSO;
@@ -1237,9 +1236,9 @@ CK_RV SoftHSM::C_EX_InitToken(CK_SLOT_ID slotID, CK_UTF8CHAR_PTR pPin,
 
 	if (pInitInfo == NULL_PTR) return CKR_ARGUMENTS_BAD;
 
-	// This model stores a single min/max PIN length and a 3..15 retry budget,
-	// so the device's separate admin/user minima collapse onto one floor of 6
-	// and a ceiling of 32, and the retry counts are bounded accordingly.
+	// This model stores separate admin/user minima, a common maximum PIN
+	// length, and a 3..15 retry budget. The extended call accepts the
+	// reference device's narrower 3..10 maximum retry count.
 	const CK_ULONG modelMinPin = 6;
 	const CK_ULONG modelMaxPin = 32;
 
@@ -1270,6 +1269,8 @@ CK_RV SoftHSM::C_EX_InitToken(CK_SLOT_ID slotID, CK_UTF8CHAR_PTR pPin,
 	if (pInitInfo->ulLabelLen > 32 ||
 	    (pInitInfo->pTokenLabel == NULL_PTR && pInitInfo->ulLabelLen != 0))
 		return CKR_ARGUMENTS_BAD;
+	if (pInitInfo->ulSmMode != 0) return CKR_ARGUMENTS_BAD;
+	if (pPin == NULL_PTR && ulPinLen != 0) return CKR_ARGUMENTS_BAD;
 
 	// Space-pad the label to 32 bytes as every other label here is.
 	CK_UTF8CHAR label[32];
@@ -1279,7 +1280,9 @@ CK_RV SoftHSM::C_EX_InitToken(CK_SLOT_ID slotID, CK_UTF8CHAR_PTR pPin,
 
 	Token::PinPolicy policy;
 	policy.minLength = static_cast<unsigned char>(pInitInfo->ulMinUserPinLen);
+	policy.minSOLength = static_cast<unsigned char>(pInitInfo->ulMinAdminPinLen);
 	policy.maxLength = static_cast<unsigned char>(modelMaxPin);
+	policy.changeUserPINPolicy = static_cast<unsigned char>(pInitInfo->ChangeUserPINPolicy);
 	policy.maxSO = policy.leftSO = static_cast<unsigned char>(pInitInfo->ulMaxAdminRetryCount);
 	policy.maxUser = policy.leftUser = static_cast<unsigned char>(pInitInfo->ulMaxUserRetryCount);
 
@@ -1352,6 +1355,11 @@ CK_RV SoftHSM::C_EX_GetTokenName(CK_SESSION_HANDLE hSession, CK_CHAR_PTR pLabel,
 	// what is left once the padding is gone.
 	size_t labelLen = sizeof(tokenInfo.label);
 	while (labelLen > 0 && tokenInfo.label[labelLen - 1] == ' ') labelLen--;
+	ByteString fullName;
+	bool hasFullName = false;
+	Token* token = session->getToken();
+	if (token == NULL || !token->getTokenName(fullName, hasFullName)) return CKR_DEVICE_ERROR;
+	if (hasFullName && fullName.size() != 0) labelLen = fullName.size();
 
 	if (pLabel == NULL_PTR)
 	{
@@ -1364,9 +1372,44 @@ CK_RV SoftHSM::C_EX_GetTokenName(CK_SESSION_HANDLE hSession, CK_CHAR_PTR pLabel,
 		return CKR_BUFFER_TOO_SMALL;
 	}
 
-	memcpy(pLabel, tokenInfo.label, labelLen);
+	if (labelLen != 0)
+		memcpy(pLabel, hasFullName && fullName.size() != 0 ? fullName.const_byte_str() : tokenInfo.label, labelLen);
 	*pulLabelLen = (CK_ULONG) labelLen;
 	return CKR_OK;
+}
+
+CK_RV SoftHSM::C_EX_SetTokenName(CK_SESSION_HANDLE hSession, CK_CHAR_PTR pLabel, CK_ULONG ulLabelLen)
+{
+	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;
+	if (!fakeRutokenECP) return CKR_FUNCTION_NOT_SUPPORTED;
+	Session* session = (Session*)handleManager->getSession(hSession);
+	if (session == NULL) return CKR_SESSION_HANDLE_INVALID;
+	if (session->getState() == CKS_RO_PUBLIC_SESSION ||
+	    session->getState() == CKS_RO_USER_FUNCTIONS) return CKR_SESSION_READ_ONLY;
+	if (session->getState() != CKS_RW_USER_FUNCTIONS) return CKR_USER_NOT_LOGGED_IN;
+	if ((pLabel == NULL_PTR && ulLabelLen != 0) || ulLabelLen > 255) return CKR_ARGUMENTS_BAD;
+	ByteString name;
+	if (ulLabelLen != 0) name = ByteString((const unsigned char*)pLabel, ulLabelLen);
+	Token* token = session->getToken();
+	return token == NULL ? CKR_GENERAL_ERROR : token->setTokenName(name);
+}
+
+CK_RV SoftHSM::C_EX_SetLocalPIN(CK_SLOT_ID slotID, CK_UTF8CHAR_PTR pUserPin,
+                                CK_ULONG ulUserPinLen, CK_UTF8CHAR_PTR pNewLocalPin,
+                                CK_ULONG ulNewLocalPinLen, CK_ULONG ulLocalID)
+{
+	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;
+	if (!fakeRutokenECP) return CKR_FUNCTION_NOT_SUPPORTED;
+	if (slotID >= fakeRutokenLayout().size())
+		return slotID < FAKE_RUTOKEN_SLOT_COUNT ? CKR_TOKEN_NOT_PRESENT : CKR_SLOT_ID_INVALID;
+	Slot* slot = fakeRutokenSlot(slotID);
+	if (slot == NULL || slot->getToken() == NULL) return CKR_TOKEN_NOT_PRESENT;
+	if (ulLocalID < 3 || ulLocalID > 31 || pUserPin == NULL_PTR ||
+	    pNewLocalPin == NULL_PTR || ulNewLocalPinLen == 0 || ulNewLocalPinLen > 249)
+		return CKR_ARGUMENTS_BAD;
+	ByteString currentPIN(pUserPin, ulUserPinLen);
+	ByteString newPIN(pNewLocalPin, ulNewLocalPinLen);
+	return slot->getToken()->setLocalPIN(ulLocalID, currentPIN, newPIN);
 }
 
 void SoftHSM::prepareSupportedMechanisms(std::map<std::string, CK_MECHANISM_TYPE> &t)
@@ -2504,6 +2547,8 @@ CK_RV SoftHSM::C_InitPIN(CK_SESSION_HANDLE hSession, CK_UTF8CHAR_PTR pPin, CK_UL
 	if (pPin == NULL_PTR) return CKR_ARGUMENTS_BAD;
 	Token::PinPolicy policy;
 	if (!token->getPinPolicy(policy)) return CKR_DEVICE_ERROR;
+	if (fakeRutokenECP && !(policy.changeUserPINPolicy & TOKEN_FLAGS_ADMIN_CHANGE_USER_PIN))
+		return CKR_USER_NOT_LOGGED_IN;
 	const CK_ULONG minPinLen = policy.minLength;
 	const CK_ULONG maxPinLen = policy.maxLength;
 	if (ulPinLen < minPinLen || ulPinLen > maxPinLen) return CKR_PIN_LEN_RANGE;
@@ -2532,8 +2577,12 @@ CK_RV SoftHSM::C_SetPIN(CK_SESSION_HANDLE hSession, CK_UTF8CHAR_PTR pOldPin, CK_
 	if (token == NULL) return CKR_GENERAL_ERROR;
 	Token::PinPolicy policy;
 	if (!token->getPinPolicy(policy)) return CKR_DEVICE_ERROR;
-	if (ulNewLen < policy.minLength || ulNewLen > policy.maxLength)
-		return CKR_PIN_LEN_RANGE;
+	const bool changingSO = session->getState() == CKS_RW_SO_FUNCTIONS;
+	if (fakeRutokenECP && !changingSO &&
+	    !(policy.changeUserPINPolicy & TOKEN_FLAGS_USER_CHANGE_USER_PIN))
+		return CKR_USER_NOT_LOGGED_IN;
+	if (ulNewLen < (changingSO ? policy.minSOLength : policy.minLength) ||
+	    ulNewLen > policy.maxLength) return CKR_PIN_LEN_RANGE;
 
 	ByteString oldPIN(pOldPin, ulOldLen);
 	ByteString newPIN(pNewPin, ulNewLen);

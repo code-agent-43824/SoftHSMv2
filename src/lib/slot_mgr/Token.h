@@ -47,9 +47,9 @@ class Token
 public:
 	struct PinPolicy
 	{
-		unsigned char minLength, maxLength;
+		unsigned char minLength, minSOLength, maxLength, changeUserPINPolicy;
 		unsigned char maxSO, maxUser, leftSO, leftUser;
-		PinPolicy() : minLength(6), maxLength(32), maxSO(10), maxUser(10),
+		PinPolicy() : minLength(6), minSOLength(6), maxLength(32), changeUserPINPolicy(3), maxSO(10), maxUser(10),
 		              leftSO(10), leftUser(10) {}
 	};
 	// Constructor
@@ -109,6 +109,9 @@ public:
 	// no creation time - written by a build from before the attribute existed.
 	bool getCreationTime(ByteString& created);
 	bool getSerial(ByteString& serial);
+	CK_RV setTokenName(const ByteString& name);
+	bool getTokenName(ByteString& name, bool& exists);
+	CK_RV setLocalPIN(CK_ULONG id, ByteString& currentPIN, ByteString& newPIN);
 
 	// Create object
 	OSObject *createObject();

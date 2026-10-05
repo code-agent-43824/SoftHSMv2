@@ -58,5 +58,7 @@
 // one; they sort as the oldest.
 #define CKA_OS_TOKENCREATED	(CKA_VENDOR_SOFTHSM + 6)
 #define CKA_OS_PINPOLICY	(CKA_VENDOR_SOFTHSM + 7)
+#define CKA_OS_TOKENNAME	(CKA_VENDOR_SOFTHSM + 8)
+#define CKA_OS_LOCALPIN(id)	(CKA_VENDOR_SOFTHSM + 0x100 + (id))
 
 #endif // !_SOFTHSM_V2_OSATTRIBUTES_H

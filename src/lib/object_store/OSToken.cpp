@@ -304,6 +304,58 @@ bool OSToken::getTokenLabel(ByteString& label)
 	}
 }
 
+bool OSToken::getTokenName(ByteString& name, bool& exists)
+{
+	if (!valid || !tokenObject->isValid()) return false;
+	exists = tokenObject->attributeExists(CKA_OS_TOKENNAME);
+	if (exists) name = tokenObject->getAttribute(CKA_OS_TOKENNAME).getByteStringValue();
+	return true;
+}
+
+bool OSToken::setTokenName(const ByteString& name, const ByteString& label)
+{
+	if (!valid || !tokenObject->startTransaction(OSObject::ReadWrite)) return false;
+	if (!tokenObject->setAttribute(CKA_OS_TOKENNAME, OSAttribute(name)) ||
+	    !tokenObject->setAttribute(CKA_OS_TOKENLABEL, OSAttribute(label)) ||
+	    !tokenObject->commitTransaction())
+	{
+		tokenObject->abortTransaction();
+		return false;
+	}
+	return true;
+}
+
+bool OSToken::getLocalPIN(CK_ULONG id, ByteString& record, bool& exists)
+{
+	if (!valid || !tokenObject->isValid()) return false;
+	exists = tokenObject->attributeExists(CKA_OS_LOCALPIN(id));
+	if (exists) record = tokenObject->getAttribute(CKA_OS_LOCALPIN(id)).getByteStringValue();
+	return true;
+}
+
+bool OSToken::updateLocalPIN(CK_ULONG id, const ByteString& expected,
+                             const ByteString& replacement, bool& changed)
+{
+	changed = false;
+	if (!valid || !tokenObject->startTransaction(OSObject::ReadWrite)) return false;
+	const bool exists = tokenObject->attributeExists(CKA_OS_LOCALPIN(id));
+	const ByteString current = exists ?
+		tokenObject->getAttribute(CKA_OS_LOCALPIN(id)).getByteStringValue() : ByteString();
+	if (current != expected)
+	{
+		tokenObject->abortTransaction();
+		return true;
+	}
+	if (!tokenObject->setAttribute(CKA_OS_LOCALPIN(id), OSAttribute(replacement)) ||
+	    !tokenObject->commitTransaction())
+	{
+		tokenObject->abortTransaction();
+		return false;
+	}
+	changed = true;
+	return true;
+}
+
 // Retrieve the token serial
 bool OSToken::getTokenSerial(ByteString& serial)
 {
@@ -408,7 +460,8 @@ bool OSToken::advancePinPolicy(bool so, bool success, ByteString& policy)
 	}
 	const size_t leftIndex = so ? 5 : 6;
 	const size_t maxIndex = so ? 3 : 4;
-	if (policy.size() != 7 || policy[0] != 1 ||
+	if (((policy.size() != 7 || policy[0] != 1) &&
+	     (policy.size() != 9 || policy[0] != 2)) ||
 	    policy[leftIndex] > policy[maxIndex])
 	{
 		tokenObject->abortTransaction();
@@ -684,6 +737,11 @@ bool OSToken::resetToken(const ByteString& label)
 
 		return false;
 	}
+	if (tokenObject->attributeExists(CKA_OS_TOKENNAME) &&
+	    !tokenObject->deleteAttribute(CKA_OS_TOKENNAME)) return false;
+	for (CK_ULONG id = 3; id <= 31; ++id)
+		if (tokenObject->attributeExists(CKA_OS_LOCALPIN(id)) &&
+		    !tokenObject->deleteAttribute(CKA_OS_LOCALPIN(id))) return false;
 
 	DEBUG_MSG("Token instance %s was succesfully reset", tokenPath.c_str());
 

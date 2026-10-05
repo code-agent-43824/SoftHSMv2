@@ -79,11 +79,16 @@ bool Token::getPinPolicy(PinPolicy& policy)
 	bool exists = false;
 	if (!token->getPinPolicy(bytes, exists)) return false;
 	if (!exists) return true; // Tokens predating this attribute.
-	if (bytes.size() != 7 || bytes[0] != 1 || bytes[1] < 6 ||
+	if ((bytes.size() != 7 && bytes.size() != 9) ||
+	    bytes[0] != (bytes.size() == 7 ? 1 : 2) || bytes[1] < 6 ||
 	    bytes[2] > 32 || bytes[1] > bytes[2] ||
 	    bytes[3] < 3 || bytes[3] > 15 || bytes[4] < 3 || bytes[4] > 15 ||
 	    bytes[5] > bytes[3] || bytes[6] > bytes[4]) return false;
+	if (bytes.size() == 9 && (bytes[7] < 6 || bytes[7] > bytes[2] ||
+	    bytes[8] < 1 || bytes[8] > 3)) return false;
 	policy.minLength = bytes[1]; policy.maxLength = bytes[2];
+	policy.minSOLength = bytes.size() == 9 ? bytes[7] : bytes[1];
+	policy.changeUserPINPolicy = bytes.size() == 9 ? bytes[8] : 3;
 	policy.maxSO = bytes[3]; policy.maxUser = bytes[4];
 	policy.leftSO = bytes[5]; policy.leftUser = bytes[6];
 	return true;
@@ -93,10 +98,11 @@ bool Token::setPinPolicy(const PinPolicy& policy)
 {
 	if (token == NULL) return false;
 	ByteString bytes;
-	bytes.resize(7);
-	bytes[0] = 1; bytes[1] = policy.minLength; bytes[2] = policy.maxLength;
+	bytes.resize(9);
+	bytes[0] = 2; bytes[1] = policy.minLength; bytes[2] = policy.maxLength;
 	bytes[3] = policy.maxSO; bytes[4] = policy.maxUser;
 	bytes[5] = policy.leftSO; bytes[6] = policy.leftUser;
+	bytes[7] = policy.minSOLength; bytes[8] = policy.changeUserPINPolicy;
 	return token->setPinPolicy(bytes);
 }
 
@@ -408,9 +414,10 @@ CK_RV Token::createToken(ObjectStore* objectStore, ByteString& soPIN, CK_UTF8CHA
 		newPolicy.maxSO = newPolicy.leftSO = static_cast<unsigned char>(so);
 		newPolicy.maxUser = newPolicy.leftUser = static_cast<unsigned char>(user);
 		newPolicy.minLength = static_cast<unsigned char>(minLen);
+		newPolicy.minSOLength = static_cast<unsigned char>(minLen);
 		newPolicy.maxLength = static_cast<unsigned char>(maxLen);
 	}
-	if (soPIN.size() < newPolicy.minLength ||
+	if (soPIN.size() < newPolicy.minSOLength ||
 	    soPIN.size() > newPolicy.maxLength) return CKR_PIN_LEN_RANGE;
 
 	// Lock access to the token
@@ -602,6 +609,76 @@ bool Token::getSerial(ByteString& serial)
 	if (token == NULL) return false;
 
 	return token->getTokenSerial(serial);
+}
+
+CK_RV Token::setTokenName(const ByteString& name)
+{
+	MutexLocker lock(tokenMutex);
+	if (token == NULL || name.size() > 255) return CKR_ARGUMENTS_BAD;
+	ByteString label;
+	label.resize(32);
+	for (size_t i = 0; i < 32; ++i) label[i] = i < name.size() ? name.const_byte_str()[i] : ' ';
+	return token->setTokenName(name, label) ? CKR_OK : CKR_DEVICE_ERROR;
+}
+
+bool Token::getTokenName(ByteString& name, bool& exists)
+{
+	MutexLocker lock(tokenMutex);
+	return token != NULL && token->getTokenName(name, exists);
+}
+
+CK_RV Token::setLocalPIN(CK_ULONG id, ByteString& currentPIN, ByteString& newPIN)
+{
+	MutexLocker lock(tokenMutex);
+	if (token == NULL || sdm == NULL) return CKR_TOKEN_NOT_PRESENT;
+	PinPolicy policy;
+	if (!getPinPolicy(policy)) return CKR_DEVICE_ERROR;
+	if (newPIN.size() < policy.minLength || newPIN.size() > 249)
+		return CKR_PIN_LEN_RANGE;
+
+	for (unsigned int attempt = 0; attempt < 16; ++attempt)
+	{
+		ByteString record;
+		bool exists = false;
+		if (!token->getLocalPIN(id, record, exists)) return CKR_DEVICE_ERROR;
+		if (exists)
+		{
+			if (record.size() < 43 || record[0] != 1 || record[1] != 10 ||
+			    record[2] > 10) return CKR_DEVICE_ERROR;
+			if (record[2] == 0) return CKR_PIN_LOCKED;
+			SecureDataManager verifier(record.substr(3), ByteString());
+			if (!verifier.loginSO(currentPIN))
+			{
+				ByteString reduced = record;
+				--reduced[2];
+				bool changed = false;
+				if (!token->updateLocalPIN(id, record, reduced, changed)) return CKR_DEVICE_ERROR;
+				if (changed) return CKR_PIN_INCORRECT;
+				continue;
+			}
+		}
+		else
+		{
+			if (pinLocked(false)) return CKR_PIN_LOCKED;
+			ByteString soBlob, userBlob;
+			if (!token->getSOPIN(soBlob) || !token->getUserPIN(userBlob))
+				return CKR_DEVICE_ERROR;
+			SecureDataManager verifier(soBlob, userBlob);
+			if (!verifier.loginUser(currentPIN)) return pinResult(false, false);
+			CK_RV result = pinResult(false, true);
+			if (result != CKR_OK) return result;
+		}
+		SecureDataManager replacement;
+		if (!replacement.setSOPIN(newPIN)) return CKR_DEVICE_ERROR;
+		ByteString next;
+		next.resize(3);
+		next[0] = 1; next[1] = 10; next[2] = 10;
+		next += replacement.getSOPINBlob();
+		bool changed = false;
+		if (!token->updateLocalPIN(id, record, next, changed)) return CKR_DEVICE_ERROR;
+		if (changed) return CKR_OK;
+	}
+	return CKR_DEVICE_ERROR;
 }
 
 // Retrieve token information for the token

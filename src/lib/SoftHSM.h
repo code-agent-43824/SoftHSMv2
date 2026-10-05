@@ -214,6 +214,10 @@ public:
 	                     CK_RUTOKEN_INIT_PARAM_PTR pInitInfo);
 	CK_RV C_EX_UnblockUserPIN(CK_SESSION_HANDLE hSession);
 	CK_RV C_EX_GetTokenName(CK_SESSION_HANDLE hSession, CK_CHAR_PTR pLabel, CK_ULONG_PTR pulLabelLen);
+	CK_RV C_EX_SetTokenName(CK_SESSION_HANDLE hSession, CK_CHAR_PTR pLabel, CK_ULONG ulLabelLen);
+	CK_RV C_EX_SetLocalPIN(CK_SLOT_ID slotID, CK_UTF8CHAR_PTR pUserPin,
+	                      CK_ULONG ulUserPinLen, CK_UTF8CHAR_PTR pNewLocalPin,
+	                      CK_ULONG ulNewLocalPinLen, CK_ULONG ulLocalID);
 
 private:
 	// Constructor

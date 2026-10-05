@@ -364,6 +364,7 @@ long long DBObject::objectId()
 
 static bool isModifiable(CK_ATTRIBUTE_TYPE type)
 {
+	if (type >= CKA_OS_LOCALPIN(3) && type <= CKA_OS_LOCALPIN(31)) return true;
 	switch (type) {
 	case CKA_LABEL:
 	case CKA_TRUSTED:
@@ -386,6 +387,7 @@ static bool isModifiable(CK_ATTRIBUTE_TYPE type)
 	case CKA_EXTRACTABLE:
 	case CKA_OS_TOKENFLAGS:
 	case CKA_OS_PINPOLICY:
+	case CKA_OS_TOKENNAME:
 	case CKA_OS_SOPIN:
 	case CKA_OS_USERPIN:
 		return true;
@@ -405,6 +407,7 @@ enum AttributeKind {
 
 static AttributeKind attributeKind(CK_ATTRIBUTE_TYPE type)
 {
+	if (type >= CKA_OS_LOCALPIN(3) && type <= CKA_OS_LOCALPIN(31)) return akBinary;
 	switch (type) {
 	case CKA_CLASS: return akInteger;
 	case CKA_TOKEN: return akBoolean;
@@ -520,6 +523,7 @@ static AttributeKind attributeKind(CK_ATTRIBUTE_TYPE type)
 	case CKA_OS_SOPIN: return akBinary;
 	case CKA_OS_USERPIN: return akBinary;
 	case CKA_OS_PINPOLICY: return akBinary;
+	case CKA_OS_TOKENNAME: return akBinary;
 
 	case CKA_PARAMETER_SET: return akInteger;
 	case CKA_SEED: return akBinary;

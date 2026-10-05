@@ -4031,6 +4031,10 @@ static void verifyExtendedInitToken(const fs::path& modulePath)
         exInit("C_EX_InitToken(unknown change-user-PIN policy bit)", soPin, &bad, CKR_ARGUMENTS_BAD);
         bad = good; bad.ulLabelLen = 33;
         exInit("C_EX_InitToken(label longer than the field)", soPin, &bad, CKR_ARGUMENTS_BAD);
+        bad = good; bad.ulSmMode = 1;
+        exInit("C_EX_InitToken(unsupported secure messaging)", soPin, &bad, CKR_ARGUMENTS_BAD);
+        bad = good; bad.ulMinAdminPinLen = 9;
+        exInit("C_EX_InitToken(admin PIN below its own minimum)", soPin, &bad, CKR_ARGUMENTS_BAD);
     }
     // The token survived the rejected calls intact.
     if (countByLabel(userPin, victimLabel) == 0)
@@ -4056,6 +4060,8 @@ static void verifyExtendedInitToken(const fs::path& modulePath)
     {
         CK_RUTOKEN_INIT_PARAM good;
         fillParam(good, newAdmin, newUser, 5, 7, labelA, 0);
+        good.ulMinAdminPinLen = 8;
+        good.ChangeUserPINPolicy = TOKEN_FLAGS_USER_CHANGE_USER_PIN;
         exInit("C_EX_InitToken(format with the SO PIN)", soPin, &good, CKR_OK);
 
         const CK_TOKEN_INFO info = tokenInfo(module, slot);
@@ -4065,6 +4071,28 @@ static void verifyExtendedInitToken(const fs::path& modulePath)
         extendedRetries(maxAdmin, leftAdmin, maxUser, leftUser);
         if (maxAdmin != 5 || leftAdmin != 5 || maxUser != 7 || leftUser != 7)
             fail("C_EX_InitToken did not apply the requested retry counters");
+        CK_TOKEN_INFO_EXTENDED extended{};
+        extended.ulSizeofThisStructure = sizeof(extended);
+        callOk("C_EX_GetTokenInfoExtended", "read back distinct PIN minima and policy",
+               [&] { return ex->C_EX_GetTokenInfoExtended(slot, &extended); });
+        if (extended.ulMinAdminPinLen != 8 || extended.ulMinUserPinLen != 6 ||
+            (extended.flags & (TOKEN_FLAGS_ADMIN_CHANGE_USER_PIN |
+                               TOKEN_FLAGS_USER_CHANGE_USER_PIN)) != TOKEN_FLAGS_USER_CHANGE_USER_PIN)
+            fail("C_EX_InitToken lost separate PIN minima or change policy");
+        CK_SESSION_HANDLE adminSession = openSession(module, slot);
+        login(module, adminSession, CKU_SO, newAdmin);
+        const std::string sixDigitPin = "654321";
+        check(invoke("C_SetPIN", "SO PIN below configured minimum", [&] {
+            return module->C_SetPIN(adminSession,
+                reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(newAdmin.data())), newAdmin.size(),
+                reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(sixDigitPin.data())), sixDigitPin.size());
+        }), CKR_PIN_LEN_RANGE, "SO minimum length");
+        check(invoke("C_InitPIN", "admin may not change user PIN", [&] {
+            return module->C_InitPIN(adminSession,
+                reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(newUser.data())), newUser.size());
+        }), CKR_USER_NOT_LOGGED_IN, "user-only PIN change policy");
+        logout(module, adminSession, "CKU_SO");
+        closeSession(module, adminSession);
         if (countByLabel(newUser, victimLabel) != 0)
             fail("C_EX_InitToken did not wipe the token's objects");
         if (loginResult(CKU_SO, newAdmin) != CKR_OK)
@@ -4076,6 +4104,104 @@ static void verifyExtendedInitToken(const fs::path& modulePath)
     }
 
     // Phase F: lock the SO PIN, then repair-mode format without presenting it.
+    // Extended name and local PIN are persistent token state, not session state.
+    {
+        CK_SESSION_HANDLE s = openSession(module, slot);
+        const std::string longName = "Rutoken ECP extended name beyond thirty-two bytes";
+        check(invoke("C_EX_SetTokenName", "without User login", [&] {
+            return ex->C_EX_SetTokenName(s, reinterpret_cast<CK_CHAR_PTR>(const_cast<char*>(longName.data())), longName.size());
+        }), CKR_USER_NOT_LOGGED_IN, "SetTokenName requires User login");
+        login(module, s, CKU_USER, newUser);
+        const std::string tooLongName(256, 'N');
+        check(invoke("C_EX_SetTokenName", "name longer than 255 bytes", [&] {
+            return ex->C_EX_SetTokenName(s,
+                reinterpret_cast<CK_CHAR_PTR>(const_cast<char*>(tooLongName.data())), tooLongName.size());
+        }), CKR_ARGUMENTS_BAD, "extended name length limit");
+        callOk("C_EX_SetTokenName", "empty name", [&] {
+            return ex->C_EX_SetTokenName(s, nullptr, 0);
+        });
+        CK_ULONG emptyNameLength = 0;
+        callOk("C_EX_GetTokenName", "empty-name placeholder", [&] {
+            return ex->C_EX_GetTokenName(s, nullptr, &emptyNameLength);
+        });
+        if (emptyNameLength == 0) fail("empty token name lost the profile placeholder");
+        callOk("C_EX_SetTokenName", "long name", [&] {
+            return ex->C_EX_SetTokenName(s, reinterpret_cast<CK_CHAR_PTR>(const_cast<char*>(longName.data())), longName.size());
+        });
+        CK_ULONG nameLength = 0;
+        callOk("C_EX_GetTokenName", "size query", [&] {
+            return ex->C_EX_GetTokenName(s, nullptr, &nameLength);
+        });
+        if (nameLength != longName.size()) fail("extended token name was truncated");
+        std::vector<char> name(nameLength);
+        CK_ULONG shortLength = 1;
+        check(invoke("C_EX_GetTokenName", "small buffer", [&] {
+            return ex->C_EX_GetTokenName(s, reinterpret_cast<CK_CHAR_PTR>(name.data()), &shortLength);
+        }), CKR_BUFFER_TOO_SMALL, "extended name buffer size");
+        if (shortLength != nameLength) fail("GetTokenName did not report required size");
+        callOk("C_EX_GetTokenName", "full name", [&] {
+            return ex->C_EX_GetTokenName(s, reinterpret_cast<CK_CHAR_PTR>(name.data()), &nameLength);
+        });
+        if (std::string(name.begin(), name.end()) != longName ||
+            paddedText(tokenInfo(module, slot).label, 32) != longName.substr(0, 32))
+            fail("the full and 32-byte token names disagree");
+        logout(module, s, "CKU_USER");
+        closeSession(module, s);
+
+        const std::string localA = "local444", localB = "local555";
+        check(invoke("C_EX_SetLocalPIN", "invalid local ID", [&] {
+            return ex->C_EX_SetLocalPIN(slot,
+                reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(newUser.data())), newUser.size(),
+                reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(localA.data())), localA.size(), 2);
+        }), CKR_ARGUMENTS_BAD, "local PIN ID range");
+        callOk("C_EX_SetLocalPIN", "create local PIN 4", [&] {
+            return ex->C_EX_SetLocalPIN(slot,
+                reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(newUser.data())), newUser.size(),
+                reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(localA.data())), localA.size(), 4);
+        });
+        check(invoke("C_EX_SetLocalPIN", "wrong existing local PIN", [&] {
+            return ex->C_EX_SetLocalPIN(slot,
+                reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(newUser.data())), newUser.size(),
+                reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(localB.data())), localB.size(), 4);
+        }), CKR_PIN_INCORRECT, "existing local PIN uses its own value");
+        // Re-initialize the module to prove that both values came from storage.
+        callOk("C_Finalize", "pReserved=NULL_PTR", [&] { return module->C_Finalize(nullptr); });
+        callOk("C_Initialize", "pInitArgs=NULL_PTR", [&] { return module->C_Initialize(nullptr); });
+        CK_TOKEN_INFO_EXTENDED persistedPolicy{};
+        persistedPolicy.ulSizeofThisStructure = sizeof(persistedPolicy);
+        callOk("C_EX_GetTokenInfoExtended", "policy after restart", [&] {
+            return ex->C_EX_GetTokenInfoExtended(slot, &persistedPolicy);
+        });
+        if (persistedPolicy.ulMinAdminPinLen != 8 || persistedPolicy.ulMinUserPinLen != 6 ||
+            (persistedPolicy.flags & (TOKEN_FLAGS_ADMIN_CHANGE_USER_PIN |
+                                      TOKEN_FLAGS_USER_CHANGE_USER_PIN)) != TOKEN_FLAGS_USER_CHANGE_USER_PIN)
+            fail("C_EX_InitToken PIN policy did not survive restart");
+        CK_SESSION_HANDLE reopened = openSession(module, slot);
+        nameLength = 0;
+        callOk("C_EX_GetTokenName", "size after restart", [&] {
+            return ex->C_EX_GetTokenName(reopened, nullptr, &nameLength);
+        });
+        closeSession(module, reopened);
+        if (nameLength != longName.size()) fail("extended name did not survive restart");
+        callOk("C_EX_SetLocalPIN", "change persisted local PIN", [&] {
+            return ex->C_EX_SetLocalPIN(slot,
+                reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(localA.data())), localA.size(),
+                reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(localB.data())), localB.size(), 4);
+        });
+        const std::string wrongLocal = "wrong444";
+        for (int attempt = 0; attempt < 10; ++attempt)
+            check(invoke("C_EX_SetLocalPIN", "consume local PIN 4 attempt", [&] {
+                return ex->C_EX_SetLocalPIN(slot,
+                    reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(wrongLocal.data())), wrongLocal.size(),
+                    reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(localA.data())), localA.size(), 4);
+            }), CKR_PIN_INCORRECT, "local PIN retry counter");
+        check(invoke("C_EX_SetLocalPIN", "locked local PIN 4", [&] {
+            return ex->C_EX_SetLocalPIN(slot,
+                reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(localB.data())), localB.size(),
+                reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(localA.data())), localA.size(), 4);
+        }), CKR_PIN_LOCKED, "locked local PIN");
+    }
+
     {
         CK_SESSION_HANDLE s = openSession(module, slot);
         bool locked = false;
@@ -4096,6 +4222,7 @@ static void verifyExtendedInitToken(const fs::path& modulePath)
         const std::string labelB = "Repaired B";
         CK_RUTOKEN_INIT_PARAM repair;
         fillParam(repair, repairAdmin, repairUser, 6, 8, labelB, 1);
+        repair.ChangeUserPINPolicy = TOKEN_FLAGS_ADMIN_CHANGE_USER_PIN;
         exInit("C_EX_InitToken(repair mode, SO PIN locked)", std::string(), &repair, CKR_OK);
 
         CK_ULONG maxAdmin = 0, leftAdmin = 0, maxUser = 0, leftUser = 0;
@@ -4106,6 +4233,28 @@ static void verifyExtendedInitToken(const fs::path& modulePath)
             fail("the repaired SO PIN does not work");
         if (loginResult(CKU_USER, repairUser) != CKR_OK)
             fail("the repaired user PIN does not work");
+        CK_SESSION_HANDLE userSession = openSession(module, slot);
+        login(module, userSession, CKU_USER, repairUser);
+        check(invoke("C_SetPIN", "User may not change PIN under admin-only policy", [&] {
+            return module->C_SetPIN(userSession,
+                reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(repairUser.data())), repairUser.size(),
+                reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(repairUser.data())), repairUser.size());
+        }), CKR_USER_NOT_LOGGED_IN, "admin-only PIN change policy");
+        logout(module, userSession, "CKU_USER");
+        closeSession(module, userSession);
+        CK_SESSION_HANDLE repairedSession = openSession(module, slot);
+        CK_ULONG nameLength = 0;
+        callOk("C_EX_GetTokenName", "name after repair", [&] {
+            return ex->C_EX_GetTokenName(repairedSession, nullptr, &nameLength);
+        });
+        closeSession(module, repairedSession);
+        if (nameLength != labelB.size()) fail("repair did not clear the extended name");
+        const std::string freshLocal = "fresh444";
+        callOk("C_EX_SetLocalPIN", "local PIN removed by repair", [&] {
+            return ex->C_EX_SetLocalPIN(slot,
+                reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(repairUser.data())), repairUser.size(),
+                reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(freshLocal.data())), freshLocal.size(), 4);
+        });
     }
 
     // Phase G: a token with an open session cannot be formatted.

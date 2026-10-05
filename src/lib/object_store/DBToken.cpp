@@ -550,6 +550,82 @@ bool DBToken::getTokenLabel(ByteString& label)
 	return true;
 }
 
+bool DBToken::getTokenName(ByteString& name, bool& exists)
+{
+	if (_connection == NULL) return false;
+	DBObject object(_connection);
+	if (!object.startTransaction(DBObject::ReadOnly)) return false;
+	if (!object.find(DBTOKEN_OBJECT_TOKENINFO))
+	{
+		object.abortTransaction();
+		return false;
+	}
+	exists = object.attributeExists(CKA_OS_TOKENNAME);
+	if (exists) name = object.getAttribute(CKA_OS_TOKENNAME).getByteStringValue();
+	return object.commitTransaction();
+}
+
+bool DBToken::setTokenName(const ByteString& name, const ByteString& label)
+{
+	if (_connection == NULL) return false;
+	DBObject object(_connection);
+	if (!object.startTransaction(DBObject::ReadWrite)) return false;
+	if (!object.find(DBTOKEN_OBJECT_TOKENINFO) ||
+	    !object.setAttribute(CKA_OS_TOKENNAME, OSAttribute(name)) ||
+	    !object.setAttribute(CKA_OS_TOKENLABEL, OSAttribute(label)) ||
+	    !object.commitTransaction())
+	{
+		object.abortTransaction();
+		return false;
+	}
+	return true;
+}
+
+bool DBToken::getLocalPIN(CK_ULONG id, ByteString& record, bool& exists)
+{
+	if (_connection == NULL) return false;
+	DBObject object(_connection);
+	if (!object.startTransaction(DBObject::ReadOnly)) return false;
+	if (!object.find(DBTOKEN_OBJECT_TOKENINFO))
+	{
+		object.abortTransaction();
+		return false;
+	}
+	exists = object.attributeExists(CKA_OS_LOCALPIN(id));
+	if (exists) record = object.getAttribute(CKA_OS_LOCALPIN(id)).getByteStringValue();
+	return object.commitTransaction();
+}
+
+bool DBToken::updateLocalPIN(CK_ULONG id, const ByteString& expected,
+                             const ByteString& replacement, bool& changed)
+{
+	changed = false;
+	if (_connection == NULL) return false;
+	DBObject object(_connection);
+	if (!object.startTransaction(DBObject::ReadWrite)) return false;
+	if (!object.find(DBTOKEN_OBJECT_TOKENINFO))
+	{
+		object.abortTransaction();
+		return false;
+	}
+	const bool exists = object.attributeExists(CKA_OS_LOCALPIN(id));
+	const ByteString current = exists ?
+		object.getAttribute(CKA_OS_LOCALPIN(id)).getByteStringValue() : ByteString();
+	if (current != expected)
+	{
+		object.abortTransaction();
+		return true;
+	}
+	if (!object.setAttribute(CKA_OS_LOCALPIN(id), OSAttribute(replacement)) ||
+	    !object.commitTransaction())
+	{
+		object.abortTransaction();
+		return false;
+	}
+	changed = true;
+	return true;
+}
+
 // Retrieve the token serial
 bool DBToken::getTokenSerial(ByteString& serial)
 {
@@ -745,7 +821,8 @@ bool DBToken::advancePinPolicy(bool so, bool success, ByteString& policy)
 	}
 	const size_t leftIndex = so ? 5 : 6;
 	const size_t maxIndex = so ? 3 : 4;
-	if (policy.size() != 7 || policy[0] != 1 ||
+	if (((policy.size() != 7 || policy[0] != 1) &&
+	     (policy.size() != 9 || policy[0] != 2)) ||
 	    policy[leftIndex] > policy[maxIndex])
 	{
 		object.abortTransaction();
@@ -989,6 +1066,21 @@ bool DBToken::resetToken(const ByteString& label)
 		if (!tokenObject.deleteAttribute(CKA_OS_USERPIN))
 		{
 			ERROR_MSG("Error while deleting USERPIN in token database at \"%s\"", _connection->dbpath().c_str());
+			tokenObject.abortTransaction();
+			return false;
+		}
+	}
+	if (tokenObject.attributeExists(CKA_OS_TOKENNAME) &&
+	    !tokenObject.deleteAttribute(CKA_OS_TOKENNAME))
+	{
+		tokenObject.abortTransaction();
+		return false;
+	}
+	for (CK_ULONG id = 3; id <= 31; ++id)
+	{
+		if (tokenObject.attributeExists(CKA_OS_LOCALPIN(id)) &&
+		    !tokenObject.deleteAttribute(CKA_OS_LOCALPIN(id)))
+		{
 			tokenObject.abortTransaction();
 			return false;
 		}
