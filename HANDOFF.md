@@ -2,14 +2,15 @@
 
 Обновлено: 2026-10-06.
 
-## В работе: adjacent-конфиг test-kit
+## Закрыто: adjacent-конфиг test-kit (`.61`)
 
-План в `docs/PLAN.md`: пакетный `softhsm.conf` рядом с модулем, `AUTO` для
-собственного store, сохранение явного `SOFTHSM2_CONF`, Linux-проба под `strace`
-с посторонним HOME, явный Windows `C_EX_*` release gate и шесть платформ.
-Код и локальный Linux x64 ZIP готовы: два полных прогона с `AUTO=YES/NO`,
-чужой store не изменён, его конфиг не читался. Следующее действие — завершить
-ревизию, отправить код в `main`, проверить CI, шесть verifier jobs и релиз.
+Код `0a989ae` в `main`; CI `37493923210`, релизный прогон `37494227510`,
+шесть сборок и шесть verifier jobs успешны. Windows x86/x64/ARM64 battery
+и отдельный gate подтвердили функциональные `C_EX_InitToken`,
+`C_EX_SetTokenName`, `C_EX_SetLocalPIN`. Тег `v2.7.0-portable.61` на
+`0a989ae`; скачанные Linux x64 product/test-kit ZIP совпали с `SHA256SUMS`
+и целы, adjacent-конфиги только в test-kit. Четыре прежних untracked-файла
+в корне не трогать. Незавершённого по этой задаче нет.
 
 ## Закрыто: инструменты форка OpenSC в test-kit (`.60`)
 

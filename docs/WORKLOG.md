@@ -25,6 +25,17 @@ verifier требует следы успешных `C_EX_InitToken`, `C_EX_SetT
 `strace` не показал открытий его конфига. `git diff --check`, `bash -n` и
 разбор workflow YAML прошли. **Дальше:** CI, шесть test-kit и релиз.
 
+**Сделано (релиз).** `0a989ae` отправлен в `main`. CI `37493923210`
+успешен. Автоматический `Portable release` `37494227510` успешен: шесть
+сборок, шесть независимых verifier jobs и публикация. Во всех Windows
+x86/x64/ARM64 прошла battery; отдельный gate проверил в её логе маркеры
+`C_EX_InitToken behaviour verified`, `C_EX_SetTokenName = CKR_OK` и
+`C_EX_SetLocalPIN = CKR_OK`. Тег `v2.7.0-portable.61` указывает на `0a989ae`.
+Скачанные Linux x64 product/test-kit ZIP совпали с `SHA256SUMS` и целы;
+в test-kit есть `softhsm.conf` и `bin/softhsm.conf`, в product их нет.
+Четыре прежних untracked-файла оставлены без изменений. Дальше — только
+документационный коммит и проверка пропуска публикации.
+
 ## 2026-10-06 — инструменты OpenSC fork в test-kit
 
 **План.** По запросу владельца устранить системный vanilla `pkcs11-tool` из
