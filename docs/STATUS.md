@@ -2,10 +2,12 @@
 
 Обновлено: 2026-10-06. Транк: `main`.
 
-В работе 06.10: test-kit переводится с системного OpenSC на Latest portable
-релиз `code-agent-43824/OpenSC`. Linux x64 уже прошёл локальный полный запуск
-с новым Rutoken CLI/spy-сценарием; платформенный релизный прогон ещё не
-проверен.
+В работе 06.10: изоляция test-kit через adjacent `softhsm.conf`; текущий
+бандловый launcher пока использует пользовательский fallback `~/softhsm`.
+Предыдущая задача завершена: test-kit берёт Latest portable-релиз форка OpenSC
+с `pkcs11-tool` и `pkcs11-spy`. CI `37452997541` и релизный прогон
+`37453363896` успешны; все шесть verifier jobs прошли Rutoken CLI/spy.
+`v2.7.0-portable.60` опубликован на `e834c87`, 12 ZIP сверены с `SHA256SUMS`.
 
 После `.58` завершены дополнение `C_EX_InitToken` (раздельные минимумы PIN и
 политика смены User PIN), `C_EX_SetTokenName` и `C_EX_SetLocalPIN` (`dfc27f3`).
