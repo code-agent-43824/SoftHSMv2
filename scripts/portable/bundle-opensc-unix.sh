@@ -18,8 +18,12 @@ esac
 # same release, and their GitHub-published digests are checked before use.
 work_dir=$(mktemp -d "${RUNNER_TEMP:-/tmp}/opensc-fork.XXXXXX")
 api_url=https://api.github.com/repos/code-agent-43824/OpenSC/releases/latest
+api_headers=(-H 'Accept: application/vnd.github+json')
+if [[ -n ${OPENSC_GITHUB_TOKEN:-} ]]; then
+  api_headers+=(-H "Authorization: Bearer $OPENSC_GITHUB_TOKEN")
+fi
 curl --fail --silent --show-error --location --retry 5 \
-  -H 'Accept: application/vnd.github+json' -o "$work_dir/release.json" "$api_url"
+  "${api_headers[@]}" -o "$work_dir/release.json" "$api_url"
 python3 - "$platform" "$work_dir/release.json" > "$work_dir/release.meta" <<'PY'
 import json
 import re

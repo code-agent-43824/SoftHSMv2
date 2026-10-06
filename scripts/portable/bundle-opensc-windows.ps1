@@ -8,8 +8,12 @@ Set-StrictMode -Version Latest
 if (-not $env:PORTABLE_ARCH) { throw "PORTABLE_ARCH is required" }
 
 $Platform = "windows-$($env:PORTABLE_ARCH)"
+$ApiHeaders = @{ Accept = 'application/vnd.github+json' }
+if ($env:OPENSC_GITHUB_TOKEN) {
+    $ApiHeaders.Authorization = "Bearer $($env:OPENSC_GITHUB_TOKEN)"
+}
 $Release = Invoke-RestMethod -Uri 'https://api.github.com/repos/code-agent-43824/OpenSC/releases/latest' `
-    -Headers @{ Accept = 'application/vnd.github+json' }
+    -Headers $ApiHeaders
 $Tag = [string]$Release.tag_name
 if ($Tag -notmatch '^[0-9]+\.[0-9]+\.[0-9]+-portable\.[0-9]+$') {
     throw "unexpected OpenSC Latest tag: $Tag"

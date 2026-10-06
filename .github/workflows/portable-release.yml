@@ -209,6 +209,7 @@ jobs:
       - name: Build and test downloadable test kit
         shell: bash
         env:
+          OPENSC_GITHUB_TOKEN: ${{ github.token }}
           PORTABLE_PRODUCT_DIR: downloaded
         run: |
           set -o pipefail
@@ -393,6 +394,7 @@ jobs:
           path: downloaded
       - name: Build and test downloadable test kit
         env:
+          OPENSC_GITHUB_TOKEN: ${{ github.token }}
           PORTABLE_PRODUCT_DIR: downloaded
         run: |
           export HOME="$RUNNER_TEMP/softhsm-user-home"
@@ -449,6 +451,7 @@ jobs:
       - name: Build and test downloadable test kit
         shell: cmd
         env:
+          OPENSC_GITHUB_TOKEN: ${{ github.token }}
           PORTABLE_ARCH: x64
           PORTABLE_PRODUCT_DIR: downloaded
         run: |
@@ -508,6 +511,7 @@ jobs:
       - name: Build and test downloadable test kit
         shell: cmd
         env:
+          OPENSC_GITHUB_TOKEN: ${{ github.token }}
           PORTABLE_ARCH: x86
           PORTABLE_PRODUCT_DIR: downloaded
         run: |
@@ -567,6 +571,7 @@ jobs:
       - name: Build and test downloadable test kit
         shell: cmd
         env:
+          OPENSC_GITHUB_TOKEN: ${{ github.token }}
           PORTABLE_ARCH: arm64
           PORTABLE_PRODUCT_DIR: downloaded
         run: |
@@ -625,6 +630,7 @@ jobs:
           path: downloaded
       - name: Build and test downloadable test kit
         env:
+          OPENSC_GITHUB_TOKEN: ${{ github.token }}
           PORTABLE_PRODUCT_DIR: downloaded
         run: |
           export HOME="$RUNNER_TEMP/softhsm-user-home"
