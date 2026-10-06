@@ -3852,6 +3852,12 @@ static void verifyForcedSensitiveDefaults(Module& module, CK_SESSION_HANDLE sess
 static void verifyCoreBehaviour(const fs::path& modulePath)
 {
     Module module(modulePath);
+    CK_INFO moduleInfo{};
+    callOk("C_GetInfo", "select core-behaviour profile", [&] {
+        return module->C_GetInfo(&moduleInfo);
+    });
+    const bool rutokenProfile = paddedText(moduleInfo.manufacturerID,
+                                            sizeof(moduleInfo.manufacturerID)) == "Aktiv Co.";
 
     // The slot it initialized is the one to work on: SoftHSM reports every
     // slot as holding a token, spare ones included, so the last slot in the
@@ -3872,7 +3878,7 @@ static void verifyCoreBehaviour(const fs::path& modulePath)
     login(module, session, CKU_USER, userPin);
 
     verifyPrivateObjectDates(module, session);
-    verifySilentTemplateKeyIsReadable(module, session, true);
+    verifySilentTemplateKeyIsReadable(module, session, rutokenProfile);
 
     closeSession(module, session);
     std::cout << "core PKCS #11 behaviour verified\n";
