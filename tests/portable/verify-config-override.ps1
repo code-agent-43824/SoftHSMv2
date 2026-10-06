@@ -14,8 +14,12 @@ $WithUser = Join-Path $CaseDir 'with-user'
 $FreshHome = Join-Path $CaseDir 'fresh-home'
 $MissingHome = Join-Path $CaseDir 'missing-home'
 $DirectoryHome = Join-Path $CaseDir 'directory-home'
-@($Bundle, (Join-Path $WithUser 'softhsm'), $FreshHome, $MissingHome, $DirectoryHome) |
+$ModuleName = Split-Path -Leaf $Module
+$NoAdjacent = Join-Path $CaseDir 'no-adjacent'
+@($Bundle, (Join-Path $WithUser 'softhsm'), $FreshHome, $MissingHome, $DirectoryHome, $NoAdjacent) |
     ForEach-Object { New-Item -ItemType Directory -Force -Path $_ | Out-Null }
+Copy-Item -LiteralPath $Module -Destination (Join-Path $NoAdjacent $ModuleName)
+$PlainModule = Join-Path $NoAdjacent $ModuleName
 $Config = Join-Path $Bundle 'softhsm.conf'
 @('directories.tokendir = tokens', 'objectstore.backend = file', 'log.level = ERROR') |
     Set-Content -LiteralPath $Config -Encoding Ascii
@@ -48,7 +52,7 @@ try {
 
     $env:USERPROFILE = $MissingHome
     $env:SOFTHSM2_CONF = Join-Path $CaseDir 'missing.conf'
-    & $Client first-run $Module (Join-Path (Join-Path $MissingHome 'softhsm') 'tokens')
+    & $Client first-run $PlainModule (Join-Path (Join-Path $MissingHome 'softhsm') 'tokens')
     if ($LASTEXITCODE -ne 0) { throw 'missing override did not fall back' }
     if ((Get-Content -LiteralPath (Join-Path (Join-Path $MissingHome 'softhsm') 'softhsm.conf') -Raw) -notmatch
         'directories\.tokendir = tokens') {
@@ -57,10 +61,9 @@ try {
 
     $env:USERPROFILE = $DirectoryHome
     $env:SOFTHSM2_CONF = $Bundle
-    & $Client first-run $Module (Join-Path (Join-Path $DirectoryHome 'softhsm') 'tokens')
+    & $Client first-run $PlainModule (Join-Path (Join-Path $DirectoryHome 'softhsm') 'tokens')
     if ($LASTEXITCODE -ne 0) { throw 'directory override did not fall back' }
 
-    $ModuleName = Split-Path -Leaf $Module
     $Adjacent = Join-Path $CaseDir 'adjacent'
     $AdjacentUtilDir = Join-Path $Adjacent 'tools/bin'
     $AdjacentHome = Join-Path $CaseDir 'adjacent-home'

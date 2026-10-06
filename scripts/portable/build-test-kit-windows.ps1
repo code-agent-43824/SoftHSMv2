@@ -266,6 +266,9 @@ Copy-Item (Join-Path $RootDir "src/lib/pkcs11/*.h") (Join-Path $StageDir "src/pk
 Copy-Item (Join-Path $RootDir "packaging/portable/TEST-KIT-README.txt") (Join-Path $StageDir "README.txt")
 Copy-Item (Join-Path $RootDir "packaging/portable/OPENSSL-GUIDE.md") (Join-Path $StageDir "OPENSSL-GUIDE.md")
 Copy-Item (Join-Path $RootDir "packaging/portable/testkit.conf") (Join-Path $StageDir "testkit.conf")
+Copy-Item (Join-Path $RootDir "packaging/portable/softhsm.conf") (Join-Path $StageDir "softhsm.conf")
+@('directories.tokendir = ../tokens', 'objectstore.backend = file') |
+    Set-Content -LiteralPath (Join-Path $StageDir 'bin/softhsm.conf') -Encoding Ascii
 Copy-Item (Join-Path $RootDir "LICENSE") (Join-Path $StageDir "LICENSE-TestClient.txt")
 if (-not $UseBundle) {
     Copy-Item (Join-Path $OpenSSLSource "LICENSE.txt") (Join-Path $StageDir "LICENSE-OpenSSL.txt")

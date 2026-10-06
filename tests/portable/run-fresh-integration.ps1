@@ -47,28 +47,19 @@ if (-not $env:P11_TEST_REQUIRE_RSA_IMPORT_EXPORT) {
 & (Join-Path $PSScriptRoot "run-pkcs11-integration.ps1") $Module $OpenSSL $ScenarioDir
 if ($LASTEXITCODE -ne 0) { throw "generic PKCS #11 integration test failed" }
 if ($BundledMode -eq "YES") {
-    if (-not (Test-Path -LiteralPath $UserConfig -PathType Leaf)) {
-        throw "module did not create its canonical user configuration"
-    }
-    if (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $Module) "tokens")) {
-        throw "module unexpectedly created token storage beside itself"
-    }
-    if (-not $UserConfigPreexisting) {
-        $UserText = Get-Content -Raw -LiteralPath $UserConfig
-        if ($UserText -notmatch '(?m)^directories\.tokendir\s*=\s*tokens\s*$') {
-            throw "canonical user config does not select the canonical relative token directory"
+    $Adjacent = Join-Path (Split-Path -Parent $Module) "softhsm.conf"
+    $Override = $env:SOFTHSM2_CONF -and (Test-Path -LiteralPath $env:SOFTHSM2_CONF -PathType Leaf)
+    if ((Test-Path -LiteralPath $Adjacent -PathType Leaf) -and -not $Override) {
+        $AdjacentTokens = Join-Path (Split-Path -Parent $Module) "tokens"
+        if (-not (Test-Path -LiteralPath $AdjacentTokens -PathType Container)) {
+            throw "module did not create adjacent test-kit token storage"
         }
-        if ($UserText -notmatch '(?m)^FAKE_RUTOKEN_ECP\s*=\s*false\s*$') {
-            throw "canonical user config does not default to normal SoftHSM mode"
+        if (-not $UserConfigPreexisting -and (Test-Path -LiteralPath $UserConfig)) {
+            throw "module unexpectedly created a per-user configuration"
         }
-        $UserTokens = Join-Path (Split-Path -Parent $UserConfig) "tokens"
-        if (-not (Test-Path -LiteralPath $UserTokens -PathType Container)) {
-            throw "module did not create token storage beside the canonical user config"
-        }
-        Write-Host "[SCRIPT] verified first-use config creation and token storage in canonical user directory: $(Split-Path -Parent $UserConfig)"
+        Write-Host "[SCRIPT] verified adjacent test-kit token storage: $AdjacentTokens"
     }
     else {
-        Write-Host "[SCRIPT] verified reuse of pre-existing canonical user config: $UserConfig"
+        Write-Host "[SCRIPT] bundled module uses explicit override or legacy fallback"
     }
-    Write-Host "[SCRIPT] verified no token storage was created beside the tested module"
 }

@@ -53,16 +53,13 @@ fi
   "$module" "$openssl" "$scenario_dir"
 
 if [[ "$bundled_mode" == YES ]]; then
-  test -f "$user_config"
-  test ! -e "$(dirname "$module")/tokens"
-  if [[ "$user_config_preexisting" == NO ]]; then
-    grep -F 'directories.tokendir = tokens' "$user_config" >/dev/null
-    grep -F 'FAKE_RUTOKEN_ECP = false' "$user_config" >/dev/null
-    test -d "$(dirname "$user_config")/tokens"
-    printf '[SCRIPT] verified first-use config creation and token storage in canonical user directory: %q\n' \
-      "$(dirname "$user_config")"
+  if [[ -r "$(dirname "$module")/softhsm.conf" &&
+        ! ( -n ${SOFTHSM2_CONF:-} && -r "$SOFTHSM2_CONF" ) ]]; then
+    test -d "$(dirname "$module")/tokens"
+    [[ "$user_config_preexisting" == YES || ! -e "$user_config" ]]
+    printf '[SCRIPT] verified adjacent test-kit token storage: %q\n' \
+      "$(dirname "$module")/tokens"
   else
-    printf '[SCRIPT] verified reuse of pre-existing canonical user config: %q\n' "$user_config"
+    printf '[SCRIPT] bundled module uses explicit override or legacy fallback\n'
   fi
-  printf '[SCRIPT] verified no token storage was created beside the tested module\n'
 fi

@@ -10,7 +10,11 @@ client=$2
 util=$3
 mkdir -p "$4"
 case_dir=$(mktemp -d "$4/config-override.XXXXXX")
-mkdir -p "$case_dir/bundle" "$case_dir/with-user/softhsm" "$case_dir/fresh-home"
+module_name=$(basename "$module")
+mkdir -p "$case_dir/bundle" "$case_dir/with-user/softhsm" "$case_dir/fresh-home" \
+  "$case_dir/no-adjacent"
+cp "$module" "$case_dir/no-adjacent/$module_name"
+plain_module="$case_dir/no-adjacent/$module_name"
 cat > "$case_dir/bundle/softhsm.conf" <<'CONF'
 directories.tokendir = tokens
 objectstore.backend = file
@@ -32,15 +36,14 @@ test ! -e "$case_dir/fresh-home/softhsm"
 
 mkdir -p "$case_dir/missing-home"
 HOME="$case_dir/missing-home" SOFTHSM2_CONF="$case_dir/missing.conf" \
-  "$client" first-run "$module" "$case_dir/missing-home/softhsm/tokens"
+  "$client" first-run "$plain_module" "$case_dir/missing-home/softhsm/tokens"
 grep -Fx 'directories.tokendir = tokens' \
   "$case_dir/missing-home/softhsm/softhsm.conf" >/dev/null
 
 mkdir -p "$case_dir/directory-home"
 HOME="$case_dir/directory-home" SOFTHSM2_CONF="$case_dir/bundle" \
-  "$client" first-run "$module" "$case_dir/directory-home/softhsm/tokens"
+  "$client" first-run "$plain_module" "$case_dir/directory-home/softhsm/tokens"
 
-module_name=$(basename "$module")
 mkdir -p "$case_dir/adjacent/tools/bin" "$case_dir/adjacent-home" "$case_dir/elsewhere"
 cp "$module" "$case_dir/adjacent/$module_name"
 cp "$util" "$case_dir/adjacent/tools/bin/softhsm2-util"

@@ -13,6 +13,18 @@
 В Windows release verifier явно проверять успешный функциональный сценарий
 `C_EX_InitToken`/имени/локального PIN, уже входящий в battery.
 
+**Сделано локально.** Test-kit получает `softhsm.conf` рядом с модулем и
+`bin/softhsm.conf` для встроенного `softhsm2-export`; оба указывают на один
+`tokens/`. Оба launcher распознают bundled-модуль при явном пути и сохраняют
+приоритет `SOFTHSM2_CONF`. First-run battery копирует adjacent-конфиг, а
+повторные battery-прогоны используют отдельные каталоги. Windows release
+verifier требует следы успешных `C_EX_InitToken`, `C_EX_SetTokenName` и
+`C_EX_SetLocalPIN` от battery на каждой архитектуре. Итоговый Linux x64 ZIP
+дважды прошёл полный `run-test.sh ./libsofthsm2.so` под `env -i`: первый
+`AUTO=YES`, второй `AUTO=NO`. Четыре файла чужого `~/softhsm` сохранили SHA-256;
+`strace` не показал открытий его конфига. `git diff --check`, `bash -n` и
+разбор workflow YAML прошли. **Дальше:** CI, шесть test-kit и релиз.
+
 ## 2026-10-06 — инструменты OpenSC fork в test-kit
 
 **План.** По запросу владельца устранить системный vanilla `pkcs11-tool` из

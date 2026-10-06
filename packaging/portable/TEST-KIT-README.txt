@@ -28,22 +28,32 @@ the launcher with no arguments. To test another SoftHSM/PKCS #11 module, pass
 the path to that library as the only argument. An explicitly supplied library
 is loaded directly from that path and is not copied. The bundled module is also
 loaded in place. Test evidence is written only to test-output inside the
-extracted test-kit directory. With no argument, the launcher clears an inherited
-SOFTHSM2_CONF and uses ~/softhsm/softhsm.conf and ~/softhsm/tokens (under
-%USERPROFILE% on Windows), so AUTO never initializes an application's isolated
-token store by mistake.
-For an explicitly supplied alternate module it preserves that variable; with
-a readable override AUTO is refused, and you must choose YES or NO deliberately.
-The portable module itself accepts a readable SOFTHSM2_CONF outside the
-bundled launcher, then checks softhsm.conf or softhsm2.conf beside the loaded
-module before falling back to the per-user store; see the product README.
+extracted test-kit directory.
+
+Isolation: this test kit includes softhsm.conf beside its SoftHSM library.
+It selects directories.tokendir = ./tokens and objectstore.backend = file.
+The relative token path resolves from that configuration file. With no
+SOFTHSM2_CONF, the bundled module, softhsm2-util, pkcs11-tool and pkcs11-spy
+use the kit's tokens directory, not ~/softhsm (or %USERPROFILE%\softhsm on
+Windows). The launcher creates tokens on first use and reuses the same store
+on later runs. Case-specific scratch stores and evidence stay in test-output.
+The embedded softhsm2-export utility has a matching bin/softhsm.conf with
+../tokens so it reaches the same store without a shell variable.
+The standalone product ZIP does not include this configuration.
+
+A readable SOFTHSM2_CONF still has first priority. The launcher preserves it,
+but AUTO refuses to choose whether to initialize that explicit store: set
+INITIALIZE_TOKEN=YES or NO deliberately. For a different module with its own
+adjacent config, AUTO also requires YES or NO. The portable module checks an
+adjacent softhsm.conf or softhsm2.conf before the per-user fallback when no
+readable explicit override exists; see the product README.
 
 Edit testkit.conf to select token handling and PINs. INITIALIZE_TOKEN=AUTO
-initializes the selected SoftHSM when its canonical token store is empty,
-whether the bundled module or an explicitly supplied module is used. An
-explicitly supplied module with a readable SOFTHSM2_CONF or adjacent config
-must use YES or NO;
-AUTO refuses that combination. Successful initialization leaves
+initializes the selected SoftHSM when its selected store is empty: the kit's
+adjacent store for the bundled module (with or without an explicit path to
+that same module), or the per-user fallback for an alternate module without
+an override or adjacent config. Otherwise AUTO reuses the selected store.
+Successful initialization leaves
 a fully initialized token with a working user PIN and persistent test objects.
 Later runs reuse the token and replace only objects with the configured test
 IDs. YES enables destructive C_InitToken and C_InitPIN. NO disables them and automatically blocks

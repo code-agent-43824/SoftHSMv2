@@ -220,9 +220,11 @@ jobs:
           mkdir "$RUNNER_TEMP/packaged-testkit"
           unzip -q dist/softhsm-testkit-linux-x64.zip -d "$RUNNER_TEMP/packaged-testkit"
           test ! -e "$GITHUB_WORKSPACE/downloaded/softhsm.conf"
-          test ! -e "$RUNNER_TEMP/packaged-testkit/softhsm.conf"
+          grep -Fx 'directories.tokendir = ./tokens' "$RUNNER_TEMP/packaged-testkit/softhsm.conf"
           bash "$RUNNER_TEMP/packaged-testkit/run-test.sh" 2>&1 | \
             tee "$RUNNER_TEMP/default-test.log"
+          test -d "$RUNNER_TEMP/packaged-testkit/tokens"
+          test ! -e "$HOME/softhsm"
           grep -F '[OPENSC] PASS: packaged pkcs11-tool loaded the tested module' \
             "$RUNNER_TEMP/default-test.log"
           grep -F '[RUTOKEN-OPENSC] PASS: fork CLI info/name/local PIN and spy on isolated fake token' \
@@ -279,7 +281,7 @@ jobs:
           test -f "$external_first_home/softhsm/softhsm.conf"
           test -d "$external_first_home/softhsm/tokens"
           test ! -e "$GITHUB_WORKSPACE/downloaded/tokens"
-          export HOME="$RUNNER_TEMP/softhsm-user-home"
+          export HOME="$external_first_home"
           bash "$kit/run-test.sh" "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so" \
             > "$RUNNER_TEMP/safe-alternate.log" 2>&1
           grep -F '[TEST-KIT] initialize token=NO' "$RUNNER_TEMP/safe-alternate.log"
@@ -460,6 +462,8 @@ jobs:
           set "USERPROFILE=%RUNNER_TEMP%\softhsm-user-home"
           call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd"
           if errorlevel 1 exit /b %ERRORLEVEL%
+          if not exist "%RUNNER_TEMP%\packaged-testkit\tokens" exit /b 1
+          if exist "%USERPROFILE%\softhsm" exit /b 1
           set "P11_TEST_OBJECT_ID_HEX=504f525441424c46"
           set "P11_TEST_KEY_LABEL=portable-ci-rsa-alternate"
           call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd" "%CD%\downloaded\softhsm2.dll"
@@ -489,6 +493,13 @@ jobs:
           if not exist "%USERPROFILE%\softhsm\tokens" exit /b 1
           if exist "%RUNNER_TEMP%\softhsm-no-template\tokens" exit /b 1
           powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-x64.zip' -DestinationPath 'artifact-testkit'"
+      - name: Verify Windows C_EX functional evidence
+        shell: pwsh
+        run: |
+          $log = "$env:RUNNER_TEMP/packaged-testkit/test-output/battery.log"
+          foreach ($marker in @('C_EX_InitToken behaviour verified', 'C_EX_SetTokenName = CKR_OK', 'C_EX_SetLocalPIN = CKR_OK')) {
+            if (-not (Select-String -LiteralPath $log -SimpleMatch -Pattern $marker -Quiet)) { throw "missing C_EX evidence: $marker" }
+          }
       - uses: actions/upload-artifact@v7
         with:
           name: softhsm-testkit-windows-x64
@@ -520,6 +531,8 @@ jobs:
           set "USERPROFILE=%RUNNER_TEMP%\softhsm-user-home"
           call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd"
           if errorlevel 1 exit /b %ERRORLEVEL%
+          if not exist "%RUNNER_TEMP%\packaged-testkit\tokens" exit /b 1
+          if exist "%USERPROFILE%\softhsm" exit /b 1
           set "P11_TEST_OBJECT_ID_HEX=504f525441424c46"
           set "P11_TEST_KEY_LABEL=portable-ci-rsa-alternate"
           call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd" "%CD%\downloaded\softhsm2.dll"
@@ -549,6 +562,13 @@ jobs:
           if not exist "%USERPROFILE%\softhsm\tokens" exit /b 1
           if exist "%RUNNER_TEMP%\softhsm-no-template\tokens" exit /b 1
           powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-x86.zip' -DestinationPath 'artifact-testkit'"
+      - name: Verify Windows C_EX functional evidence
+        shell: pwsh
+        run: |
+          $log = "$env:RUNNER_TEMP/packaged-testkit/test-output/battery.log"
+          foreach ($marker in @('C_EX_InitToken behaviour verified', 'C_EX_SetTokenName = CKR_OK', 'C_EX_SetLocalPIN = CKR_OK')) {
+            if (-not (Select-String -LiteralPath $log -SimpleMatch -Pattern $marker -Quiet)) { throw "missing C_EX evidence: $marker" }
+          }
       - uses: actions/upload-artifact@v7
         with:
           name: softhsm-testkit-windows-x86
@@ -580,6 +600,8 @@ jobs:
           set "USERPROFILE=%RUNNER_TEMP%\softhsm-user-home"
           call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd"
           if errorlevel 1 exit /b %ERRORLEVEL%
+          if not exist "%RUNNER_TEMP%\packaged-testkit\tokens" exit /b 1
+          if exist "%USERPROFILE%\softhsm" exit /b 1
           set "P11_TEST_OBJECT_ID_HEX=504f525441424c46"
           set "P11_TEST_KEY_LABEL=portable-ci-rsa-alternate"
           call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd" "%CD%\downloaded\softhsm2.dll"
@@ -609,6 +631,13 @@ jobs:
           if not exist "%USERPROFILE%\softhsm\tokens" exit /b 1
           if exist "%RUNNER_TEMP%\softhsm-no-template\tokens" exit /b 1
           powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-arm64.zip' -DestinationPath 'artifact-testkit'"
+      - name: Verify Windows C_EX functional evidence
+        shell: pwsh
+        run: |
+          $log = "$env:RUNNER_TEMP/packaged-testkit/test-output/battery.log"
+          foreach ($marker in @('C_EX_InitToken behaviour verified', 'C_EX_SetTokenName = CKR_OK', 'C_EX_SetLocalPIN = CKR_OK')) {
+            if (-not (Select-String -LiteralPath $log -SimpleMatch -Pattern $marker -Quiet)) { throw "missing C_EX evidence: $marker" }
+          }
       - uses: actions/upload-artifact@v7
         with:
           name: softhsm-testkit-windows-arm64
@@ -640,6 +669,8 @@ jobs:
           mkdir "$RUNNER_TEMP/packaged-testkit"
           unzip -q dist/softhsm-testkit-macos-universal.zip -d "$RUNNER_TEMP/packaged-testkit"
           bash "$RUNNER_TEMP/packaged-testkit/run-test.sh"
+          test -d "$RUNNER_TEMP/packaged-testkit/tokens"
+          test ! -e "$HOME/softhsm"
           P11_TEST_OBJECT_ID_HEX=504f525441424c46 \
           P11_TEST_KEY_LABEL=portable-ci-rsa-alternate \
             bash "$RUNNER_TEMP/packaged-testkit/run-test.sh" \
@@ -773,6 +804,8 @@ jobs:
             fi
             case "$(basename "$archive")" in
               softhsm-testkit-windows-*.zip)
+                zipinfo -1 "$archive" | grep -Fx 'softhsm.conf' >/dev/null
+                zipinfo -1 "$archive" | grep -Fx 'bin/softhsm.conf' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'OPENSSL-GUIDE.md' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'OPENSC-SOURCE.txt' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'bin/pkcs11-tool.exe' >/dev/null
@@ -788,6 +821,8 @@ jobs:
                 zipinfo -1 "$archive" | grep -Fx 'LICENSE-GOST-Provider.txt' >/dev/null
                 ;;
               softhsm-testkit-*.zip)
+                zipinfo -1 "$archive" | grep -Fx 'softhsm.conf' >/dev/null
+                zipinfo -1 "$archive" | grep -Fx 'bin/softhsm.conf' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'OPENSSL-GUIDE.md' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'OPENSC-SOURCE.txt' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'bin/pkcs11-tool' >/dev/null
@@ -859,5 +894,5 @@ jobs:
             gh release create "$RELEASE_TAG" release-assets/* \
               --target "$RELEASE_COMMIT" \
               --title "SoftHSM portable $RELEASE_TAG" \
-              --notes "Portable, installer-free PKCS #11 modules and self-contained test kits for Linux x64/ARM64, Windows x86/x64/ARM64, and macOS universal. Configuration priority: an existing readable SOFTHSM2_CONF file; then softhsm.conf (or softhsm2.conf) beside the loaded module; then the canonical per-user configuration and token store. Relative token paths resolve from the chosen config file. The process working directory and system config paths are not searched. softhsm2-util finds the module beside itself, one level above, or two levels above from tools/bin; its configuration follows that module. Bundled test-kit launchers clear inherited SOFTHSM2_CONF and use their per-user fallback; AUTO is refused for alternate modules with explicit or adjacent configuration. The independently verified kits include OpenSSL with GOST, OpenSC, GOST/RSA/CSR/certificate/CMS tests, and retain evidence under test-output. All six platform archives are checked on fresh runners before publication."
+              --notes "Portable, installer-free PKCS #11 modules and self-contained test kits for Linux x64/ARM64, Windows x86/x64/ARM64, and macOS universal. Configuration priority: an existing readable SOFTHSM2_CONF file; then softhsm.conf (or softhsm2.conf) beside the loaded module; then the canonical per-user configuration and token store. Relative token paths resolve from the chosen config file. The process working directory and system config paths are not searched. softhsm2-util finds the module beside itself, one level above, or two levels above from tools/bin; its configuration follows that module. Each test kit bundles an adjacent softhsm.conf and stores its normal test token in its own tokens directory. AUTO is refused for an explicit override or an alternate module with adjacent configuration. The independently verified kits include OpenSSL with GOST, OpenSC, GOST/RSA/CSR/certificate/CMS tests, and retain evidence under test-output. All six platform archives are checked on fresh runners before publication."
           fi

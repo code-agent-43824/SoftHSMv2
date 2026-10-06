@@ -14,6 +14,11 @@ $ConfigPath = Join-Path $KitDir "testkit.conf"
 $UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { "$($env:HOMEDRIVE)$($env:HOMEPATH)" }
 if (-not $UserHome) { throw "USERPROFILE or HOMEDRIVE/HOMEPATH is required" }
 $UserConfig = Join-Path (Join-Path $UserHome "softhsm") "softhsm.conf"
+$BundledModule = (Resolve-Path -LiteralPath (Join-Path $KitDir $Settings.MODULE_NAME)).Path
+$Module = if ($args.Count -eq 1) { (Resolve-Path -LiteralPath $args[0]).Path } else { $BundledModule }
+$BundledMode = if ([string]::Equals($Module, $BundledModule, [StringComparison]::OrdinalIgnoreCase)) {
+    "YES"
+} else { "NO" }
 $TestConfig = @{}
 $AllowedConfig = @(
     "INITIALIZE_TOKEN", "EXCLUDED_FUNCTIONS", "USER_PIN", "SO_PIN",
@@ -42,20 +47,25 @@ function Set-OptionalEnvironment([string]$Name, [string]$Value) {
 }
 
 $InitializeSetting = (Get-EffectiveSetting "P11_TEST_INITIALIZE_TOKEN" "INITIALIZE_TOKEN" "AUTO").ToUpperInvariant()
-if ($args.Count -eq 1 -and $InitializeSetting -eq "AUTO" -and $env:SOFTHSM2_CONF -and
+if ($InitializeSetting -eq "AUTO" -and $env:SOFTHSM2_CONF -and
     (Test-Path -LiteralPath $env:SOFTHSM2_CONF -PathType Leaf)) {
     throw "AUTO cannot select an explicitly configured token store; set INITIALIZE_TOKEN=NO or YES"
 }
-if ($args.Count -eq 1 -and $InitializeSetting -eq "AUTO") {
-    $AlternateDir = Split-Path -Parent (Resolve-Path -LiteralPath $args[0]).Path
+if ($BundledMode -eq "NO" -and $InitializeSetting -eq "AUTO") {
+    $AlternateDir = Split-Path -Parent $Module
     if ((Test-Path -LiteralPath (Join-Path $AlternateDir 'softhsm.conf') -PathType Leaf) -or
         (Test-Path -LiteralPath (Join-Path $AlternateDir 'softhsm2.conf') -PathType Leaf)) {
         throw "AUTO cannot select a module-adjacent token store; set INITIALIZE_TOKEN=NO or YES"
     }
 }
+$TokenDirectory = "(explicit setting)"
 switch ($InitializeSetting) {
     "AUTO" {
         $TokenDirectory = Join-Path (Split-Path -Parent $UserConfig) "tokens"
+        if ($BundledMode -eq "YES" -and
+            (Test-Path -LiteralPath (Join-Path $KitDir 'softhsm.conf') -PathType Leaf)) {
+            $TokenDirectory = Join-Path $KitDir "tokens"
+        }
         $StoredTokenCount = 0
         if (Test-Path -LiteralPath $TokenDirectory -PathType Container) {
             $StoredTokenCount = @(Get-ChildItem -LiteralPath $TokenDirectory -Directory -Force -ErrorAction Stop).Count
@@ -100,17 +110,6 @@ $OpenSSL = (Resolve-Path (Join-Path $KitDir "bin/openssl.exe")).Path
 $Pkcs11Tool = (Resolve-Path (Join-Path $KitDir "bin/pkcs11-tool.exe")).Path
 $SoftHSMUtil = (Resolve-Path (Join-Path $KitDir "bin/softhsm2-util.exe")).Path
 $SoftHSMExport = (Resolve-Path (Join-Path $KitDir "bin/softhsm2-export.exe")).Path
-$Module = if ($args.Count -eq 1) {
-    (Resolve-Path -LiteralPath $args[0]).Path
-}
-else {
-    (Resolve-Path -LiteralPath (Join-Path $KitDir $Settings.MODULE_NAME)).Path
-}
-$BundledMode = if ($args.Count -eq 0) { "YES" } else { "NO" }
-if ($BundledMode -eq "YES") {
-    # AUTO selects the canonical store, not a caller application's override.
-    Remove-Item Env:SOFTHSM2_CONF -ErrorAction SilentlyContinue
-}
 if (-not (Test-Path -LiteralPath $Module -PathType Leaf)) {
     throw "PKCS #11 library is not a file: $Module"
 }
@@ -139,7 +138,8 @@ function Invoke-GostVerifier([string]$ExportedKey) {
 Write-Host "[TEST-KIT] platform=$($Settings.PLATFORM)"
 Write-Host "[TEST-KIT] settings=$ConfigPath"
 Write-Host "[TEST-KIT] PKCS #11 library=$Module"
-Write-Host "[TEST-KIT] canonical user config=$UserConfig"
+Write-Host "[TEST-KIT] bundled config=$(Join-Path $KitDir 'softhsm.conf')"
+Write-Host "[TEST-KIT] AUTO token directory=$TokenDirectory"
 Write-Host "[TEST-KIT] initialize token=$Initialize"
 Write-Host "[TEST-KIT] excluded functions=$(if ($Excluded.Count) { $Excluded -join ',' } else { '<none>' })"
 Write-Host "[TEST-KIT] precompiled client=$Client"
@@ -250,8 +250,17 @@ if ($BundledMode -eq "YES") {
     # module exactly as the other platforms do. Each case is isolated in its
     # own store under test-output.
     Write-Host "[BATTERY] running the full e2e case battery against the bundled module"
-    & $Client battery $Module (Join-Path $OutputDir "battery")
+    $BatteryLog = Join-Path $OutputDir "battery.log"
+    & $Client battery $Module (Join-Path $OutputDir "battery") |
+        Tee-Object -FilePath $BatteryLog
     if ($LASTEXITCODE -ne 0) { throw "e2e case battery failed" }
+    foreach ($Pattern in @('C_EX_InitToken behaviour verified',
+            'C_EX_SetTokenName = CKR_OK', 'C_EX_SetLocalPIN = CKR_OK')) {
+        if (-not (Select-String -LiteralPath $BatteryLog -SimpleMatch -Pattern $Pattern -Quiet)) {
+            throw "e2e battery did not prove $Pattern"
+        }
+    }
+    Write-Host "[C_EX] PASS: InitToken, SetTokenName and SetLocalPIN functional battery"
     Write-Host "[BATTERY] PASS: full e2e case battery"
     & (Join-Path $KitDir 'scripts/verify-rutoken-opensc.ps1') `
         -Module $Module -Cli $Pkcs11Tool `

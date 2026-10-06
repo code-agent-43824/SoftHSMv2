@@ -6159,11 +6159,16 @@ static void batteryInitToken(const fs::path& modulePath, const std::string& labe
 // build, no shell divergence. Each case points the module at a fresh config
 // through SOFTHSM2_CONF (or, for first-run, at an empty per-user home), so the
 // cases cannot see each other's state.
-static void runBattery(const fs::path& modulePath, const fs::path& workRoot)
+static void runBattery(const fs::path& modulePath, fs::path workRoot)
 {
     const std::string soPin = "12345678";
     const std::string userPin = "12345678";
     fs::create_directories(workRoot);
+    for (unsigned run = 1;; ++run)
+    {
+        const fs::path candidate = workRoot / ("run-" + std::to_string(run));
+        if (fs::create_directory(candidate)) { workRoot = candidate; break; }
+    }
     // Some cases write evidence files relative to the working directory (the
     // gost28147 case writes a gost-pkcs11/ tree). Run from the work directory
     // so none of it lands wherever the kit happened to be invoked from.
@@ -6172,18 +6177,34 @@ static void runBattery(const fs::path& modulePath, const fs::path& workRoot)
     clearEnvVar("P11_TEST_SLOT_ID");
     clearEnvVar("P11_TEST_TOKEN_LABEL");
 
-    // first-run: the per-user fallback must create the store from nothing, so
-    // no SOFTHSM2_CONF and an empty, isolated home (HOME on POSIX, USERPROFILE
-    // on Windows).
+    // first-run: copy the module and its adjacent config, when present, into
+    // an empty test directory. This exercises the packaged cold-start path;
+    // a bare product module still exercises the per-user fallback.
     {
         trace("BATTERY", "case first-run");
         clearEnvVar("SOFTHSM2_CONF");
         const fs::path home = fs::absolute(workRoot / "first-run-home");
+        fs::remove_all(home);
         fs::create_directories(home);
         setEnvVar("HOME", home.generic_string());
         setEnvVar("USERPROFILE", home.generic_string());
-        verifyFirstRunCreatesTokenDirectory(modulePath,
-                                            (home / "softhsm" / "tokens").string());
+        const fs::path adjacentConfig = modulePath.parent_path() / "softhsm.conf";
+        if (fs::is_regular_file(adjacentConfig))
+        {
+            const fs::path moduleDir = fs::absolute(workRoot / "first-run-module");
+            fs::remove_all(moduleDir);
+            fs::create_directories(moduleDir);
+            fs::copy_file(modulePath, moduleDir / modulePath.filename());
+            fs::copy_file(adjacentConfig, moduleDir / "softhsm.conf");
+            verifyFirstRunCreatesTokenDirectory(moduleDir / modulePath.filename(),
+                                                (moduleDir / "tokens").string());
+            if (fs::exists(home / "softhsm")) fail("adjacent first run touched the per-user store");
+        }
+        else
+        {
+            verifyFirstRunCreatesTokenDirectory(modulePath,
+                                                (home / "softhsm" / "tokens").string());
+        }
     }
 
     // multi-token: an empty store with the profile on; the case creates the

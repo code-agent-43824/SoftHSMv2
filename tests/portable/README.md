@@ -65,7 +65,7 @@ Four scenarios exist beside the generic one, all for the bundled module:
 
 | Scenario | What it settles |
 | --- | --- |
-| `first-run` | a cold machine gets its token directory made for it |
+| `first-run` | a copied module gets its adjacent token directory on cold start; a bare product module still tests the per-user fallback |
 | `multi-token` | the profile puts each token on its own slot, in a stable order |
 | `gost28147-modes` | `DISABLE_OTHER_28147_MODES` accepts and refuses what the device does; run three times, once per configuration |
 | `rutoken-profile` | the whole `FAKE_RUTOKEN_ECP` presentation, plus `RUTOKEN_FORCE_SENSITIVE` |

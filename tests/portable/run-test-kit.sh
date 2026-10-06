@@ -12,6 +12,15 @@ test -n "$module_name"
 config_file="$kit_dir/testkit.conf"
 test -f "$config_file"
 user_config="${HOME:?HOME is required}/softhsm/softhsm.conf"
+bundled_module="$kit_dir/$module_name"
+if [[ $# -eq 1 ]]; then
+  module=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
+else
+  module=$bundled_module
+fi
+[[ -f "$module" ]] || { printf 'PKCS #11 library is not a file: %s\n' "$module" >&2; exit 2; }
+bundled_mode=NO
+[[ "$module" == "$bundled_module" ]] && bundled_mode=YES
 
 cfg_initialize=AUTO
 cfg_excluded=
@@ -47,13 +56,13 @@ done < "$config_file"
 
 initialize_setting=${P11_TEST_INITIALIZE_TOKEN:-$cfg_initialize}
 initialize_setting=$(printf '%s' "$initialize_setting" | tr '[:lower:]' '[:upper:]')
-if [[ $# -eq 1 && "$initialize_setting" == AUTO && -n ${SOFTHSM2_CONF:-} &&
+if [[ "$initialize_setting" == AUTO && -n ${SOFTHSM2_CONF:-} &&
       -f "$SOFTHSM2_CONF" && -r "$SOFTHSM2_CONF" ]]; then
   echo 'AUTO cannot select an explicitly configured token store; set INITIALIZE_TOKEN=NO or YES' >&2
   exit 2
 fi
-if [[ $# -eq 1 && "$initialize_setting" == AUTO ]]; then
-  alternate_dir=$(cd "$(dirname "$1")" && pwd)
+if [[ "$bundled_mode" == NO && "$initialize_setting" == AUTO ]]; then
+  alternate_dir=$(dirname "$module")
   if [[ -r "$alternate_dir/softhsm.conf" || -r "$alternate_dir/softhsm2.conf" ]]; then
     echo 'AUTO cannot select a module-adjacent token store; set INITIALIZE_TOKEN=NO or YES' >&2
     exit 2
@@ -62,6 +71,9 @@ fi
 case "$initialize_setting" in
   AUTO)
     token_dir=$(dirname "$user_config")/tokens
+    if [[ "$bundled_mode" == YES && -r "$kit_dir/softhsm.conf" ]]; then
+      token_dir="$kit_dir/tokens"
+    fi
     if ! find "$token_dir" -mindepth 1 -maxdepth 1 -type d -print -quit 2>/dev/null | grep -q .; then
       initialize=YES
     else
@@ -114,20 +126,6 @@ set_optional P11_TEST_TOKEN_LABEL "${P11_TEST_TOKEN_LABEL:-$cfg_token_label}"
 set_optional P11_TEST_KEY_LABEL "${P11_TEST_KEY_LABEL:-$cfg_key_label}"
 set_optional P11_TEST_OBJECT_ID_HEX "${P11_TEST_OBJECT_ID_HEX:-$cfg_object_id}"
 
-if [[ $# -eq 1 ]]; then
-  module=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
-  bundled_mode=NO
-else
-  module="$kit_dir/$module_name"
-  bundled_mode=YES
-  # AUTO selects the canonical user store. Do not inherit an app's explicit
-  # override and accidentally initialize its separate token store.
-  unset SOFTHSM2_CONF
-fi
-if [[ ! -f "$module" ]]; then
-  printf 'PKCS #11 library is not a file: %s\n' "$module" >&2
-  exit 2
-fi
 # ZIP extraction does not restore executable bits consistently across tools.
 # Running this launcher as `bash run-test.sh ...` repairs the bundled tools.
 chmod +x "$kit_dir/bin/portable-token-e2e" "$kit_dir/bin/openssl" \
@@ -143,7 +141,8 @@ export OPENSSL_CONF="$kit_dir/config/openssl.cnf"
 printf '[TEST-KIT] platform=%s\n' "$(sed -n 's/^PLATFORM=//p' "$kit_dir/testkit.env")"
 printf '[TEST-KIT] settings=%s\n' "$config_file"
 printf '[TEST-KIT] PKCS #11 library=%s\n' "$module"
-printf '[TEST-KIT] canonical user config=%s\n' "$user_config"
+printf '[TEST-KIT] bundled config=%s\n' "$kit_dir/softhsm.conf"
+printf '[TEST-KIT] AUTO token directory=%s\n' "${token_dir:-explicit setting}"
 printf '[TEST-KIT] initialize token=%s\n' "$initialize"
 printf '[TEST-KIT] excluded functions=%s\n' "${excluded:-<none>}"
 printf '[TEST-KIT] precompiled client=%s\n' "$P11_TEST_CLIENT"
