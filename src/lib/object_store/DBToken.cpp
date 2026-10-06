@@ -581,6 +581,84 @@ bool DBToken::setTokenName(const ByteString& name, const ByteString& label)
 	return true;
 }
 
+bool DBToken::getLicense(CK_ULONG id, ByteString& license, bool& exists)
+{
+	if (_connection == NULL) return false;
+	DBObject object(_connection);
+	if (!object.startTransaction(DBObject::ReadOnly)) return false;
+	if (!object.find(DBTOKEN_OBJECT_TOKENINFO))
+	{
+		object.abortTransaction();
+		return false;
+	}
+	exists = object.attributeExists(CKA_OS_LICENSE(id));
+	if (exists) license = object.getAttribute(CKA_OS_LICENSE(id)).getByteStringValue();
+	return object.commitTransaction();
+}
+
+bool DBToken::setLicense(CK_ULONG id, const ByteString& license)
+{
+	if (_connection == NULL) return false;
+	DBObject object(_connection);
+	if (!object.startTransaction(DBObject::ReadWrite)) return false;
+	if (!object.find(DBTOKEN_OBJECT_TOKENINFO) ||
+	    !object.setAttribute(CKA_OS_LICENSE(id), OSAttribute(license)) ||
+	    !object.commitTransaction())
+	{
+		object.abortTransaction();
+		return false;
+	}
+	return true;
+}
+
+bool DBToken::getJournal(ByteString& journal, bool& exists)
+{
+	if (_connection == NULL) return false;
+	DBObject object(_connection);
+	if (!object.startTransaction(DBObject::ReadOnly)) return false;
+	if (!object.find(DBTOKEN_OBJECT_TOKENINFO))
+	{
+		object.abortTransaction();
+		return false;
+	}
+	exists = object.attributeExists(CKA_OS_JOURNAL);
+	if (exists) journal = object.getAttribute(CKA_OS_JOURNAL).getByteStringValue();
+	return object.commitTransaction();
+}
+
+bool DBToken::advanceJournal(ByteString& journal, CK_ULONG countOffset)
+{
+	if (countOffset + 4 > journal.size() || _connection == NULL) return false;
+	DBObject object(_connection);
+	if (!object.startTransaction(DBObject::ReadWrite)) return false;
+	if (!object.find(DBTOKEN_OBJECT_TOKENINFO))
+	{
+		object.abortTransaction();
+		return false;
+	}
+	unsigned long count = 0;
+	if (object.attributeExists(CKA_OS_JOURNAL))
+	{
+		ByteString old = object.getAttribute(CKA_OS_JOURNAL).getByteStringValue();
+		if (old.size() < 4) { object.abortTransaction(); return false; }
+		for (size_t i = 0; i < 4; ++i) count = (count << 8) | old[i];
+	}
+	if (count < 0xFFFFFFFFUL) ++count;
+	for (size_t i = 0; i < 4; ++i)
+	{
+		const unsigned char byte = static_cast<unsigned char>(count >> (24 - 8 * i));
+		journal[i] = byte;
+		journal[countOffset + i] = byte;
+	}
+	if (!object.setAttribute(CKA_OS_JOURNAL, OSAttribute(journal)) ||
+	    !object.commitTransaction())
+	{
+		object.abortTransaction();
+		return false;
+	}
+	return true;
+}
+
 bool DBToken::getLocalPIN(CK_ULONG id, ByteString& record, bool& exists)
 {
 	if (_connection == NULL) return false;

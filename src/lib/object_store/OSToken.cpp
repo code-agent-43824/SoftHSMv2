@@ -325,6 +325,61 @@ bool OSToken::setTokenName(const ByteString& name, const ByteString& label)
 	return true;
 }
 
+bool OSToken::getLicense(CK_ULONG id, ByteString& license, bool& exists)
+{
+	if (!valid || !tokenObject->isValid()) return false;
+	exists = tokenObject->attributeExists(CKA_OS_LICENSE(id));
+	if (exists) license = tokenObject->getAttribute(CKA_OS_LICENSE(id)).getByteStringValue();
+	return true;
+}
+
+bool OSToken::setLicense(CK_ULONG id, const ByteString& license)
+{
+	if (!valid || !tokenObject->startTransaction(OSObject::ReadWrite)) return false;
+	if (!tokenObject->setAttribute(CKA_OS_LICENSE(id), OSAttribute(license)) ||
+	    !tokenObject->commitTransaction())
+	{
+		tokenObject->abortTransaction();
+		return false;
+	}
+	return true;
+}
+
+bool OSToken::getJournal(ByteString& journal, bool& exists)
+{
+	if (!valid || !tokenObject->isValid()) return false;
+	exists = tokenObject->attributeExists(CKA_OS_JOURNAL);
+	if (exists) journal = tokenObject->getAttribute(CKA_OS_JOURNAL).getByteStringValue();
+	return true;
+}
+
+bool OSToken::advanceJournal(ByteString& journal, CK_ULONG countOffset)
+{
+	if (countOffset + 4 > journal.size() ||
+	    !valid || !tokenObject->startTransaction(OSObject::ReadWrite)) return false;
+	unsigned long count = 0;
+	if (tokenObject->attributeExists(CKA_OS_JOURNAL))
+	{
+		ByteString old = tokenObject->getAttribute(CKA_OS_JOURNAL).getByteStringValue();
+		if (old.size() < 4) { tokenObject->abortTransaction(); return false; }
+		for (size_t i = 0; i < 4; ++i) count = (count << 8) | old[i];
+	}
+	if (count < 0xFFFFFFFFUL) ++count;
+	for (size_t i = 0; i < 4; ++i)
+	{
+		const unsigned char byte = static_cast<unsigned char>(count >> (24 - 8 * i));
+		journal[i] = byte;
+		journal[countOffset + i] = byte;
+	}
+	if (!tokenObject->setAttribute(CKA_OS_JOURNAL, OSAttribute(journal)) ||
+	    !tokenObject->commitTransaction())
+	{
+		tokenObject->abortTransaction();
+		return false;
+	}
+	return true;
+}
+
 bool OSToken::getLocalPIN(CK_ULONG id, ByteString& record, bool& exists)
 {
 	if (!valid || !tokenObject->isValid()) return false;

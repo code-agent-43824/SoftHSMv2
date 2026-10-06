@@ -1394,6 +1394,73 @@ CK_RV SoftHSM::C_EX_SetTokenName(CK_SESSION_HANDLE hSession, CK_CHAR_PTR pLabel,
 	return token == NULL ? CKR_GENERAL_ERROR : token->setTokenName(name);
 }
 
+CK_RV SoftHSM::C_EX_GetLicense(CK_SESSION_HANDLE hSession, CK_ULONG ulLicenseNum,
+                                CK_BYTE_PTR pLicense, CK_ULONG_PTR pulLicenseLen)
+{
+	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;
+	if (!fakeRutokenECP) return CKR_FUNCTION_NOT_SUPPORTED;
+	Session* session = (Session*)handleManager->getSession(hSession);
+	if (session == NULL) return CKR_SESSION_HANDLE_INVALID;
+	// The reference device accepts four slots, including the two documented by
+	// the SDK. A blank slot reads as 72 zero bytes.
+	if (ulLicenseNum < 1 || ulLicenseNum > 4 || pulLicenseLen == NULL_PTR)
+		return CKR_ARGUMENTS_BAD;
+	Token* token = session->getToken();
+	if (token == NULL) return CKR_TOKEN_NOT_PRESENT;
+	ByteString license;
+	bool exists = false;
+	if (!token->getLicense(ulLicenseNum, license, exists)) return CKR_DEVICE_ERROR;
+	if (exists && license.size() != 72) return CKR_DEVICE_ERROR;
+	if (pLicense == NULL_PTR) { *pulLicenseLen = 72; return CKR_OK; }
+	if (*pulLicenseLen < 72) { *pulLicenseLen = 72; return CKR_BUFFER_TOO_SMALL; }
+	if (exists) memcpy(pLicense, license.const_byte_str(), 72);
+	else memset(pLicense, 0, 72);
+	*pulLicenseLen = 72;
+	return CKR_OK;
+}
+
+CK_RV SoftHSM::C_EX_SetLicense(CK_SESSION_HANDLE hSession, CK_ULONG ulLicenseNum,
+                                CK_BYTE_PTR pLicense, CK_ULONG ulLicenseLen)
+{
+	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;
+	if (!fakeRutokenECP) return CKR_FUNCTION_NOT_SUPPORTED;
+	Session* session = (Session*)handleManager->getSession(hSession);
+	if (session == NULL) return CKR_SESSION_HANDLE_INVALID;
+	if (session->getState() == CKS_RO_PUBLIC_SESSION ||
+	    session->getState() == CKS_RO_USER_FUNCTIONS) return CKR_SESSION_READ_ONLY;
+	if (session->getState() != CKS_RW_USER_FUNCTIONS &&
+	    session->getState() != CKS_RW_SO_FUNCTIONS) return CKR_USER_NOT_LOGGED_IN;
+	if (ulLicenseNum < 1 || ulLicenseNum > 4 || pLicense == NULL_PTR || ulLicenseLen != 72)
+		return CKR_ARGUMENTS_BAD;
+	Token* token = session->getToken();
+	return token == NULL ? CKR_TOKEN_NOT_PRESENT :
+		token->setLicense(ulLicenseNum, ByteString(pLicense, ulLicenseLen));
+}
+
+CK_RV SoftHSM::C_EX_GetJournal(CK_SLOT_ID slotID, CK_BYTE_PTR pJournal,
+                                CK_ULONG_PTR pulJournalSize)
+{
+	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;
+	if (!fakeRutokenECP) return CKR_FUNCTION_NOT_SUPPORTED;
+	if (slotID >= fakeRutokenLayout().size())
+		return slotID < FAKE_RUTOKEN_SLOT_COUNT ? CKR_TOKEN_NOT_PRESENT : CKR_SLOT_ID_INVALID;
+	if (pulJournalSize == NULL_PTR) return CKR_ARGUMENTS_BAD;
+	Slot* slot = fakeRutokenSlot(slotID);
+	Token* token = slot == NULL ? NULL : slot->getToken();
+	if (token == NULL) return CKR_TOKEN_NOT_PRESENT;
+	ByteString journal;
+	if (!token->getJournal(journal)) return CKR_DEVICE_ERROR;
+	if (pJournal == NULL_PTR) { *pulJournalSize = journal.size(); return CKR_OK; }
+	if (*pulJournalSize < journal.size())
+	{
+		*pulJournalSize = journal.size();
+		return CKR_BUFFER_TOO_SMALL;
+	}
+	if (journal.size() != 0) memcpy(pJournal, journal.const_byte_str(), journal.size());
+	*pulJournalSize = journal.size();
+	return CKR_OK;
+}
+
 CK_RV SoftHSM::C_EX_SetLocalPIN(CK_SLOT_ID slotID, CK_UTF8CHAR_PTR pUserPin,
                                 CK_ULONG ulUserPinLen, CK_UTF8CHAR_PTR pNewLocalPin,
                                 CK_ULONG ulNewLocalPinLen, CK_ULONG ulLocalID)
@@ -6498,8 +6565,21 @@ CK_RV SoftHSM::C_Sign(CK_SESSION_HANDLE hSession, CK_BYTE_PTR pData, CK_ULONG ul
 		return MacSign(session, pData, ulDataLen,
 			       pSignature, pulSignatureLen);
 	else
-		return AsymSign(session, pData, ulDataLen,
-				pSignature, pulSignatureLen);
+	{
+		const AsymMech::Type mechanism = session->getMechanism();
+		const bool gost = mechanism == AsymMech::GOST ||
+			mechanism == AsymMech::GOST_GOST || mechanism == AsymMech::GOST_512 ||
+			mechanism == AsymMech::GOST_GOST_512;
+		const CK_RV rv = AsymSign(session, pData, ulDataLen, pSignature, pulSignatureLen);
+		if (rv != CKR_OK || pSignature == NULL_PTR || !fakeRutokenECP || !gost) return rv;
+		Token* token = session->getToken();
+		if (token == NULL) return CKR_TOKEN_NOT_PRESENT;
+		return token->recordSignature(ByteString(pData, ulDataLen),
+			ByteString(pSignature, *pulSignatureLen),
+			(mechanism == AsymMech::GOST_512 || mechanism == AsymMech::GOST_GOST_512)
+				? 0x43 : 0x03,
+			mechanism == AsymMech::GOST_GOST || mechanism == AsymMech::GOST_GOST_512);
+	}
 }
 
 // MacAlgorithm version of C_SignUpdate
@@ -6698,7 +6778,17 @@ CK_RV SoftHSM::C_SignFinal(CK_SESSION_HANDLE hSession, CK_BYTE_PTR pSignature, C
 	if (session->getMacOp() != NULL)
 		return MacSignFinal(session, pSignature, pulSignatureLen);
 	else
-		return AsymSignFinal(session, pSignature, pulSignatureLen);
+	{
+		const AsymMech::Type mechanism = session->getMechanism();
+		const CK_RV rv = AsymSignFinal(session, pSignature, pulSignatureLen);
+		if (rv != CKR_OK || pSignature == NULL_PTR || !fakeRutokenECP ||
+		    (mechanism != AsymMech::GOST_GOST && mechanism != AsymMech::GOST_GOST_512))
+			return rv;
+		Token* token = session->getToken();
+		if (token == NULL) return CKR_TOKEN_NOT_PRESENT;
+		return token->recordSignature(ByteString(), ByteString(pSignature, *pulSignatureLen),
+			mechanism == AsymMech::GOST_GOST_512 ? 0x43 : 0x03, true);
+	}
 }
 
 // Initialise a signing operation that allows recovery of the signed data

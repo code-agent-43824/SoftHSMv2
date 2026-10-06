@@ -217,14 +217,21 @@ The module also exports the Rutoken extended function table through
 C_EX_GetFunctionListExtended, because applications written for a Rutoken often
 treat the absence of that symbol as proof that the module is not a Rutoken.
 Like C_GetFunctionList it answers at any time, including before C_Initialize,
-and returning it claims nothing on its own. Of the 34 entries in that table
-only C_EX_GetTokenInfoExtended and C_EX_GetTokenName report anything, and only
-while the profile is enabled; every other entry returns
+and returning it claims nothing on its own. Under the Rutoken profile the
+implemented entries include token information and name, InitToken, local PIN,
+User PIN unblock, License and Journal; unsupported entries still return
 CKR_FUNCTION_NOT_SUPPORTED. C_EX_GetTokenName returns the token's label with
 its padding removed, in the usual two passes: a null buffer asks for the
 length, a short one is refused with CKR_BUFFER_TOO_SMALL. It reports the same
 name C_GetTokenInfo does, placeholder included. The functions are described in
 docs/RUTOKEN-EXTENSIONS.md.
+
+The software signature journal records the latest successful GOST signature
+and a persistent success count. It uses Rutoken-style TLV fields, but its
+0xB6 field contains the operation signature, not a separately signed journal
+record: this emulator has no hardware journal key. License slots 1-4 are
+72-byte persistent records, readable without login and writable from an RW
+User or SO session. They do not represent a hardware license validation service.
 
 Two things outside the profile changed as well, and apply whether it is enabled
 or not.

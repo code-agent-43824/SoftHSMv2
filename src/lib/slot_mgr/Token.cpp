@@ -627,6 +627,73 @@ bool Token::getTokenName(ByteString& name, bool& exists)
 	return token != NULL && token->getTokenName(name, exists);
 }
 
+bool Token::getLicense(CK_ULONG id, ByteString& license, bool& exists)
+{
+	MutexLocker lock(tokenMutex);
+	return token != NULL && token->getLicense(id, license, exists);
+}
+
+CK_RV Token::setLicense(CK_ULONG id, const ByteString& license)
+{
+	MutexLocker lock(tokenMutex);
+	if (token == NULL) return CKR_TOKEN_NOT_PRESENT;
+	return token->setLicense(id, license) ? CKR_OK : CKR_DEVICE_ERROR;
+}
+
+bool Token::getJournal(ByteString& journal)
+{
+	MutexLocker lock(tokenMutex);
+	if (token == NULL) return false;
+	ByteString stored;
+	bool exists = false;
+	if (!token->getJournal(stored, exists)) return false;
+	if (exists)
+	{
+		if (stored.size() < 4) return false;
+		journal = stored.substr(4);
+	}
+	else journal = ByteString();
+	return true;
+}
+
+CK_RV Token::recordSignature(const ByteString& digest, const ByteString& signature,
+                              CK_BYTE rsfType, bool hashedOnToken)
+{
+	MutexLocker lock(tokenMutex);
+	if (token == NULL) return CKR_TOKEN_NOT_PRESENT;
+	if (signature.size() == 0 || signature.size() > 128) return CKR_DEVICE_ERROR;
+	// One Rutoken-style TLV record. The four-byte prefix is private storage for
+	// the counter; C_EX_GetJournal returns only the TLV bytes. Without a journal
+	// signing key, 0xB6 contains the operation's actual signature.
+	ByteString operation;
+	operation.resize(12);
+	operation[0] = 1;
+	operation[1] = rsfType;
+	operation[3] = hashedOnToken ? 1 : 0;
+	ByteString inner;
+	inner += static_cast<unsigned char>(0x85);
+	inner += static_cast<unsigned char>(12);
+	inner += operation;
+	if (!hashedOnToken && (digest.size() == 32 || digest.size() == 64))
+	{
+		inner += static_cast<unsigned char>(0xAA);
+		inner += static_cast<unsigned char>(digest.size());
+		inner += digest;
+	}
+	inner += static_cast<unsigned char>(0xB6);
+	if (signature.size() >= 128) inner += static_cast<unsigned char>(0x81);
+	inner += static_cast<unsigned char>(signature.size());
+	inner += signature;
+	ByteString stored;
+	stored.resize(4);
+	stored += static_cast<unsigned char>(0x80);
+	if (inner.size() >= 128) stored += static_cast<unsigned char>(0x81);
+	stored += static_cast<unsigned char>(inner.size());
+	const CK_ULONG countOffset = static_cast<CK_ULONG>(stored.size() + 2 + 8);
+	stored += inner;
+	return token->advanceJournal(stored, countOffset) ? CKR_OK : CKR_DEVICE_ERROR;
+}
+
 CK_RV Token::setLocalPIN(CK_ULONG id, ByteString& currentPIN, ByteString& newPIN)
 {
 	MutexLocker lock(tokenMutex);

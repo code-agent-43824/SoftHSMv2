@@ -364,6 +364,8 @@ long long DBObject::objectId()
 
 static bool isModifiable(CK_ATTRIBUTE_TYPE type)
 {
+	if (type >= CKA_OS_LICENSE(1) && type <= CKA_OS_LICENSE(4)) return true;
+	if (type == CKA_OS_JOURNAL) return true;
 	if (type >= CKA_OS_LOCALPIN(3) && type <= CKA_OS_LOCALPIN(31)) return true;
 	switch (type) {
 	case CKA_LABEL:
@@ -407,6 +409,8 @@ enum AttributeKind {
 
 static AttributeKind attributeKind(CK_ATTRIBUTE_TYPE type)
 {
+	if (type >= CKA_OS_LICENSE(1) && type <= CKA_OS_LICENSE(4)) return akBinary;
+	if (type == CKA_OS_JOURNAL) return akBinary;
 	if (type >= CKA_OS_LOCALPIN(3) && type <= CKA_OS_LOCALPIN(31)) return akBinary;
 	switch (type) {
 	case CKA_CLASS: return akInteger;

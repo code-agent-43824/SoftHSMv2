@@ -79,6 +79,11 @@ public:
 	virtual bool getTokenLabel(ByteString& label) = 0;
 	virtual bool getTokenName(ByteString& name, bool& exists) = 0;
 	virtual bool setTokenName(const ByteString& name, const ByteString& label) = 0;
+	virtual bool getLicense(CK_ULONG id, ByteString& license, bool& exists) = 0;
+	virtual bool setLicense(CK_ULONG id, const ByteString& license) = 0;
+	// Stored as a four-byte signature count followed by one TLV record.
+	virtual bool getJournal(ByteString& journal, bool& exists) = 0;
+	virtual bool advanceJournal(ByteString& journal, CK_ULONG countOffset) = 0;
 	virtual bool getLocalPIN(CK_ULONG id, ByteString& record, bool& exists) = 0;
 	virtual bool updateLocalPIN(CK_ULONG id, const ByteString& expected,
 	                            const ByteString& replacement, bool& changed) = 0;

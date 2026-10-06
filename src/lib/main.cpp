@@ -1862,20 +1862,24 @@ PKCS_API CK_RV C_EX_SetTokenName
 
 PKCS_API CK_RV C_EX_SetLicense
 (
-	CK_SESSION_HANDLE /*hSession*/, CK_ULONG /*ulLicenseNum*/,
-	CK_BYTE_PTR /*pLicense*/, CK_ULONG /*ulLicenseLen*/
+	CK_SESSION_HANDLE hSession, CK_ULONG ulLicenseNum,
+	CK_BYTE_PTR pLicense, CK_ULONG ulLicenseLen
 )
 {
-	return CKR_FUNCTION_NOT_SUPPORTED;
+	try { return SoftHSM::i()->C_EX_SetLicense(hSession, ulLicenseNum, pLicense, ulLicenseLen); }
+	catch (...) { FatalException(); }
+	return CKR_FUNCTION_FAILED;
 }
 
 PKCS_API CK_RV C_EX_GetLicense
 (
-	CK_SESSION_HANDLE /*hSession*/, CK_ULONG /*ulLicenseNum*/,
-	CK_BYTE_PTR /*pLicense*/, CK_ULONG_PTR /*pulLicenseLen*/
+	CK_SESSION_HANDLE hSession, CK_ULONG ulLicenseNum,
+	CK_BYTE_PTR pLicense, CK_ULONG_PTR pulLicenseLen
 )
 {
-	return CKR_FUNCTION_NOT_SUPPORTED;
+	try { return SoftHSM::i()->C_EX_GetLicense(hSession, ulLicenseNum, pLicense, pulLicenseLen); }
+	catch (...) { FatalException(); }
+	return CKR_FUNCTION_FAILED;
 }
 
 PKCS_API CK_RV C_EX_GetCertificateInfoText
@@ -2027,11 +2031,13 @@ PKCS_API CK_RV C_EX_GenerateActivationPassword
 
 PKCS_API CK_RV C_EX_GetJournal
 (
-	CK_SLOT_ID /*slotID*/, CK_BYTE_PTR /*pJournal*/,
-	CK_ULONG_PTR /*pulJournalSize*/
+	CK_SLOT_ID slotID, CK_BYTE_PTR pJournal,
+	CK_ULONG_PTR pulJournalSize
 )
 {
-	return CKR_FUNCTION_NOT_SUPPORTED;
+	try { return SoftHSM::i()->C_EX_GetJournal(slotID, pJournal, pulJournalSize); }
+	catch (...) { FatalException(); }
+	return CKR_FUNCTION_FAILED;
 }
 
 PKCS_API CK_RV C_EX_SignInvisibleInit

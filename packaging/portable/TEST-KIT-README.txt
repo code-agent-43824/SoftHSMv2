@@ -64,6 +64,13 @@ C_InitToken, C_InitPIN, and C_SetPIN before invocation. EXCLUDED_FUNCTIONS can
 block additional C_* entry points. USER_PIN and SO_PIN are stored as plain text
 in this local file, so do not publish a customized copy containing real secrets.
 
+The isolated battery checks Rutoken License slots and the persistent GOST
+signature journal through the extended function table. The journal is a
+software emulation: its 0xB6 TLV contains the operation signature, not a
+separate hardware-journal signature. One explicit no-profile GOST 28147 case
+remains as a negative comparison; normal test-kit operation uses the Rutoken
+profile.
+
 The trace runs GOST and RSA as explicitly separated scenarios. Persistent GOST
 and RSA pairs use different labels and IDs, and every persistent-key search
 also specifies the key type. CKA_KEY_GEN_MECHANISM is not queried because the

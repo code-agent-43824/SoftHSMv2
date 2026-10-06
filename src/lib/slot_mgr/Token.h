@@ -111,6 +111,11 @@ public:
 	bool getSerial(ByteString& serial);
 	CK_RV setTokenName(const ByteString& name);
 	bool getTokenName(ByteString& name, bool& exists);
+	bool getLicense(CK_ULONG id, ByteString& license, bool& exists);
+	CK_RV setLicense(CK_ULONG id, const ByteString& license);
+	bool getJournal(ByteString& journal);
+	CK_RV recordSignature(const ByteString& digest, const ByteString& signature,
+	                      CK_BYTE rsfType, bool hashedOnToken);
 	CK_RV setLocalPIN(CK_ULONG id, ByteString& currentPIN, ByteString& newPIN);
 
 	// Create object

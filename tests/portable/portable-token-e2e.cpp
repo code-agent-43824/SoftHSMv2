@@ -3576,23 +3576,14 @@ static CK_SLOT_ID verifySlotEvents(Module& module)
                  [&] { return module->C_WaitForSlotEvent(CKF_DONT_BLOCK, &slot, nullptr); }),
           CKR_NO_EVENT, "C_WaitForSlotEvent(nothing pending)");
 
-    // SoftHSM keeps one spare slot holding an uninitialised token; filling it
-    // is the one thing that happens here which a watcher would call an event.
-    // The size-query form of C_GetSlotList is what tops the spare back up.
-    CK_ULONG count = 0;
-    callOk("C_GetSlotList", "tokenPresent=CK_FALSE, pSlotList=NULL_PTR",
-           [&] { return module->C_GetSlotList(CK_FALSE, nullptr, &count); });
-    std::vector<CK_SLOT_ID> all(count);
-    callOk("C_GetSlotList", "tokenPresent=CK_FALSE, pSlotList=&slots",
-           [&] { return module->C_GetSlotList(CK_FALSE, all.data(), &count); });
-    if (count == 0) fail("C_GetSlotList reported no slots at all");
-    const CK_SLOT_ID spare = all[count - 1];
-
     const std::string soPin = environment("P11_TEST_SO_PIN", true);
     std::array<CK_UTF8CHAR, 32> label{};
     label.fill(' ');
     const std::string spareLabel = "slot event token";
     std::copy(spareLabel.begin(), spareLabel.end(), label.begin());
+    // The Rutoken profile presents fifteen reader slots, but only one backs
+    // the uninitialised token. Do not assume the last reader is that spare.
+    const CK_SLOT_ID spare = selectSlotForInitialization(module, spareLabel);
     callOk("C_InitToken", "slotID=" + std::to_string(spare) + " (the spare slot)",
            [&] { return module->C_InitToken(spare,
                        reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(soPin.data())),
@@ -3632,7 +3623,8 @@ static CK_SLOT_ID verifySlotEvents(Module& module)
 // The pair of checks matters as much as the default: asking for a
 // non-extractable key must still produce one, or the default has stopped being
 // a default and become the only behaviour.
-static void verifySilentTemplateKeyIsReadable(Module& module, CK_SESSION_HANDLE session)
+static void verifySilentTemplateKeyIsReadable(Module& module, CK_SESSION_HANDLE session,
+                                              bool rutokenProfile)
 {
     CK_OBJECT_CLASS secretClass = CKO_SECRET_KEY;
     CK_KEY_TYPE keyType = CKK_AES;
@@ -3652,18 +3644,26 @@ static void verifySilentTemplateKeyIsReadable(Module& module, CK_SESSION_HANDLE 
     callOk("C_GenerateKey", "pTemplate=silent about CKA_SENSITIVE/CKA_EXTRACTABLE",
            [&] { return module->C_GenerateKey(session, &mechanism, silent, 4, &key); });
 
-    requireBooleanAttribute(module, session, key, CKA_SENSITIVE, CK_FALSE);
-    requireBooleanAttribute(module, session, key, CKA_EXTRACTABLE, CK_TRUE);
-    requireBooleanAttribute(module, session, key, CKA_NEVER_EXTRACTABLE, CK_FALSE);
+    requireBooleanAttribute(module, session, key, CKA_SENSITIVE,
+                            rutokenProfile ? CK_TRUE : CK_FALSE);
+    requireBooleanAttribute(module, session, key, CKA_EXTRACTABLE,
+                            rutokenProfile ? CK_FALSE : CK_TRUE);
 
     std::vector<CK_BYTE> value(valueLen + 16, 0);
     CK_ATTRIBUTE read = {CKA_VALUE, value.data(), static_cast<CK_ULONG>(value.size())};
-    callOk("C_GetAttributeValue", "CKA_VALUE of the silently generated key",
-           [&] { return module->C_GetAttributeValue(session, key, &read, 1); });
-    if (read.ulValueLen != valueLen)
-        fail("a key generated from a silent template returned " +
-             std::to_string(read.ulValueLen) + " bytes where " +
-             std::to_string(valueLen) + " were generated");
+    if (rutokenProfile)
+        check(invoke("C_GetAttributeValue", "Rutoken default key is unreadable", [&] {
+            return module->C_GetAttributeValue(session, key, &read, 1);
+        }), CKR_ATTRIBUTE_SENSITIVE, "Rutoken default sensitivity");
+    else
+    {
+        callOk("C_GetAttributeValue", "CKA_VALUE of the silently generated key",
+               [&] { return module->C_GetAttributeValue(session, key, &read, 1); });
+        if (read.ulValueLen != valueLen)
+            fail("a key generated from a silent template returned " +
+                 std::to_string(read.ulValueLen) + " bytes where " +
+                 std::to_string(valueLen) + " were generated");
+    }
 
     // The default is a default, not a policy: a template that asks for an
     // unreadable key still gets one, and it cannot be talked back out of it.
@@ -3872,7 +3872,7 @@ static void verifyCoreBehaviour(const fs::path& modulePath)
     login(module, session, CKU_USER, userPin);
 
     verifyPrivateObjectDates(module, session);
-    verifySilentTemplateKeyIsReadable(module, session);
+    verifySilentTemplateKeyIsReadable(module, session, true);
 
     closeSession(module, session);
     std::cout << "core PKCS #11 behaviour verified\n";
@@ -3978,6 +3978,72 @@ static void verifyExtendedInitToken(const fs::path& modulePath)
         maxUser = extended.ulMaxUserRetryCount; leftUser = extended.ulUserRetryCountLeft;
     };
 
+    std::array<CK_BYTE, 72> licenseOne{};
+    std::array<CK_BYTE, 72> licenseTwo{};
+    for (size_t i = 0; i < licenseOne.size(); ++i)
+    {
+        licenseOne[i] = static_cast<CK_BYTE>(i + 1);
+        licenseTwo[i] = static_cast<CK_BYTE>(72 - i);
+    }
+    auto readLicense = [&](CK_ULONG number, const std::array<CK_BYTE, 72>& expected) {
+        CK_SESSION_HANDLE s = openSession(module, slot);
+        CK_ULONG length = 0;
+        callOk("C_EX_GetLicense", "size query", [&] {
+            return ex->C_EX_GetLicense(s, number, nullptr, &length);
+        });
+        if (length != 72) fail("C_EX_GetLicense reported a length other than 72");
+        std::array<CK_BYTE, 72> actual{};
+        length = 8;
+        check(invoke("C_EX_GetLicense", "short buffer", [&] {
+            return ex->C_EX_GetLicense(s, number, actual.data(), &length);
+        }), CKR_BUFFER_TOO_SMALL, "license short buffer");
+        if (length != 72) fail("C_EX_GetLicense did not report the required length");
+        callOk("C_EX_GetLicense", "full buffer", [&] {
+            return ex->C_EX_GetLicense(s, number, actual.data(), &length);
+        });
+        if (length != 72 || actual != expected) fail("C_EX_GetLicense returned incorrect bytes");
+        closeSession(module, s);
+    };
+
+    // License slots survive both kinds of token format, unlike PKCS #11
+    // objects. Reading an unwritten slot needs no login and returns zeros.
+    readLicense(1, std::array<CK_BYTE, 72>{});
+    readLicense(3, std::array<CK_BYTE, 72>{});
+    readLicense(4, std::array<CK_BYTE, 72>{});
+    {
+        CK_SESSION_HANDLE s = openSession(module, slot);
+        check(invoke("C_EX_SetLicense", "without login", [&] {
+            return ex->C_EX_SetLicense(s, 1, licenseOne.data(), 72);
+        }), CKR_USER_NOT_LOGGED_IN, "license requires login");
+        login(module, s, CKU_USER, userPin);
+        check(invoke("C_EX_SetLicense", "invalid slot 5", [&] {
+            return ex->C_EX_SetLicense(s, 5, licenseOne.data(), 72);
+        }), CKR_ARGUMENTS_BAD, "license slot range");
+        check(invoke("C_EX_SetLicense", "71 bytes", [&] {
+            return ex->C_EX_SetLicense(s, 1, licenseOne.data(), 71);
+        }), CKR_ARGUMENTS_BAD, "license length");
+        callOk("C_EX_SetLicense", "slot 1 as User", [&] {
+            return ex->C_EX_SetLicense(s, 1, licenseOne.data(), 72);
+        });
+        logout(module, s, "CKU_USER");
+        closeSession(module, s);
+    }
+    {
+        CK_SESSION_HANDLE s = openSession(module, slot);
+        login(module, s, CKU_SO, soPin);
+        callOk("C_EX_SetLicense", "slot 2 as SO", [&] {
+            return ex->C_EX_SetLicense(s, 2, licenseTwo.data(), 72);
+        });
+        callOk("C_EX_SetLicense", "slot 4 as SO", [&] {
+            return ex->C_EX_SetLicense(s, 4, licenseTwo.data(), 72);
+        });
+        logout(module, s, "CKU_SO");
+        closeSession(module, s);
+    }
+    readLicense(1, licenseOne);
+    readLicense(2, licenseTwo);
+    readLicense(4, licenseTwo);
+
     // Phase A: leave a private object on the token, to prove the format wipes it.
     const std::string victimLabel = "ex-init-victim";
     {
@@ -4063,6 +4129,10 @@ static void verifyExtendedInitToken(const fs::path& modulePath)
         good.ulMinAdminPinLen = 8;
         good.ChangeUserPINPolicy = TOKEN_FLAGS_USER_CHANGE_USER_PIN;
         exInit("C_EX_InitToken(format with the SO PIN)", soPin, &good, CKR_OK);
+
+        readLicense(1, licenseOne);
+        readLicense(2, licenseTwo);
+        readLicense(4, licenseTwo);
 
         const CK_TOKEN_INFO info = tokenInfo(module, slot);
         if (paddedText(info.label, sizeof(info.label)) != labelA)
@@ -4167,6 +4237,9 @@ static void verifyExtendedInitToken(const fs::path& modulePath)
         // Re-initialize the module to prove that both values came from storage.
         callOk("C_Finalize", "pReserved=NULL_PTR", [&] { return module->C_Finalize(nullptr); });
         callOk("C_Initialize", "pInitArgs=NULL_PTR", [&] { return module->C_Initialize(nullptr); });
+        readLicense(1, licenseOne);
+        readLicense(2, licenseTwo);
+        readLicense(4, licenseTwo);
         CK_TOKEN_INFO_EXTENDED persistedPolicy{};
         persistedPolicy.ulSizeofThisStructure = sizeof(persistedPolicy);
         callOk("C_EX_GetTokenInfoExtended", "policy after restart", [&] {
@@ -4224,6 +4297,10 @@ static void verifyExtendedInitToken(const fs::path& modulePath)
         fillParam(repair, repairAdmin, repairUser, 6, 8, labelB, 1);
         repair.ChangeUserPINPolicy = TOKEN_FLAGS_ADMIN_CHANGE_USER_PIN;
         exInit("C_EX_InitToken(repair mode, SO PIN locked)", std::string(), &repair, CKR_OK);
+
+        readLicense(1, licenseOne);
+        readLicense(2, licenseTwo);
+        readLicense(4, licenseTwo);
 
         CK_ULONG maxAdmin = 0, leftAdmin = 0, maxUser = 0, leftUser = 0;
         extendedRetries(maxAdmin, leftAdmin, maxUser, leftUser);
@@ -6153,6 +6230,106 @@ static void batteryInitToken(const fs::path& modulePath, const std::string& labe
     logout(module, session, "CKU_SO");
 }
 
+static void verifyRutokenJournal(const fs::path& modulePath)
+{
+    Bytes saved;
+    CK_SLOT_ID slot = 0;
+    {
+        Module module(modulePath);
+        auto getList = reinterpret_cast<CK_C_EX_GetFunctionListExtended>(
+            module.symbol("C_EX_GetFunctionListExtended"));
+        CK_FUNCTION_LIST_EXTENDED_PTR ex = nullptr;
+        callOk("C_EX_GetFunctionListExtended", "journal", [&] { return getList(&ex); });
+        if (ex == nullptr || ex->C_EX_GetJournal == nullptr)
+            fail("journal function is missing from the extended table");
+        slot = selectSlot(module, true);
+        CK_ULONG length = 99;
+        callOk("C_EX_GetJournal", "empty journal size", [&] {
+            return ex->C_EX_GetJournal(slot, nullptr, &length);
+        });
+        if (length != 0) fail("fresh token journal is not empty");
+        CK_SESSION_HANDLE session = openSession(module, slot);
+        login(module, session, CKU_USER, environment("P11_TEST_USER_PIN", true));
+        const GOST2012KeyPair pair = verifyGOST2012KeyGeneration(
+            module, session, bytesFromHex("4a4f55524e414c"));
+        const Bytes digest(32, 0x5a);
+        for (unsigned run = 1; run <= 3; ++run)
+        {
+            const CK_MECHANISM_TYPE mechanism = run == 3
+                ? CKM_GOSTR3410_WITH_GOSTR3411_2012_256 : CKM_GOSTR3410;
+            const Bytes signature = gostSign(module, session, pair.privateKey,
+                                             mechanism, digest);
+            length = 0;
+            callOk("C_EX_GetJournal", "journal size", [&] {
+                return ex->C_EX_GetJournal(slot, nullptr, &length);
+            });
+            if (length < 80) fail("journal omitted the GOST signature record");
+            Bytes journal(length);
+            CK_ULONG shortLength = 1;
+            check(invoke("C_EX_GetJournal", "short buffer", [&] {
+                return ex->C_EX_GetJournal(slot, journal.data(), &shortLength);
+            }), CKR_BUFFER_TOO_SMALL, "journal short buffer");
+            if (shortLength != length) fail("journal did not report required size");
+            callOk("C_EX_GetJournal", "journal content", [&] {
+                return ex->C_EX_GetJournal(slot, journal.data(), &length);
+            });
+            if (length != journal.size() || journal[0] != 0x80)
+                fail("journal outer TLV is invalid");
+            const size_t header = journal[1] == 0x81 ? 3 : 2;
+            if (journal[header] != 0x85 || journal[header + 1] != 12 ||
+                journal[header + 2] != 1 || journal[header + 3] != 3 ||
+                journal[header + 5] != (run == 3 ? 1 : 0))
+                fail("journal operation metadata is invalid");
+            const size_t countAt = header + 10;
+            const uint32_t count = (static_cast<uint32_t>(journal[countAt]) << 24) |
+                (static_cast<uint32_t>(journal[countAt + 1]) << 16) |
+                (static_cast<uint32_t>(journal[countAt + 2]) << 8) |
+                static_cast<uint32_t>(journal[countAt + 3]);
+            if (count != run) fail("journal signature counter is incorrect");
+            const Bytes suffix = [&] {
+                Bytes expected{0xB6, static_cast<CK_BYTE>(signature.size())};
+                expected.insert(expected.end(), signature.begin(), signature.end());
+                return expected;
+            }();
+            if (journal.size() < suffix.size() ||
+                !std::equal(suffix.begin(), suffix.end(), journal.end() - suffix.size()))
+                fail("journal does not contain the completed signature");
+            saved = journal;
+        }
+        logout(module, session, "CKU_USER");
+        closeSession(module, session);
+    }
+    Module reopened(modulePath);
+    auto getList = reinterpret_cast<CK_C_EX_GetFunctionListExtended>(
+        reopened.symbol("C_EX_GetFunctionListExtended"));
+    CK_FUNCTION_LIST_EXTENDED_PTR ex = nullptr;
+    callOk("C_EX_GetFunctionListExtended", "journal restart", [&] { return getList(&ex); });
+    CK_ULONG length = static_cast<CK_ULONG>(saved.size());
+    Bytes actual(length);
+    callOk("C_EX_GetJournal", "journal after restart", [&] {
+        return ex->C_EX_GetJournal(selectSlot(reopened, true), actual.data(), &length);
+    });
+    if (length != saved.size() || actual != saved)
+        fail("journal changed after module restart");
+    std::array<CK_UTF8CHAR, 32> label{};
+    label.fill(' ');
+    const std::string name = "Rutoken ECP";
+    std::copy(name.begin(), name.end(), label.begin());
+    const std::string soPin = environment("P11_TEST_SO_PIN", true);
+    callOk("C_InitToken", "journal retention across format", [&] {
+        return reopened->C_InitToken(slot,
+            reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(soPin.data())),
+            static_cast<CK_ULONG>(soPin.size()), label.data());
+    });
+    length = static_cast<CK_ULONG>(actual.size());
+    callOk("C_EX_GetJournal", "journal after format", [&] {
+        return ex->C_EX_GetJournal(slot, actual.data(), &length);
+    });
+    if (length != saved.size() || actual != saved)
+        fail("journal changed after token format");
+    trace("JOURNAL", "last successful GOST signature persisted across restart and format");
+}
+
 // Run the whole e2e battery that the Linux CI drives with bash: every case,
 // each in its own isolated store, created here in C++ so Windows and macOS
 // run exactly the same thing against the module handed to them - no second
@@ -6242,8 +6419,7 @@ static void runBattery(const fs::path& modulePath, fs::path workRoot)
         clearEnvVar("P11_28147_EXPECT_RESTRICTED");
     }
 
-    // rutoken-profile, both label branches: a token created with the profile
-    // off, then read back with it on from the same store.
+    // rutoken-profile, both label branches with the profile enabled throughout.
     {
         const struct { const char* name; const char* label; const char* expect; }
         cases[] = {
@@ -6254,7 +6430,7 @@ static void runBattery(const fs::path& modulePath, fs::path workRoot)
         {
             const fs::path dir = workRoot / (std::string("rutoken-profile-") + item.name);
             trace("BATTERY", std::string("case rutoken-profile ") + item.name + " (init)");
-            setEnvVar("SOFTHSM2_CONF", writeBatteryConfig(dir, false).generic_string());
+            setEnvVar("SOFTHSM2_CONF", writeBatteryConfig(dir, true).generic_string());
             batteryInitToken(modulePath, item.label, soPin, userPin);
             trace("BATTERY", std::string("case rutoken-profile ") + item.name);
             setEnvVar("SOFTHSM2_CONF", writeBatteryConfig(dir, true).generic_string());
@@ -6277,12 +6453,23 @@ static void runBattery(const fs::path& modulePath, fs::path workRoot)
         verifyExtendedInitToken(modulePath);
     }
 
-    // core-behaviour: plain PKCS #11, profile off, with the store directory
+    // journal: successful GOST signatures update one persistent Rutoken record.
+    {
+        trace("BATTERY", "case journal");
+        const fs::path dir = workRoot / "journal";
+        setEnvVar("SOFTHSM2_CONF", writeBatteryConfig(dir, true).generic_string());
+        setEnvVar("P11_TEST_SO_PIN", soPin);
+        setEnvVar("P11_TEST_USER_PIN", userPin);
+        batteryInitToken(modulePath, "Rutoken ECP", soPin, userPin);
+        verifyRutokenJournal(modulePath);
+    }
+
+    // core-behaviour: plain PKCS #11 under the Rutoken profile, with the store directory
     // exposed so the case can confirm private attributes are stored encrypted.
     {
         trace("BATTERY", "case core-behaviour");
         const fs::path dir = workRoot / "core-behaviour";
-        setEnvVar("SOFTHSM2_CONF", writeBatteryConfig(dir, false).generic_string());
+        setEnvVar("SOFTHSM2_CONF", writeBatteryConfig(dir, true).generic_string());
         setEnvVar("P11_TEST_SO_PIN", soPin);
         setEnvVar("P11_TEST_USER_PIN", userPin);
         setEnvVar("P11_TEST_STORE_DIR", fs::absolute(dir / "tokens").generic_string());
@@ -6355,6 +6542,11 @@ int main(int argc, char** argv)
             verifyExtendedInitToken(fs::absolute(argv[2]));
             return 0;
         }
+        if (argc == 3 && std::string(argv[1]) == "journal")
+        {
+            verifyRutokenJournal(fs::absolute(argv[2]));
+            return 0;
+        }
         std::cerr << "usage:\n"
                   << "  portable-token-e2e battery <module> <work-directory>\n"
                   << "  portable-token-e2e probe <module>\n"
@@ -6367,6 +6559,7 @@ int main(int argc, char** argv)
                   << "  portable-token-e2e ready <module>\n"
                   << "  portable-token-e2e core-behaviour <module>\n"
                   << "  portable-token-e2e ex-init-token <module>\n"
+                  << "  portable-token-e2e journal <module> (fresh test token)\n"
                   << "environment:\n"
                   << "  P11_TEST_USER_PIN=<required secret>\n"
                   << "  P11_TEST_INITIALIZE_TOKEN=YES|NO (default NO)\n"

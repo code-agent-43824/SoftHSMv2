@@ -89,6 +89,10 @@ public:
 	virtual bool getTokenLabel(ByteString& label);
 	virtual bool getTokenName(ByteString& name, bool& exists);
 	virtual bool setTokenName(const ByteString& name, const ByteString& label);
+	virtual bool getLicense(CK_ULONG id, ByteString& license, bool& exists);
+	virtual bool setLicense(CK_ULONG id, const ByteString& license);
+	virtual bool getJournal(ByteString& journal, bool& exists);
+	virtual bool advanceJournal(ByteString& journal, CK_ULONG countOffset);
 	virtual bool getLocalPIN(CK_ULONG id, ByteString& record, bool& exists);
 	virtual bool updateLocalPIN(CK_ULONG id, const ByteString& expected,
 	                            const ByteString& replacement, bool& changed);
