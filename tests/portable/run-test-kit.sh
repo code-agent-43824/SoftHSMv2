@@ -259,4 +259,11 @@ printf '[OPENSC] checking C_Initialize and library information with pkcs11-tool 
 printf '[OPENSC] checking slots and token information with pkcs11-tool -T\n'
 "$kit_dir/bin/pkcs11-tool" --module "$module" -T 2>&1 | \
   tee "$kit_dir/test-output/pkcs11-tool-T.log"
+if [[ "$bundled_mode" == YES &&
+      ! ( -n ${SOFTHSM2_CONF:-} && -r "$SOFTHSM2_CONF" ) ]]; then
+  "$kit_dir/bin/pkcs11-tool" --module "$module" --rutoken-info 2>&1 | \
+    tee "$kit_dir/test-output/pkcs11-tool-rutoken-info.log"
+  grep -Fq 'RUTOKEN_ECP' "$kit_dir/test-output/pkcs11-tool-rutoken-info.log"
+  printf '[RUTOKEN-DEFAULT] PASS: bundled token reports Rutoken ECP\n'
+fi
 printf '[OPENSC] PASS: packaged pkcs11-tool loaded the tested module\n'

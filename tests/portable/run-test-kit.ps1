@@ -291,4 +291,13 @@ Write-Host "[OPENSC] checking C_Initialize and library information with pkcs11-t
 Invoke-OpenSCPkcs11Tool "-I" "pkcs11-tool-I.log"
 Write-Host "[OPENSC] checking slots and token information with pkcs11-tool -T"
 Invoke-OpenSCPkcs11Tool "-T" "pkcs11-tool-T.log"
+if ($BundledMode -eq 'YES' -and -not ($env:SOFTHSM2_CONF -and
+    (Test-Path -LiteralPath $env:SOFTHSM2_CONF -PathType Leaf))) {
+    Invoke-OpenSCPkcs11Tool '--rutoken-info' 'pkcs11-tool-rutoken-info.log'
+    if (-not (Select-String -LiteralPath (Join-Path $OutputDir 'pkcs11-tool-rutoken-info.log') `
+            -SimpleMatch -Pattern 'RUTOKEN_ECP' -Quiet)) {
+        throw 'bundled token did not report Rutoken ECP'
+    }
+    Write-Host '[RUTOKEN-DEFAULT] PASS: bundled token reports Rutoken ECP'
+}
 Write-Host "[OPENSC] PASS: packaged pkcs11-tool loaded the tested module"

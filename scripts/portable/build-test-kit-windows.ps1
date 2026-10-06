@@ -267,7 +267,8 @@ Copy-Item (Join-Path $RootDir "packaging/portable/TEST-KIT-README.txt") (Join-Pa
 Copy-Item (Join-Path $RootDir "packaging/portable/OPENSSL-GUIDE.md") (Join-Path $StageDir "OPENSSL-GUIDE.md")
 Copy-Item (Join-Path $RootDir "packaging/portable/testkit.conf") (Join-Path $StageDir "testkit.conf")
 Copy-Item (Join-Path $RootDir "packaging/portable/softhsm.conf") (Join-Path $StageDir "softhsm.conf")
-@('directories.tokendir = ../tokens', 'objectstore.backend = file') |
+@('directories.tokendir = ../tokens', 'objectstore.backend = file',
+  'FAKE_RUTOKEN_ECP = true') |
     Set-Content -LiteralPath (Join-Path $StageDir 'bin/softhsm.conf') -Encoding Ascii
 Copy-Item (Join-Path $RootDir "LICENSE") (Join-Path $StageDir "LICENSE-TestClient.txt")
 if (-not $UseBundle) {

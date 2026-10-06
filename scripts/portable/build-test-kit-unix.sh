@@ -199,7 +199,7 @@ cp "$root_dir/packaging/portable/TEST-KIT-README.txt" "$stage_dir/README.txt"
 cp "$root_dir/packaging/portable/OPENSSL-GUIDE.md" "$stage_dir/OPENSSL-GUIDE.md"
 cp "$root_dir/packaging/portable/testkit.conf" "$stage_dir/testkit.conf"
 cp "$root_dir/packaging/portable/softhsm.conf" "$stage_dir/softhsm.conf"
-printf 'directories.tokendir = ../tokens\nobjectstore.backend = file\n' \
+printf 'directories.tokendir = ../tokens\nobjectstore.backend = file\nFAKE_RUTOKEN_ECP = true\n' \
   > "$stage_dir/bin/softhsm.conf"
 cp "$root_dir/LICENSE" "$stage_dir/LICENSE-TestClient.txt"
 if [[ ${OPENSSL_GOST_USE_BUNDLE:-0} != 1 ]]; then

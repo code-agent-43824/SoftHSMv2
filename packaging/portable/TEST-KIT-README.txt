@@ -1,4 +1,4 @@
-SoftHSM portable integration test kit
+Rutoken ECP emulator integration test kit
 =====================================
 
 This archive is the exact precompiled test environment produced and executed
@@ -30,15 +30,18 @@ is loaded directly from that path and is not copied. The bundled module is also
 loaded in place. Test evidence is written only to test-output inside the
 extracted test-kit directory.
 
-Isolation: this test kit includes softhsm.conf beside its SoftHSM library.
-It selects directories.tokendir = ./tokens and objectstore.backend = file.
+Isolation and profile: this test kit includes softhsm.conf beside its SoftHSM
+library. It selects directories.tokendir = ./tokens, objectstore.backend =
+file, and FAKE_RUTOKEN_ECP = true. The bundled token identifies as Rutoken
+ECP (manufacturer Aktiv Co., model Rutoken ECP) by default.
 The relative token path resolves from that configuration file. With no
 SOFTHSM2_CONF, the bundled module, softhsm2-util, pkcs11-tool and pkcs11-spy
 use the kit's tokens directory, not ~/softhsm (or %USERPROFILE%\softhsm on
 Windows). The launcher creates tokens on first use and reuses the same store
 on later runs. Case-specific scratch stores and evidence stay in test-output.
 The embedded softhsm2-export utility has a matching bin/softhsm.conf with
-../tokens so it reaches the same store without a shell variable.
+../tokens and the same Rutoken profile, so it reaches the same store without
+a shell variable.
 The standalone product ZIP does not include this configuration.
 
 A readable SOFTHSM2_CONF still has first priority. The launcher preserves it,
@@ -90,8 +93,8 @@ Windows:
   run-test.cmd C:\path\to\alternative\softhsm2.dll
 
 After the complete test, the launcher runs the packaged pkcs11-tool with -I
-and -T against the selected module. With the bundled SoftHSM module it also
-creates a separate disposable FAKE_RUTOKEN_ECP token, checks --rutoken-info,
+and -T against the selected module and confirms that the bundled token reports
+RUTOKEN_ECP. It also creates a separate disposable Rutoken ECP token, checks --rutoken-info,
 --rutoken-name, --rutoken-set-name and --rutoken-set-local-pin, then repeats
 the read-only calls through pkcs11-spy and checks its C_EX_* log. Evidence is
 saved under test-output. The spy library and its commented configuration
