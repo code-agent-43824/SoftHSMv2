@@ -14,7 +14,9 @@ The kit contains:
 - a precompiled dependency-light C++ PKCS #11 client;
 - a pinned OpenSSL CLI, its private shared libraries and a pinned GOST provider,
   used as an independent reference (the SoftHSM module remains self-contained);
-- a prebuilt OpenSC pkcs11-tool plus its non-system runtime dependencies;
+- the latest portable pkcs11-tool and pkcs11-spy from the
+  code-agent-43824/OpenSC fork at build time (release and ZIP SHA-256 in
+  OPENSC-SOURCE.txt); no operating-system OpenSC package is copied;
 - the portable softhsm2-util and softhsm2-export debug tools;
 - shell or PowerShell launchers;
 - the C++ source and PKCS #11 headers for audit/rebuilding;
@@ -78,7 +80,12 @@ Windows:
   run-test.cmd C:\path\to\alternative\softhsm2.dll
 
 After the complete test, the launcher runs the packaged pkcs11-tool with -I
-and -T against the selected module. Their output is saved under test-output.
+and -T against the selected module. With the bundled SoftHSM module it also
+creates a separate disposable FAKE_RUTOKEN_ECP token, checks --rutoken-info,
+--rutoken-name, --rutoken-set-name and --rutoken-set-local-pin, then repeats
+the read-only calls through pkcs11-spy and checks its C_EX_* log. Evidence is
+saved under test-output. The spy library and its commented configuration
+template are in lib/.
 The same tool can be used manually without installing OpenSC:
 
 Linux:

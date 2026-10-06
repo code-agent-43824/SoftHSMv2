@@ -205,13 +205,16 @@ Actions and made eligible for the release aggregation job.
 The kit includes the matching portable SoftHSM module and configuration, the
 precompiled C++ client, a pinned OpenSSL CLI with its private shared libraries
 and pinned GOST provider, a prebuilt
-OpenSC `pkcs11-tool` with its non-system dependencies, all runtime launchers,
+the latest portable fork OpenSC `pkcs11-tool` and `pkcs11-spy` selected and
+SHA-256-verified at test-kit build time, all runtime launchers,
 the test source and PKCS #11 headers, licenses, and `ENVIRONMENT.txt` with the
 runner and tool versions. No compiler, SDK, Java, Botan, separately installed
 OpenSSL, or separately installed OpenSC is needed to run it. Normal platform
 system libraries remain required. The Windows ARM64 kit bundles its native
 VC runtime DLL alongside OpenSSL. After the main E2E, the launcher requires
-both `pkcs11-tool -I` and `pkcs11-tool -T` to load the selected module.
+both `pkcs11-tool -I` and `pkcs11-tool -T` to load the selected module. The
+bundled profile also runs fork `--rutoken-*` CLI calls on a separate disposable
+token and proves their C_EX_* calls through the bundled spy.
 It also verifies Streebog-256/512 reference values, GOST-2012 256/512
 signatures and tamper rejection, Kuznyechik/Magma CTR and CTR-ACPKM round
 trips, and a signature made with an exported SoftHSM GOST key in bundled mode.

@@ -192,6 +192,7 @@ cp "$root_dir/tests/portable/verify-gost-openssl.sh" "$stage_dir/scripts/verify-
 cp "$root_dir/tests/portable/verify-config-override.sh" "$stage_dir/scripts/verify-config-override.sh"
 cp "$root_dir/tests/portable/run-fresh-integration.sh" "$stage_dir/scripts/run-fresh-integration.sh"
 cp "$root_dir/tests/portable/run-pkcs11-integration.sh" "$stage_dir/scripts/run-pkcs11-integration.sh"
+cp "$root_dir/tests/portable/verify-rutoken-opensc.sh" "$stage_dir/scripts/verify-rutoken-opensc.sh"
 cp "$root_dir/tests/portable/portable-token-e2e.cpp" "$stage_dir/src/portable-token-e2e.cpp"
 cp "$root_dir/src/lib/pkcs11/"*.h "$stage_dir/src/pkcs11/"
 cp "$root_dir/packaging/portable/TEST-KIT-README.txt" "$stage_dir/README.txt"
@@ -246,12 +247,13 @@ if [[ $(uname -s) == Darwin ]]; then
       grep -v '@loader_path/'; then
     echo "test-kit OpenSSL depends on OpenSSL outside the kit" >&2; exit 1
   fi
-  if otool -L "$stage_dir/bin/pkcs11-tool" "$stage_dir/bin/opensc-lib/"* | \
+  if otool -L "$stage_dir/bin/pkcs11-tool" "$stage_dir/lib/pkcs11-spy.dylib" | \
       grep -F '/Library/OpenSC/'; then
     echo "test-kit pkcs11-tool unexpectedly depends on the installed OpenSC tree" >&2
     exit 1
   fi
   lipo "$stage_dir/bin/pkcs11-tool" -verify_arch arm64 x86_64
+  lipo "$stage_dir/lib/pkcs11-spy.dylib" -verify_arch arm64 x86_64
   lipo "$stage_dir/bin/softhsm2-util" -verify_arch arm64 x86_64
   lipo "$stage_dir/bin/softhsm2-export" -verify_arch arm64 x86_64
 else
@@ -265,6 +267,10 @@ else
   fi
   if ldd "$stage_dir/bin/pkcs11-tool" | grep -F 'not found'; then
     echo "test-kit pkcs11-tool has an unresolved dependency" >&2
+    exit 1
+  fi
+  if ldd "$stage_dir/lib/pkcs11-spy.so" | grep -F 'not found'; then
+    echo "test-kit pkcs11-spy has an unresolved dependency" >&2
     exit 1
   fi
   for tool in softhsm2-util softhsm2-export; do

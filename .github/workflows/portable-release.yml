@@ -33,11 +33,6 @@ env:
   GOST_LIBPROV_SHA256: 8514c1b4b1f88242c487d2afce4f1d8953f94294f37bfbf029c9b43175030666
   BOTAN_VERSION: 2.19.5
   BOTAN_SHA256: dfeea0e0a6f26d6724c4af01da9a7b88487adb2d81ba7c72fcaf52db522c9ad4
-  OPENSC_VERSION: 0.27.1
-  OPENSC_MACOS_SHA256: 61c2c7b9329a65e43a34151016530d54859561d8fbbe7a723911119abf0ccd7f
-  OPENSC_WINDOWS_X86_SHA256: e3cc46e14bc3c49054f974928440f748039d142855690766e997f2567c461bce
-  OPENSC_WINDOWS_X64_SHA256: 2df6fb9078c5a6fc97d221f111158cb3f887e1e3c2dbb6892f58455a7015b5b8
-  OPENSC_WINDOWS_ARM64_SHA256: cbf5a60d9e9195cb51d3b48dfed4441eff3b158d067196c88f1568c038f6d716
 
 jobs:
   build-linux-x64:
@@ -201,7 +196,7 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential ca-certificates curl file opensc patchelf perl unzip zip
+            build-essential ca-certificates curl file perl python3 unzip zip
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
@@ -228,6 +223,8 @@ jobs:
           bash "$RUNNER_TEMP/packaged-testkit/run-test.sh" 2>&1 | \
             tee "$RUNNER_TEMP/default-test.log"
           grep -F '[OPENSC] PASS: packaged pkcs11-tool loaded the tested module' \
+            "$RUNNER_TEMP/default-test.log"
+          grep -F '[RUTOKEN-OPENSC] PASS: fork CLI info/name/local PIN and spy on isolated fake token' \
             "$RUNNER_TEMP/default-test.log"
           test -s "$RUNNER_TEMP/packaged-testkit/test-output/pkcs11-tool-I.log"
           test -s "$RUNNER_TEMP/packaged-testkit/test-output/pkcs11-tool-T.log"
@@ -384,7 +381,7 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential ca-certificates curl file opensc patchelf perl unzip zip
+            build-essential ca-certificates curl file perl python3 unzip zip
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
@@ -771,7 +768,11 @@ jobs:
             case "$(basename "$archive")" in
               softhsm-testkit-windows-*.zip)
                 zipinfo -1 "$archive" | grep -Fx 'OPENSSL-GUIDE.md' >/dev/null
+                zipinfo -1 "$archive" | grep -Fx 'OPENSC-SOURCE.txt' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'bin/pkcs11-tool.exe' >/dev/null
+                zipinfo -1 "$archive" | grep -Fx 'lib/pkcs11-spy.dll' >/dev/null
+                zipinfo -1 "$archive" | grep -Fx 'lib/pkcs11-spy.conf' >/dev/null
+                zipinfo -1 "$archive" | grep -Fx 'bin/opensc.dll' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'bin/softhsm2-util.exe' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'bin/softhsm2-export.exe' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'bin/gostprov.dll' >/dev/null
@@ -782,7 +783,10 @@ jobs:
                 ;;
               softhsm-testkit-*.zip)
                 zipinfo -1 "$archive" | grep -Fx 'OPENSSL-GUIDE.md' >/dev/null
+                zipinfo -1 "$archive" | grep -Fx 'OPENSC-SOURCE.txt' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'bin/pkcs11-tool' >/dev/null
+                zipinfo -1 "$archive" | grep -E '^lib/pkcs11-spy\.(so|dylib)$' >/dev/null
+                zipinfo -1 "$archive" | grep -Fx 'lib/pkcs11-spy.conf' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'bin/softhsm2-util' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'bin/softhsm2-export' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'LICENSE-OpenSC.txt' >/dev/null

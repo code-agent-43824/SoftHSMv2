@@ -5,104 +5,69 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
-
 if (-not $env:PORTABLE_ARCH) { throw "PORTABLE_ARCH is required" }
-if (-not $env:OPENSC_VERSION) { throw "OPENSC_VERSION is required" }
 
-$HashVariable = "OPENSC_WINDOWS_$($env:PORTABLE_ARCH.ToUpperInvariant())_SHA256"
-$ExpectedHash = [Environment]::GetEnvironmentVariable($HashVariable, "Process")
-if (-not $ExpectedHash) { throw "$HashVariable is required" }
+$Platform = "windows-$($env:PORTABLE_ARCH)"
+$Release = Invoke-RestMethod -Uri 'https://api.github.com/repos/code-agent-43824/OpenSC/releases/latest' `
+    -Headers @{ Accept = 'application/vnd.github+json' }
+$Tag = [string]$Release.tag_name
+if ($Tag -notmatch '^[0-9]+\.[0-9]+\.[0-9]+-portable\.[0-9]+$') {
+    throw "unexpected OpenSC Latest tag: $Tag"
+}
+$ArchiveName = "opensc-portable-$Platform.zip"
+$WorkDir = Join-Path $(if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [IO.Path]::GetTempPath() }) `
+    "opensc-fork-$Platform-$Tag"
+New-Item -ItemType Directory -Force -Path $WorkDir, (Join-Path $StageDir 'bin'), `
+    (Join-Path $StageDir 'lib') | Out-Null
 
-$WorkRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [IO.Path]::GetTempPath() }
-$WorkDir = Join-Path $WorkRoot "opensc-windows-$($env:PORTABLE_ARCH)-$($env:OPENSC_VERSION)"
-$Msi = Join-Path $WorkDir "OpenSC-$($env:OPENSC_VERSION)-Light_$($env:PORTABLE_ARCH).msi"
-$InstallLog = Join-Path $WorkDir "install.log"
-New-Item -ItemType Directory -Force -Path $WorkDir, (Join-Path $StageDir "bin") | Out-Null
+function Get-ReleaseAsset([string]$Name) {
+    $Asset = @($Release.assets | Where-Object { $_.name -eq $Name })
+    if ($Asset.Count -ne 1) { throw "OpenSC release is missing $Name" }
+    $Url = "https://github.com/code-agent-43824/OpenSC/releases/download/$Tag/$Name"
+    if ($Asset[0].browser_download_url -ne $Url) {
+        throw "invalid OpenSC release asset URL: $Name"
+    }
+    $Match = [regex]::Match([string]$Asset[0].digest, '^sha256:([0-9a-f]{64})$')
+    if (-not $Match.Success) { throw "missing OpenSC release digest: $Name" }
+    $Digest = $Match.Groups[1].Value
+    $Path = Join-Path $WorkDir $Name
+    Invoke-WebRequest -Uri $Url -OutFile $Path -UseBasicParsing
+    $Actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+    if ($Actual -ne $Digest) { throw "OpenSC checksum mismatch for $Name" }
+    return @{ Path = $Path; Digest = $Digest }
+}
 
-$SearchRoots = @($env:ProgramFiles, ${env:ProgramFiles(x86)}) |
-    Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Container) }
-function Find-OpenSCTool {
-    foreach ($Root in $SearchRoots) {
-        $ProjectRoot = Join-Path $Root "OpenSC Project"
-        if (Test-Path -LiteralPath $ProjectRoot -PathType Container) {
-            Get-ChildItem -LiteralPath $ProjectRoot -Filter pkcs11-tool.exe -File -Recurse
-        }
+$Manifest = Get-ReleaseAsset 'SHA256SUMS'
+$Archive = Get-ReleaseAsset $ArchiveName
+$ManifestLine = @(Get-Content -LiteralPath $Manifest.Path | Where-Object {
+    $_ -match "^[0-9a-f]{64}  $([regex]::Escape($ArchiveName))$"
+})
+if ($ManifestLine.Count -ne 1 -or $ManifestLine[0].Substring(0, 64) -ne $Archive.Digest) {
+    throw "OpenSC manifest disagrees with release digest for $ArchiveName"
+}
+
+$Extracted = Join-Path $WorkDir 'extracted'
+Expand-Archive -LiteralPath $Archive.Path -DestinationPath $Extracted -Force
+$Files = @(
+    @{ Source = 'bin/pkcs11-tool.exe'; Destination = 'bin/pkcs11-tool.exe' },
+    @{ Source = 'bin/opensc.dll'; Destination = 'bin/opensc.dll' },
+    @{ Source = 'lib/pkcs11-spy.dll'; Destination = 'lib/pkcs11-spy.dll' },
+    @{ Source = 'lib/pkcs11-spy.conf'; Destination = 'lib/pkcs11-spy.conf' },
+    @{ Source = 'LICENSE-OpenSC.txt'; Destination = 'LICENSE-OpenSC.txt' }
+)
+foreach ($File in $Files) {
+    $Source = Join-Path $Extracted $File.Source
+    if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) {
+        throw "OpenSC release is missing $($File.Source)"
+    }
+    Copy-Item -LiteralPath $Source -Destination (Join-Path $StageDir $File.Destination)
+}
+foreach ($Relative in @('bin/pkcs11-tool.exe', 'bin/opensc.dll', 'lib/pkcs11-spy.dll')) {
+    $Binary = Join-Path $StageDir $Relative
+    if (-not (& dumpbin /headers $Binary | Select-String -Pattern $ExpectedMachinePattern)) {
+        throw "$Binary does not have the expected PE machine type"
     }
 }
-$PreexistingTool = Find-OpenSCTool | Select-Object -First 1
-if ($PreexistingTool) {
-    throw "refusing to modify a pre-existing OpenSC installation: $($PreexistingTool.FullName)"
-}
-
-$Url = "https://github.com/OpenSC/OpenSC/releases/download/$($env:OPENSC_VERSION)/$(Split-Path -Leaf $Msi)"
-Invoke-WebRequest -Uri $Url -OutFile $Msi
-$ActualHash = (Get-FileHash -Algorithm SHA256 $Msi).Hash.ToLowerInvariant()
-if ($ActualHash -ne $ExpectedHash.ToLowerInvariant()) {
-    throw "OpenSC checksum mismatch: expected $ExpectedHash, got $ActualHash"
-}
-
-$Install = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
-    "/i", $Msi, "ADDLOCAL=OpenSC_core,OpenSC_tools", "/qn", "/norestart", "/l*v", $InstallLog
-)
-if ($Install.ExitCode -ne 0) {
-    Get-Content -LiteralPath $InstallLog -Tail 100 | Write-Error
-    throw "OpenSC MSI installation failed with exit code $($Install.ExitCode)"
-}
-
-$InstalledTool = Find-OpenSCTool | Select-Object -First 1
-if (-not $InstalledTool) { throw "installed pkcs11-tool.exe was not found" }
-
-$OpenSCRoot = Split-Path -Parent (Split-Path -Parent $InstalledTool.FullName)
-$Destination = Join-Path $StageDir "bin/pkcs11-tool.exe"
-Copy-Item -LiteralPath $InstalledTool.FullName -Destination $Destination
-$DependencyReport = Join-Path $StageDir "OPENSC-DEPENDENCIES.txt"
-New-Item -ItemType File -Force -Path $DependencyReport | Out-Null
-$Queue = [Collections.Generic.Queue[string]]::new()
-$Queue.Enqueue($InstalledTool.FullName)
-$Seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-$SystemNames = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-Get-ChildItem -LiteralPath (Join-Path $env:WINDIR "System32") -Filter *.dll -File |
-    ForEach-Object { [void]$SystemNames.Add($_.Name) }
-
-while ($Queue.Count) {
-    $Binary = $Queue.Dequeue()
-    $Dependencies = & dumpbin /dependents $Binary |
-        ForEach-Object { if ($_ -match '^\s+([A-Za-z0-9_.+-]+\.dll)\s*$') { $Matches[1] } }
-    foreach ($Name in $Dependencies) {
-        if ($SystemNames.Contains($Name) -or -not $Seen.Add($Name)) { continue }
-        $Resolved = Get-ChildItem -LiteralPath $OpenSCRoot -Filter $Name -File -Recurse |
-            Select-Object -First 1
-        if (-not $Resolved) {
-            throw "cannot resolve non-system OpenSC dependency: $Name"
-        }
-        Copy-Item -LiteralPath $Resolved.FullName -Destination (Join-Path $StageDir "bin/$Name")
-        Add-Content -LiteralPath $DependencyReport -Value "$Name <- $($Resolved.FullName)" -Encoding ascii
-        $Queue.Enqueue($Resolved.FullName)
-    }
-}
-
-$License = Get-ChildItem -LiteralPath $OpenSCRoot -File -Recurse |
-    Where-Object { $_.Name -match '^(COPYING|LICENSE)' } |
-    Select-Object -First 1
-if ($License) {
-    Copy-Item -LiteralPath $License.FullName -Destination (Join-Path $StageDir "LICENSE-OpenSC.txt")
-}
-else {
-    Invoke-WebRequest -Uri "https://raw.githubusercontent.com/OpenSC/OpenSC/$($env:OPENSC_VERSION)/COPYING" `
-        -OutFile (Join-Path $StageDir "LICENSE-OpenSC.txt")
-}
-
-$Uninstall = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
-    "/x", $Msi, "/qn", "/norestart"
-)
-if ($Uninstall.ExitCode -ne 0) { throw "OpenSC MSI uninstall failed with exit code $($Uninstall.ExitCode)" }
-if (Test-Path -LiteralPath $InstalledTool.FullName -PathType Leaf) {
-    throw "OpenSC MSI uninstall left pkcs11-tool.exe installed: $($InstalledTool.FullName)"
-}
-
-$MachineHeader = & dumpbin /headers $Destination | Select-String -Pattern $ExpectedMachinePattern
-if (-not $MachineHeader) {
-    throw "$Destination does not have the expected $($env:PORTABLE_ARCH) PE machine type"
-}
-Set-Content -LiteralPath (Join-Path $StageDir "OPENSC-VERSION.txt") `
-    -Value $env:OPENSC_VERSION -Encoding ascii
+Set-Content -LiteralPath (Join-Path $StageDir 'OPENSC-VERSION.txt') -Value $Tag -Encoding ascii
+@("release=$Tag", "archive=$ArchiveName", "sha256=$($Archive.Digest)") |
+    Set-Content -LiteralPath (Join-Path $StageDir 'OPENSC-SOURCE.txt') -Encoding ascii

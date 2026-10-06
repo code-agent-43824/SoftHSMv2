@@ -253,6 +253,10 @@ if ($BundledMode -eq "YES") {
     & $Client battery $Module (Join-Path $OutputDir "battery")
     if ($LASTEXITCODE -ne 0) { throw "e2e case battery failed" }
     Write-Host "[BATTERY] PASS: full e2e case battery"
+    & (Join-Path $KitDir 'scripts/verify-rutoken-opensc.ps1') `
+        -Module $Module -Cli $Pkcs11Tool `
+        -Spy (Join-Path $KitDir 'lib/pkcs11-spy.dll') `
+        -Util $SoftHSMUtil -OutputDir $OutputDir
 }
 
 function Invoke-OpenSCPkcs11Tool([string]$Option, [string]$LogName) {

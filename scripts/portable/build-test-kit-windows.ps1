@@ -260,6 +260,7 @@ Copy-Item (Join-Path $RootDir "tests/portable/verify-config-override.ps1") (Join
 Copy-Item (Join-Path $RootDir "tests/portable/run-test-kit.cmd") (Join-Path $StageDir "run-test.cmd")
 Copy-Item (Join-Path $RootDir "tests/portable/run-fresh-integration.ps1") (Join-Path $StageDir "scripts/run-fresh-integration.ps1")
 Copy-Item (Join-Path $RootDir "tests/portable/run-pkcs11-integration.ps1") (Join-Path $StageDir "scripts/run-pkcs11-integration.ps1")
+Copy-Item (Join-Path $RootDir "tests/portable/verify-rutoken-opensc.ps1") (Join-Path $StageDir "scripts/verify-rutoken-opensc.ps1")
 Copy-Item (Join-Path $RootDir "tests/portable/portable-token-e2e.cpp") (Join-Path $StageDir "src/portable-token-e2e.cpp")
 Copy-Item (Join-Path $RootDir "src/lib/pkcs11/*.h") (Join-Path $StageDir "src/pkcs11")
 Copy-Item (Join-Path $RootDir "packaging/portable/TEST-KIT-README.txt") (Join-Path $StageDir "README.txt")
@@ -347,7 +348,8 @@ foreach ($Binary in $CheckedBinaries) {
     }
 }
 
-foreach ($Binary in @($Pkcs11Tool) + @(Get-ChildItem -LiteralPath (Join-Path $StageDir "bin") -Filter *.dll -File)) {
+foreach ($Binary in @($Pkcs11Tool, (Join-Path $StageDir 'lib/pkcs11-spy.dll')) +
+    @(Get-ChildItem -LiteralPath (Join-Path $StageDir "bin") -Filter *.dll -File)) {
     $Path = if ($Binary -is [IO.FileInfo]) { $Binary.FullName } else { [string]$Binary }
     $MachineHeader = & dumpbin /headers $Path |
         Select-String -Pattern $ExpectedMachinePattern

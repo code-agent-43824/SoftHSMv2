@@ -247,6 +247,11 @@ if [[ "$bundled_mode" == YES ]]; then
   printf '[BATTERY] running the full e2e case battery against the bundled module\n'
   "$kit_dir/bin/portable-token-e2e" battery "$module" "$kit_dir/test-output/battery"
   printf '[BATTERY] PASS: full e2e case battery\n'
+  spy_name=pkcs11-spy.so
+  [[ $(uname -s) == Darwin ]] && spy_name=pkcs11-spy.dylib
+  bash "$kit_dir/scripts/verify-rutoken-opensc.sh" \
+    "$module" "$kit_dir/bin/pkcs11-tool" "$kit_dir/lib/$spy_name" \
+    "$kit_dir/bin/softhsm2-util" "$kit_dir/test-output"
 fi
 
 printf '[OPENSC] checking C_Initialize and library information with pkcs11-tool -I\n'
