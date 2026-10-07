@@ -197,6 +197,7 @@ $EngineRuntime = if ($env:PORTABLE_ARCH -eq 'arm64') { 'MultiThreadedDLL' } else
 cmake -S $EngineSource -B $LegacyEngineBuild -G "NMake Makefiles" `
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_DEFAULT_CMP0091=NEW `
     "-DCMAKE_MSVC_RUNTIME_LIBRARY=$EngineRuntime" `
+    "-DCMAKE_MODULE_LINKER_FLAGS=/EXPORT:bind_engine /EXPORT:v_check" `
     "-DOPENSSL_ROOT_DIR=$OpenSSLPrefix" `
     -DOPENSSL_ENGINES_DIR=bin -DGOST_BUILD_ENGINE=ON `
     -DGOST_BUILD_STATIC_ENGINE=OFF -DGOST_BUILD_PROVIDER=OFF
@@ -253,6 +254,12 @@ if ($LASTEXITCODE -ne 0 -or -not ($ProviderExports | Select-String -Pattern '\bO
 Copy-Item -LiteralPath $ProviderDlls[0].FullName -Destination (Join-Path $StageDir "bin/gostprov.dll")
 $EngineDlls = @(Get-ChildItem -LiteralPath $LegacyEngineBuild -Filter gost.dll -File -Recurse)
 if ($EngineDlls.Count -ne 1) { throw "expected exactly one GOST engine DLL" }
+$EngineExports = & dumpbin /exports $EngineDlls[0].FullName
+if ($LASTEXITCODE -ne 0 -or
+    -not ($EngineExports | Select-String -Pattern "\bbind_engine\b") -or
+    -not ($EngineExports | Select-String -Pattern "\bv_check\b")) {
+    throw "GOST engine DLL lacks dynamic entry points"
+}
 Copy-Item -LiteralPath $EngineDlls[0].FullName -Destination (Join-Path $StageDir "bin/gost.dll")
 $OpenSSLConfig = [IO.File]::ReadAllText((Join-Path $OpenSSLSource "apps/openssl.cnf"))
 [IO.File]::WriteAllText((Join-Path $StageDir "config/openssl.cnf"), $OpenSSLConfig,
