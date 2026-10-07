@@ -1,15 +1,18 @@
 # STATUS — состояние проекта
 
-Обновлено: 2026-10-06. Транк: `main`.
+Обновлено: 2026-10-07. Транк: `main`.
 
-Новая работа 06.10: тест-кит переведён на `FAKE_RUTOKEN_ECP = true` в
-поставляемых adjacent-конфигах модуля и exporter. Три локальных полных
-Linux-прогона прошли; бандловый CLI без окружения сообщает `RUTOKEN_ECP`.
-Функции License и Journal реализованы и локально проверены:
-полная battery на файловом backend, отдельные `ex-init-token` и `journal`
-на SQLite. Staging test-kit с новым модулем дважды прошёл полный Linux-прогон;
-чужой HOME не менялся и не читался. Платформенная проверка и выпуск ещё не
-завершены.
+Текущий релиз `v2.7.0-portable.63` на `b424d9f`: test-kit по умолчанию
+использует `FAKE_RUTOKEN_ECP = true`; `C_EX_GetJournal`,
+`C_EX_SetLicense` и `C_EX_GetLicense` реализованы. Локально прошли полный
+Rutoken battery на файловом backend, `journal`/`ex-init-token` на SQLite,
+два запуска staging test-kit с изоляцией чужого HOME и канонический
+`core-behaviour`. CI `37532045161` и релизный прогон `37532487521`
+успешны: шесть сборок, шесть verifier jobs и публикация. Все 12 ZIP
+скачаны, совпали с `SHA256SUMS` и читаются; оба adjacent-конфига с
+`FAKE_RUTOKEN_ECP = true` есть во всех test-kit, в product ZIP их нет.
+Ограничение Journal: поле `0xB6` содержит подпись операции, а не отдельную
+аппаратную подпись записи журнала.
 
 Изоляция test-kit через adjacent `softhsm.conf` выпущена как
 `v2.7.0-portable.61` на `0a989ae007dcb0bca96fdeedab9c7402e7377207`.
