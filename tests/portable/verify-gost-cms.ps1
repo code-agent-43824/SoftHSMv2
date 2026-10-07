@@ -36,7 +36,7 @@ try {
         Invoke-OpenSSL -Arguments @($Mode, '-sign', '-md', 'streebog256', '-binary', '-nodetach',
             '-in', (Join-Path $Out 'message.txt'), '-signer', (Join-Path $Out 'ca.pem'),
             '-inkey', (Join-Path $Out 'key.pem'), '-outform', 'DER', '-out', $Envelope)
-        Invoke-OpenSSL -Arguments @($Mode, '-verify', '-inform', 'DER', '-in', $Envelope,
+        Invoke-OpenSSL -Arguments @($Mode, '-verify', '-binary', '-inform', 'DER', '-in', $Envelope,
             '-CAfile', (Join-Path $Out 'ca.pem'), '-out', $Verified)
         if ((Get-FileHash -Algorithm SHA256 (Join-Path $Out 'message.txt')).Hash -ne
             (Get-FileHash -Algorithm SHA256 $Verified).Hash) {
