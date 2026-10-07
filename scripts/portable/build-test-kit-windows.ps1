@@ -216,15 +216,33 @@ foreach ($Dll in $CryptoDlls) {
 if ($env:PORTABLE_ARCH -eq "arm64") {
     if (-not $env:VCToolsRedistDir) { throw "VCToolsRedistDir is required for ARM64 CRT bundling" }
     $RedistDir = Join-Path $env:VCToolsRedistDir "arm64/Microsoft.VC143.CRT"
-    # The ARM64 redistributable also carries an x64 vcruntime140_1.dll for emulated apps.
-    # Native OpenSSL C binaries need the ARM64 vcruntime140.dll only.
-    foreach ($Name in @("vcruntime140.dll")) {
-        $Source = Join-Path $RedistDir $Name
-        if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) {
-            throw "required ARM64 CRT redistribution file is missing: $Source"
+    $Source = Join-Path $RedistDir "vcruntime140.dll"
+    if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) {
+        # The Windows 11 ARM runner's VS 18 redist directory lacks this file.
+        # Reuse the pinned, previously verified VC143 ARM64 runtime bundle.
+        $PriorZip = Join-Path $WorkDir "openssl-gost-windows-arm64-prior.zip"
+        Invoke-WebRequest -Uri "https://github.com/code-agent-43824/SoftHSMv2/releases/download/openssl-gost-3.5.8.1/openssl-gost-windows-arm64.zip" -OutFile $PriorZip
+        $PriorHash = (Get-FileHash -Algorithm SHA256 $PriorZip).Hash.ToLowerInvariant()
+        if ($PriorHash -ne '0b70840e969be9f606927857c7ad0f1a46102069d6aa3a4bd1e95090508afe76') {
+            throw "prior ARM64 runtime bundle checksum mismatch"
         }
-        Copy-Item -LiteralPath $Source -Destination (Join-Path $StageDir "bin")
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $Zip = [IO.Compression.ZipFile]::OpenRead($PriorZip)
+        try {
+            $Entry = @($Zip.Entries | Where-Object { $_.FullName -eq 'bin\vcruntime140.dll' })
+            if ($Entry.Count -ne 1) { throw "prior bundle lacks ARM64 vcruntime140.dll" }
+            $Source = Join-Path $WorkDir "vcruntime140.dll"
+            [IO.Compression.ZipFileExtensions]::ExtractToFile($Entry[0], $Source, $true)
+        }
+        finally { $Zip.Dispose() }
+        $RuntimeHash = (Get-FileHash -Algorithm SHA256 $Source).Hash.ToLowerInvariant()
+        if ($RuntimeHash -ne 'd8a8513921544569837e400d37cc71302819967ae6defa932266a7ecb41dbaf9') {
+            throw "prior ARM64 runtime checksum mismatch"
+        }
     }
+    $RuntimeMachine = & dumpbin /headers $Source | Select-String -Pattern $ExpectedMachinePattern
+    if ($LASTEXITCODE -ne 0 -or -not $RuntimeMachine) { throw "ARM64 runtime machine type mismatch: $Source" }
+    Copy-Item -LiteralPath $Source -Destination (Join-Path $StageDir "bin")
 }
 $ProviderDlls = @(Get-ChildItem -LiteralPath $EngineBuild -Filter gostprov.dll -File -Recurse)
 if ($ProviderDlls.Count -ne 1) { throw "expected exactly one GOST provider DLL" }
