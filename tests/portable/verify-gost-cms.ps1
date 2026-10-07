@@ -46,8 +46,8 @@ try {
     Invoke-OpenSSL -Arguments @('asn1parse', '-inform', 'DER',
         '-in', (Join-Path $Out 'openssl-smime.der')) |
         Set-Content -LiteralPath (Join-Path $Out 'openssl-smime-asn1.txt')
-    if (-not (Select-String -LiteralPath (Join-Path $Out 'openssl-smime-asn1.txt')
-        -SimpleMatch 'GOST R 34.10-2012 with GOST R 34.11-2012 (256 bit)')) {
+    $GostAlgorithm = 'GOST R 34.10-2012 with GOST R 34.11-2012 (256 bit)'
+    if (-not (Select-String -LiteralPath (Join-Path $Out 'openssl-smime-asn1.txt') -SimpleMatch $GostAlgorithm)) {
         throw 'S/MIME envelope lacks the GOST signature algorithm'
     }
     Write-Host '[GOST-CMS] PASS: ENGINE, S/MIME and CMS signing and verification'
