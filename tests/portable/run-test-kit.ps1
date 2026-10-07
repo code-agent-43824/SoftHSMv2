@@ -153,6 +153,7 @@ if ($BundledMode -eq "YES") {
 }
 
 Invoke-GostVerifier
+& (Join-Path $KitDir 'scripts/verify-gost-cms.ps1') -KitDir $KitDir
 
 & (Join-Path $KitDir "scripts/run-fresh-integration.ps1") $Module $OpenSSL $BundledMode
 if ($LASTEXITCODE -ne 0) { throw "downloadable test kit failed" }

@@ -81,15 +81,15 @@ mkdir -p "$engine_dir/libprov"
 tar -xzf "$engine_archive" -C "$engine_dir" --strip-components=1
 tar -xzf "$libprov_archive" -C "$engine_dir/libprov" --strip-components=1
 
-build_provider() {
+build_gost_modules() {
   local prefix=$1 build_dir=$2
   shift 2
   cmake -S "$engine_dir" -B "$build_dir" "$@" \
     -DCMAKE_BUILD_TYPE=Release -DOPENSSL_ROOT_DIR="$prefix" \
     -DOPENSSL_ENGINES_DIR=lib/engines-3 \
-    -DGOST_BUILD_ENGINE=OFF -DGOST_BUILD_STATIC_ENGINE=OFF \
+    -DGOST_BUILD_ENGINE=ON -DGOST_BUILD_STATIC_ENGINE=OFF \
     -DGOST_BUILD_PROVIDER=ON
-  cmake --build "$build_dir" --target gost_prov -j "$jobs"
+  cmake --build "$build_dir" --target gost_engine gost_prov -j "$jobs"
 }
 
 if [[ "$platform" == macos-universal ]]; then
@@ -105,13 +105,14 @@ if [[ "$platform" == macos-universal ]]; then
     make -j"$jobs" build_sw
     make install_sw
     popd
-    build_provider "$prefix" "$work_dir/gost-build-$arch" -DCMAKE_OSX_ARCHITECTURES="$arch" \
+    build_gost_modules "$prefix" "$work_dir/gost-build-$arch" -DCMAKE_OSX_ARCHITECTURES="$arch" \
       -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
     patched="$work_dir/patched-$arch"
     mkdir -p "$patched"
     cp "$prefix/bin/openssl" "$patched/openssl"
     cp "$prefix/lib/libcrypto.3.dylib" "$prefix/lib/libssl.3.dylib" "$patched/"
     cp "$work_dir/gost-build-$arch/bin/gostprov.dylib" "$patched/"
+    cp "$work_dir/gost-build-$arch/bin/gost.dylib" "$patched/"
     install_name_tool -change "$prefix/lib/libcrypto.3.dylib" \
       '@loader_path/libcrypto.3.dylib' "$patched/openssl"
     install_name_tool -change "$prefix/lib/libssl.3.dylib" \
@@ -120,6 +121,8 @@ if [[ "$platform" == macos-universal ]]; then
       '@loader_path/libcrypto.3.dylib' "$patched/libssl.3.dylib"
     install_name_tool -change "$prefix/lib/libcrypto.3.dylib" \
       '@loader_path/libcrypto.3.dylib' "$patched/gostprov.dylib"
+    install_name_tool -change "$prefix/lib/libcrypto.3.dylib" \
+      '@loader_path/libcrypto.3.dylib' "$patched/gost.dylib"
     for library in libcrypto.3.dylib libssl.3.dylib; do
       install_name_tool -id "@loader_path/$library" "$patched/$library"
     done
@@ -133,13 +136,18 @@ if [[ "$platform" == macos-universal ]]; then
   lipo -create "$work_dir/patched-arm64/gostprov.dylib" \
     "$work_dir/patched-x86_64/gostprov.dylib" \
     -output "$stage_dir/bin/gostprov.dylib"
+  lipo -create "$work_dir/patched-arm64/gost.dylib" \
+    "$work_dir/patched-x86_64/gost.dylib" \
+    -output "$stage_dir/bin/gost.dylib"
   lipo "$stage_dir/bin/openssl" -verify_arch arm64 x86_64
   lipo "$stage_dir/bin/gostprov.dylib" -verify_arch arm64 x86_64
+  lipo "$stage_dir/bin/gost.dylib" -verify_arch arm64 x86_64
   lipo "$stage_dir/bin/libcrypto.3.dylib" -verify_arch arm64 x86_64
   lipo "$stage_dir/bin/libssl.3.dylib" -verify_arch arm64 x86_64
   codesign --force --sign - "$stage_dir/bin/libcrypto.3.dylib"
   codesign --force --sign - "$stage_dir/bin/libssl.3.dylib"
   codesign --force --sign - "$stage_dir/bin/gostprov.dylib"
+  codesign --force --sign - "$stage_dir/bin/gost.dylib"
   codesign --force --sign - "$stage_dir/bin/openssl"
 else
   prefix="$work_dir/install"
@@ -150,15 +158,17 @@ else
   popd
   cp "$prefix/bin/openssl" "$stage_dir/bin/openssl"
   cp -L "$prefix/lib/libcrypto.so.3" "$prefix/lib/libssl.so.3" "$stage_dir/bin/"
-  build_provider "$prefix" "$work_dir/gost-build"
+  build_gost_modules "$prefix" "$work_dir/gost-build"
   cp "$work_dir/gost-build/bin/gostprov.so" "$stage_dir/bin/"
-  for binary in openssl libssl.so.3 gostprov.so; do
+  cp "$work_dir/gost-build/bin/gost.so" "$stage_dir/bin/"
+  for binary in openssl libssl.so.3 gostprov.so gost.so; do
     patchelf --set-rpath '$ORIGIN' "$stage_dir/bin/$binary"
   done
 fi
 
 cp "$source_dir/apps/openssl.cnf" "$stage_dir/config/openssl.cnf"
 cp "$engine_dir/test/provider.cnf" "$stage_dir/config/openssl-gost.cnf"
+cp "$engine_dir/test/engine.cnf" "$stage_dir/config/openssl-gost-engine.cnf"
 if [[ ${OPENSSL_GOST_BUNDLE_ONLY:-} == 1 ]]; then
   cp "$source_dir/LICENSE.txt" "$stage_dir/LICENSE-OpenSSL.txt"
   cp "$engine_dir/LICENSE" "$stage_dir/LICENSE-GOST-Provider.txt"
@@ -189,6 +199,8 @@ fi
 
 cp "$root_dir/tests/portable/run-test-kit.sh" "$stage_dir/run-test.sh"
 cp "$root_dir/tests/portable/verify-gost-openssl.sh" "$stage_dir/scripts/verify-gost-openssl.sh"
+cp "$root_dir/tests/portable/verify-gost-cms.sh" "$stage_dir/scripts/verify-gost-cms.sh"
+cp "$root_dir/tests/portable/verify-rutoken-cms-cross.sh" "$stage_dir/scripts/verify-rutoken-cms-cross.sh"
 cp "$root_dir/tests/portable/verify-config-override.sh" "$stage_dir/scripts/verify-config-override.sh"
 cp "$root_dir/tests/portable/run-fresh-integration.sh" "$stage_dir/scripts/run-fresh-integration.sh"
 cp "$root_dir/tests/portable/run-pkcs11-integration.sh" "$stage_dir/scripts/run-pkcs11-integration.sh"

@@ -23,6 +23,7 @@ $OpenSSLSource = Join-Path $WorkDir "openssl-$($env:OPENSSL_VERSION)"
 $OpenSSLPrefix = Join-Path $WorkDir "openssl-install"
 $EngineSource = Join-Path $WorkDir "gost-engine"
 $EngineBuild = Join-Path $WorkDir "gost-build"
+$LegacyEngineBuild = Join-Path $WorkDir "gost-engine-build"
 $StageDir = Join-Path $WorkDir "stage"
 $OutputDir = Join-Path $RootDir "dist"
 
@@ -190,6 +191,18 @@ cmake -S $EngineSource -B $EngineBuild -G "NMake Makefiles" `
 if ($LASTEXITCODE -ne 0) { throw "GOST provider configure failed" }
 cmake --build $EngineBuild --target gost_prov
 if ($LASTEXITCODE -ne 0) { throw "GOST provider build failed" }
+# The provider needs an explicit export flag on MSVC; the legacy engine does
+# not export OSSL_provider_init, so build it in a separate CMake tree.
+$EngineRuntime = if ($env:PORTABLE_ARCH -eq 'arm64') { 'MultiThreadedDLL' } else { 'MultiThreaded' }
+cmake -S $EngineSource -B $LegacyEngineBuild -G "NMake Makefiles" `
+    -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_DEFAULT_CMP0091=NEW `
+    "-DCMAKE_MSVC_RUNTIME_LIBRARY=$EngineRuntime" `
+    "-DOPENSSL_ROOT_DIR=$OpenSSLPrefix" `
+    -DOPENSSL_ENGINES_DIR=bin -DGOST_BUILD_ENGINE=ON `
+    -DGOST_BUILD_STATIC_ENGINE=OFF -DGOST_BUILD_PROVIDER=OFF
+if ($LASTEXITCODE -ne 0) { throw "GOST engine configure failed" }
+cmake --build $LegacyEngineBuild --target gost_engine
+if ($LASTEXITCODE -ne 0) { throw "GOST engine build failed" }
 $env:CL = $PreviousCl
 
 
@@ -220,10 +233,14 @@ if ($LASTEXITCODE -ne 0 -or -not ($ProviderExports | Select-String -Pattern '\bO
     throw "GOST provider DLL does not export OSSL_provider_init"
 }
 Copy-Item -LiteralPath $ProviderDlls[0].FullName -Destination (Join-Path $StageDir "bin/gostprov.dll")
+$EngineDlls = @(Get-ChildItem -LiteralPath $LegacyEngineBuild -Filter gost.dll -File -Recurse)
+if ($EngineDlls.Count -ne 1) { throw "expected exactly one GOST engine DLL" }
+Copy-Item -LiteralPath $EngineDlls[0].FullName -Destination (Join-Path $StageDir "bin/gost.dll")
 $OpenSSLConfig = [IO.File]::ReadAllText((Join-Path $OpenSSLSource "apps/openssl.cnf"))
 [IO.File]::WriteAllText((Join-Path $StageDir "config/openssl.cnf"), $OpenSSLConfig,
     [Text.UTF8Encoding]::new($false))
 Copy-Item (Join-Path $EngineSource "test/provider.cnf") (Join-Path $StageDir "config/openssl-gost.cnf")
+Copy-Item (Join-Path $EngineSource "test/engine.cnf") (Join-Path $StageDir "config/openssl-gost-engine.cnf")
 if ($env:OPENSSL_GOST_BUNDLE_ONLY -eq '1') {
     Copy-Item (Join-Path $OpenSSLSource "LICENSE.txt") (Join-Path $StageDir "LICENSE-OpenSSL.txt")
     Copy-Item (Join-Path $EngineSource "LICENSE") (Join-Path $StageDir "LICENSE-GOST-Provider.txt")
@@ -256,6 +273,8 @@ if ($env:OPENSSL_GOST_BUNDLE_ONLY -ne '1') {
 
 Copy-Item (Join-Path $RootDir "tests/portable/run-test-kit.ps1") (Join-Path $StageDir "run-test.ps1")
 Copy-Item (Join-Path $RootDir "tests/portable/verify-gost-openssl.ps1") (Join-Path $StageDir "scripts/verify-gost-openssl.ps1")
+Copy-Item (Join-Path $RootDir "tests/portable/verify-gost-cms.ps1") (Join-Path $StageDir "scripts/verify-gost-cms.ps1")
+Copy-Item (Join-Path $RootDir "tests/portable/verify-rutoken-cms-cross.ps1") (Join-Path $StageDir "scripts/verify-rutoken-cms-cross.ps1")
 Copy-Item (Join-Path $RootDir "tests/portable/verify-config-override.ps1") (Join-Path $StageDir "scripts/verify-config-override.ps1")
 Copy-Item (Join-Path $RootDir "tests/portable/run-test-kit.cmd") (Join-Path $StageDir "run-test.cmd")
 Copy-Item (Join-Path $RootDir "tests/portable/run-fresh-integration.ps1") (Join-Path $StageDir "scripts/run-fresh-integration.ps1")
@@ -331,7 +350,7 @@ $Environment | Set-Content -Encoding utf8 (Join-Path $StageDir "ENVIRONMENT.txt"
 $CheckedBinaries = @($OpenSSLExe, $Client, (Join-Path $StageDir "softhsm2.dll"),
     (Join-Path $StageDir "bin/softhsm2-util.exe"), (Join-Path $StageDir "bin/softhsm2-export.exe")) +
     @($CryptoDlls | ForEach-Object { Join-Path $StageDir "bin/$($_.Name)" }) +
-    @((Join-Path $StageDir "bin/gostprov.dll"))
+    @((Join-Path $StageDir "bin/gostprov.dll"), (Join-Path $StageDir "bin/gost.dll"))
 foreach ($Binary in $CheckedBinaries) {
     $MachineHeader = & dumpbin /headers $Binary |
         Select-String -Pattern $ExpectedMachinePattern
@@ -339,7 +358,8 @@ foreach ($Binary in $CheckedBinaries) {
         throw "$Binary does not have the expected $($env:PORTABLE_ARCH) PE machine type"
     }
     $AllowedCrypto = ($Binary -eq $OpenSSLExe -or $Binary -like "*libcrypto*.dll" -or
-        $Binary -like "*libssl*.dll" -or $Binary -like "*gostprov.dll")
+        $Binary -like "*libssl*.dll" -or $Binary -like "*gostprov.dll" -or
+        $Binary -like "*gost.dll")
     $Pattern = if ($AllowedCrypto -and $env:PORTABLE_ARCH -eq "arm64") {
                    'msvcp|ucrtbased'
                } elseif ($AllowedCrypto) { 'vcruntime|msvcp|ucrtbased' }

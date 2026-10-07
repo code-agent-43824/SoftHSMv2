@@ -12,10 +12,11 @@ OpenSSL сами по себе **не обращаются к PKCS #11-токе�
 ## Что входит в комплект
 
 - `bin/openssl` или `bin/openssl.exe`, локальные разделяемые библиотеки
-  OpenSSL и `bin/gostprov.so` / `gostprov.dylib` / `gostprov.dll`;
+  OpenSSL, `bin/gostprov.*` и `bin/gost.*`;
 - `config/openssl.cnf` — штатная конфигурация, используемая тестами RSA,
   X.509 и CMS; `config/openssl-gost.cnf` — включение сразу `default` и
-  `gostprov` для команд с ГОСТ;
+  `gostprov` для обычных команд с ГОСТ; `config/openssl-gost-engine.cnf`
+  включает legacy ENGINE для ГОСТ CMS/PKCS#7;
 - `ENVIRONMENT.txt` и `testkit.env` — версии инструментов и платформы;
   `scripts/verify-gost-openssl.sh` или `.ps1` — готовые проверки.
 
@@ -187,6 +188,59 @@ gost enc -d -kuznyechik-ctr-acpkm \
 Длинные потоки после смены ключа проверяются отдельными эталонными
 векторами устройства, а не этой командой. CTR/CTR-ACPKM не аутентифицируют
 сообщение; совпавшая расшифровка не доказывает его целостность.
+
+## ГОСТ CMS/PKCS#7 через локальный ENGINE
+
+`gostprov` обслуживает `dgst`, `genpkey` и шифры. В OpenSSL 3.5.8
+`smime -sign`/`cms -sign` с одним provider-ключом не выбирают legacy
+signature NID. Для этих двух команд test-kit дополнительно содержит ENGINE
+`bin/gost.so` (`gost.dylib`/`gost.dll`) из того же закреплённого исходника.
+Его отдельный конфиг не меняет штатный provider-режим:
+
+```bash
+cms_gost() {
+  OPENSSL_CONF="$KIT/config/openssl-gost-engine.cnf" \
+  OPENSSL_ENGINES="$KIT/bin" OPENSSL_MODULES="$KIT/bin" \
+    "$KIT/bin/openssl" "$@"
+}
+bash "$KIT/scripts/verify-gost-cms.sh" "$KIT"
+cms_gost smime -sign -md streebog256 -binary -nodetach \
+  -in "$KIT/test-output/gost-cms/message.txt" \
+  -signer "$KIT/test-output/gost-cms/ca.pem" \
+  -inkey "$KIT/test-output/gost-cms/key.pem" \
+  -outform DER -out "$KIT/test-output/gost-cms/manual.der"
+cms_gost smime -verify -inform DER \
+  -in "$KIT/test-output/gost-cms/manual.der" \
+  -CAfile "$KIT/test-output/gost-cms/ca.pem" \
+  -out "$KIT/test-output/gost-cms/manual-verified.txt"
+```
+
+Self-тест также проверяет `cms -sign/-verify`, OID ГОСТ в DER и полное
+совпадение исходного сообщения. CA в нём имеет
+`basicConstraints=critical,CA:TRUE`. Для Windows выполните
+`scripts/verify-gost-cms.ps1 -KitDir $Kit`: скрипт сам задаёт локальные
+`OPENSSL_CONF`, `OPENSSL_ENGINES` и `OPENSSL_MODULES` только на время теста.
+
+При доступе к **физическому** Рутокену есть отдельный кросс-тест. Он
+проверяет A: envelope OpenSSL → `pkcs11-tool --rutoken-pkcs7-verify` с
+`--rutoken-trusted`; затем B: `C_EX_PKCS7Sign` на токене →
+`openssl smime -verify -CAfile`. Нужны ID сертификата на токене и PEM его
+CA с `basicConstraints=critical,CA:TRUE`. Например, на Unix:
+
+```bash
+read -r -s -p 'Rutoken PIN: ' RUTOKEN_PIN; printf '\n'; export RUTOKEN_PIN
+bash "$KIT/scripts/verify-rutoken-cms-cross.sh" "$KIT" \
+  /path/to/vendor-pkcs11.so 0 0102 /path/to/token-ca.pem
+unset RUTOKEN_PIN
+```
+
+На Windows используйте `scripts/verify-rutoken-cms-cross.ps1` с параметрами
+`-KitDir`, `-Module`, `-Slot`, `-CertificateId`, `-TokenCaPem`; PIN задаётся
+в `RUTOKEN_PIN`. Утилита получает его как `--pin env:RUTOKEN_PIN`, без
+значения PIN в командной строке. Эти проверки не проходят на программном
+`FAKE_RUTOKEN_ECP`: его `C_EX_PKCS7Sign/Verify` ещё не реализованы.
+Релизная матрица подтверждает только self-цикл; аппаратную совместимость
+нужно проверять отдельно на устройстве.
 
 ## RSA, сертификаты и CMS
 

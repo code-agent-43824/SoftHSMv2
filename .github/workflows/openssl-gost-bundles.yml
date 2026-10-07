@@ -111,6 +111,7 @@ jobs:
           export OPENSSL_CONF="$PWD/bundle/config/openssl-gost.cnf"
           export OPENSSL_MODULES="$PWD/bundle/bin"
           bash tests/portable/verify-gost-openssl.sh bundle
+          bash tests/portable/verify-gost-cms.sh bundle
 
   verify-macos:
     name: Verify OpenSSL GOST macos-universal
@@ -129,6 +130,7 @@ jobs:
           export OPENSSL_MODULES="$PWD/bundle/bin"
           lipo bundle/bin/openssl -verify_arch arm64 x86_64
           bash tests/portable/verify-gost-openssl.sh bundle
+          bash tests/portable/verify-gost-cms.sh bundle
 
   verify-windows:
     name: Verify OpenSSL GOST windows-${{ matrix.arch }}
@@ -156,6 +158,7 @@ jobs:
           $env:OPENSSL_CONF = (Resolve-Path 'bundle/config/openssl-gost.cnf').Path
           $env:OPENSSL_MODULES = (Resolve-Path 'bundle/bin').Path
           & ./tests/portable/verify-gost-openssl.ps1 -KitDir (Resolve-Path bundle).Path
+          & ./tests/portable/verify-gost-cms.ps1 -KitDir (Resolve-Path bundle).Path
 
   publish:
     name: Publish verified OpenSSL GOST bundles
@@ -195,4 +198,4 @@ jobs:
             --target "$GITHUB_SHA" \
             --latest=false \
             --title "Portable OpenSSL GOST $BUNDLE_TAG" \
-            --notes "OpenSSL CLI, shared libraries, GOST provider and configuration for six platforms. Each archive was exercised on a fresh platform runner. SHA256SUMS pins the published bytes."
+            --notes "OpenSSL CLI, shared libraries, GOST provider plus ENGINE, and local configurations for six platforms. Each archive passed GOST S/MIME/CMS self-tests on a fresh platform runner. SHA256SUMS pins the published bytes."

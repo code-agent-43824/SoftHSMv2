@@ -12,8 +12,8 @@ directory. The guide is in Russian and covers the bundled provider setup.
 The kit contains:
 - the matching portable SoftHSM module;
 - a precompiled dependency-light C++ PKCS #11 client;
-- a pinned OpenSSL CLI, its private shared libraries and a pinned GOST provider,
-  used as an independent reference (the SoftHSM module remains self-contained);
+- a pinned OpenSSL CLI, its private shared libraries, GOST provider and GOST
+  ENGINE for legacy CMS/PKCS#7 (the SoftHSM module remains self-contained);
 - the latest portable pkcs11-tool and pkcs11-spy from the
   code-agent-43824/OpenSC fork at build time (release and ZIP SHA-256 in
   OPENSC-SOURCE.txt); no operating-system OpenSC package is copied;
@@ -79,6 +79,11 @@ PKCS #11 digests, signatures and Kuznechik/Magma CTR-ACPKM output are also
 checked against the bundled OpenSSL GOST provider. The external check includes
 changed messages and truncated signatures; mechanism-only cases remain tested
 with reference vectors where OpenSSL has no matching interface.
+The GOST CMS self-check signs and verifies S/MIME and CMS DER envelopes with
+the kit-local ENGINE config. scripts/verify-rutoken-cms-cross.sh and .ps1
+compare OpenSSL and a physical Rutoken in both directions when the token and
+its CA certificate are available; the software-only release matrix does not
+claim these hardware checks.
 For the bundled module only, the launcher then runs softhsm2-util without a
 --module argument, force-exports the persistent sensitive/non-extractable RSA
 key, imports a P-256 EC fixture with softhsm2-util, force-exports it, validates

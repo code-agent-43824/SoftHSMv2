@@ -159,6 +159,7 @@ fi
 
 OPENSSL_CONF="$kit_dir/config/openssl-gost.cnf" OPENSSL_MODULES="$kit_dir/bin" \
   bash "$kit_dir/scripts/verify-gost-openssl.sh" "$kit_dir"
+bash "$kit_dir/scripts/verify-gost-cms.sh" "$kit_dir"
 
 "$kit_dir/scripts/run-fresh-integration.sh" "$module" \
   "$kit_dir/bin/openssl" "$bundled_mode"

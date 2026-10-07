@@ -815,6 +815,10 @@ jobs:
                 zipinfo -1 "$archive" | grep -Fx 'bin/softhsm2-util.exe' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'bin/softhsm2-export.exe' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'bin/gostprov.dll' >/dev/null
+                zipinfo -1 "$archive" | grep -Fx 'bin/gost.dll' >/dev/null
+                zipinfo -1 "$archive" | grep -Fx 'config/openssl-gost-engine.cnf' >/dev/null
+                zipinfo -1 "$archive" | grep -Fx 'scripts/verify-gost-cms.ps1' >/dev/null
+                zipinfo -1 "$archive" | grep -Fx 'scripts/verify-rutoken-cms-cross.ps1' >/dev/null
                 zipinfo -1 "$archive" | grep -E '^bin/libcrypto.*\.dll$' >/dev/null
                 zipinfo -1 "$archive" | grep -E '^bin/libssl.*\.dll$' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'LICENSE-OpenSC.txt' >/dev/null
@@ -835,13 +839,18 @@ jobs:
                 case "$(basename "$archive")" in
                   *macos-*)
                     zipinfo -1 "$archive" | grep -Fx 'bin/gostprov.dylib' >/dev/null
+                    zipinfo -1 "$archive" | grep -Fx 'bin/gost.dylib' >/dev/null
                     zipinfo -1 "$archive" | grep -Fx 'bin/libcrypto.3.dylib' >/dev/null
                     zipinfo -1 "$archive" | grep -Fx 'bin/libssl.3.dylib' >/dev/null ;;
                   *)
                     zipinfo -1 "$archive" | grep -Fx 'bin/gostprov.so' >/dev/null
+                    zipinfo -1 "$archive" | grep -Fx 'bin/gost.so' >/dev/null
                     zipinfo -1 "$archive" | grep -Fx 'bin/libcrypto.so.3' >/dev/null
                     zipinfo -1 "$archive" | grep -Fx 'bin/libssl.so.3' >/dev/null ;;
                 esac
+                zipinfo -1 "$archive" | grep -Fx 'config/openssl-gost-engine.cnf' >/dev/null
+                zipinfo -1 "$archive" | grep -Fx 'scripts/verify-gost-cms.sh' >/dev/null
+                zipinfo -1 "$archive" | grep -Fx 'scripts/verify-rutoken-cms-cross.sh' >/dev/null
                 if zipinfo -1 "$archive" | grep -Fx 'bin/opensc-lib/pkcs11-tool' >/dev/null; then
                   echo "duplicate pkcs11-tool found in $archive" >&2
                   exit 1
