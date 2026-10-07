@@ -2,7 +2,17 @@
 
 Обновлено: 2026-10-07. Транк: `main`.
 
-Текущий релиз `v2.7.0-portable.63` на `b424d9f`: test-kit по умолчанию
+Текущий релиз `v2.7.0-portable.64` на `6bbf79d`: test-kit содержит
+`gost-engine` вместе с `gostprov` и локальный ENGINE-конфиг для ГОСТ
+S/MIME/CMS. Все шесть verifier jobs выполнили self-тест подписи и проверки;
+12 опубликованных ZIP совпали с `SHA256SUMS` и читаются. Linux x64 архив
+test-kit изменился (`e9a5e5f7…` → `6ae62a56…`), новый `gost.so` имеет
+BuildID `41800e8c…`. BuildID `libsofthsm2.so` остался `95e4b6a2…`:
+исходники самого модуля в этой задаче не менялись. Аппаратные кросс-тесты
+OpenSSL ↔ Rutoken включены как отдельные скрипты, но без физического токена
+не проверены.
+
+Предыдущий релиз `v2.7.0-portable.63` на `b424d9f`: test-kit по умолчанию
 использует `FAKE_RUTOKEN_ECP = true`; `C_EX_GetJournal`,
 `C_EX_SetLicense` и `C_EX_GetLicense` реализованы. Локально прошли полный
 Rutoken battery на файловом backend, `journal`/`ex-init-token` на SQLite,
