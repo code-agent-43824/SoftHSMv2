@@ -265,6 +265,20 @@ jobs:
             exit 1
           fi
           unzip -q dist/softhsm-testkit-linux-x64.zip -d artifact-testkit
+      - name: Export Linux CMS interoperability vector
+        run: |
+          source="$RUNNER_TEMP/packaged-testkit/test-output/battery/run-1/cms"
+          mkdir -p cms-vector-linux
+          for name in attached.der detached.der root.der signer.der content.bin; do
+            test -s "$source/$name"
+            cp "$source/$name" cms-vector-linux/
+          done
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cms-vector-linux-x64
+          path: cms-vector-linux/
+          if-no-files-found: error
+          retention-days: 7
       - name: Verify alternate-library first run, reuse, and exclusion gate
         run: |
           kit="$RUNNER_TEMP/packaged-testkit"
@@ -440,7 +454,7 @@ jobs:
 
   verify-windows-x64:
     name: Verify downloaded Windows x64 package
-    needs: build-windows-x64
+    needs: [build-windows-x64, verify-linux-x64]
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v7
@@ -450,6 +464,10 @@ jobs:
         with:
           name: softhsm-portable-windows-x64
           path: downloaded
+      - uses: actions/download-artifact@v8
+        with:
+          name: cms-vector-linux-x64
+          path: cms-vector-linux
       - name: Build and test downloadable test kit
         shell: cmd
         env:
@@ -496,10 +514,45 @@ jobs:
       - name: Verify Windows C_EX functional evidence
         shell: pwsh
         run: |
+          $kitModule = "$env:RUNNER_TEMP/packaged-testkit/softhsm2.dll"
+          if ((Get-FileHash -Algorithm SHA256 $kitModule).Hash -ne
+              (Get-FileHash -Algorithm SHA256 'downloaded/softhsm2.dll').Hash) {
+            throw 'test-kit module differs from the HEAD package module'
+          }
           $log = "$env:RUNNER_TEMP/packaged-testkit/test-output/battery.log"
-          foreach ($marker in @('C_EX_InitToken behaviour verified', 'C_EX_SetTokenName = CKR_OK', 'C_EX_SetLocalPIN = CKR_OK', 'SO trust transition, permanent freeze and text verified')) {
+          foreach ($marker in @('C_EX_InitToken behaviour verified', 'C_EX_SetTokenName = CKR_OK', 'C_EX_SetLocalPIN = CKR_OK', 'SO trust transition, permanent freeze and text verified', 'attached/detached, chain, tamper and signer output verified')) {
             if (-not (Select-String -LiteralPath $log -SimpleMatch -Pattern $marker -Quiet)) { throw "missing C_EX evidence: $marker" }
           }
+      - name: Verify Linux CMS on Windows and export Windows CMS
+        shell: pwsh
+        run: |
+          $kit = Join-Path $env:RUNNER_TEMP 'packaged-testkit'
+          $work = Join-Path $env:RUNNER_TEMP 'cms-cross-windows'
+          New-Item -ItemType Directory -Force (Join-Path $work 'tokens') | Out-Null
+          @('directories.tokendir = ./tokens', 'objectstore.backend = file', 'FAKE_RUTOKEN_ECP = true') |
+            Set-Content -LiteralPath (Join-Path $work 'softhsm.conf') -Encoding ascii
+          $env:SOFTHSM2_CONF = Join-Path $work 'softhsm.conf'
+          $env:P11_TEST_SO_PIN = '12345678'
+          $env:P11_TEST_USER_PIN = '12345678'
+          & (Join-Path $kit 'bin/portable-token-e2e.exe') cms-verify-external `
+            (Join-Path $kit 'softhsm2.dll') (Join-Path $PWD.Path 'cms-vector-linux')
+          if ($LASTEXITCODE -ne 0) { throw 'Windows did not verify the Linux CMS envelope' }
+          $source = Join-Path $kit 'test-output/battery/run-1/cms'
+          $target = Join-Path $env:RUNNER_TEMP 'cms-vector-windows'
+          New-Item -ItemType Directory -Force $target | Out-Null
+          foreach ($name in @('attached.der', 'detached.der', 'root.der', 'signer.der', 'content.bin')) {
+            $file = Join-Path $source $name
+            if (-not (Test-Path -LiteralPath $file) -or (Get-Item -LiteralPath $file).Length -eq 0) {
+              throw "missing Windows CMS vector: $name"
+            }
+            Copy-Item -LiteralPath $file -Destination $target
+          }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cms-vector-windows-x64
+          path: ${{ runner.temp }}/cms-vector-windows/
+          if-no-files-found: error
+          retention-days: 7
       - uses: actions/upload-artifact@v7
         with:
           name: softhsm-testkit-windows-x64
@@ -565,8 +618,13 @@ jobs:
       - name: Verify Windows C_EX functional evidence
         shell: pwsh
         run: |
+          $kitModule = "$env:RUNNER_TEMP/packaged-testkit/softhsm2.dll"
+          if ((Get-FileHash -Algorithm SHA256 $kitModule).Hash -ne
+              (Get-FileHash -Algorithm SHA256 'downloaded/softhsm2.dll').Hash) {
+            throw 'test-kit module differs from the HEAD package module'
+          }
           $log = "$env:RUNNER_TEMP/packaged-testkit/test-output/battery.log"
-          foreach ($marker in @('C_EX_InitToken behaviour verified', 'C_EX_SetTokenName = CKR_OK', 'C_EX_SetLocalPIN = CKR_OK', 'SO trust transition, permanent freeze and text verified')) {
+          foreach ($marker in @('C_EX_InitToken behaviour verified', 'C_EX_SetTokenName = CKR_OK', 'C_EX_SetLocalPIN = CKR_OK', 'SO trust transition, permanent freeze and text verified', 'attached/detached, chain, tamper and signer output verified')) {
             if (-not (Select-String -LiteralPath $log -SimpleMatch -Pattern $marker -Quiet)) { throw "missing C_EX evidence: $marker" }
           }
       - uses: actions/upload-artifact@v7
@@ -634,8 +692,13 @@ jobs:
       - name: Verify Windows C_EX functional evidence
         shell: pwsh
         run: |
+          $kitModule = "$env:RUNNER_TEMP/packaged-testkit/softhsm2.dll"
+          if ((Get-FileHash -Algorithm SHA256 $kitModule).Hash -ne
+              (Get-FileHash -Algorithm SHA256 'downloaded/softhsm2.dll').Hash) {
+            throw 'test-kit module differs from the HEAD package module'
+          }
           $log = "$env:RUNNER_TEMP/packaged-testkit/test-output/battery.log"
-          foreach ($marker in @('C_EX_InitToken behaviour verified', 'C_EX_SetTokenName = CKR_OK', 'C_EX_SetLocalPIN = CKR_OK', 'SO trust transition, permanent freeze and text verified')) {
+          foreach ($marker in @('C_EX_InitToken behaviour verified', 'C_EX_SetTokenName = CKR_OK', 'C_EX_SetLocalPIN = CKR_OK', 'SO trust transition, permanent freeze and text verified', 'attached/detached, chain, tamper and signer output verified')) {
             if (-not (Select-String -LiteralPath $log -SimpleMatch -Pattern $marker -Quiet)) { throw "missing C_EX evidence: $marker" }
           }
       - uses: actions/upload-artifact@v7
@@ -703,6 +766,39 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+  verify-cms-cross-linux:
+    name: Verify Windows CMS on Linux x64
+    needs: [verify-linux-x64, verify-windows-x64]
+    runs-on: ubuntu-24.04
+    container: ubuntu:20.04
+    steps:
+      - name: Install test-kit runtime
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates libsqlite3-0
+      - uses: actions/download-artifact@v8
+        with:
+          name: softhsm-testkit-linux-x64
+          path: kit
+      - uses: actions/download-artifact@v8
+        with:
+          name: cms-vector-windows-x64
+          path: cms-vector-windows
+      - name: Verify Windows CMS envelope with Linux module
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/cms-cross-linux/tokens"
+          cat > "$RUNNER_TEMP/cms-cross-linux/softhsm.conf" <<'EOF'
+          directories.tokendir = ./tokens
+          objectstore.backend = file
+          FAKE_RUTOKEN_ECP = true
+          EOF
+          export SOFTHSM2_CONF="$RUNNER_TEMP/cms-cross-linux/softhsm.conf"
+          export P11_TEST_SO_PIN=12345678 P11_TEST_USER_PIN=12345678
+          chmod +x kit/bin/portable-token-e2e
+          kit/bin/portable-token-e2e cms-verify-external \
+            "$GITHUB_WORKSPACE/kit/libsofthsm2.so" "$GITHUB_WORKSPACE/cms-vector-windows"
+
   release:
     name: Publish all verified portable packages
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
@@ -713,6 +809,7 @@ jobs:
       - verify-windows-x64
       - verify-windows-arm64
       - verify-macos-universal
+      - verify-cms-cross-linux
     runs-on: ubuntu-24.04
     permissions:
       contents: write

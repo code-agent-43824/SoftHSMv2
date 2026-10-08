@@ -40,6 +40,7 @@
 #include "fatal.h"
 #include "cryptoki.h"
 #include "SoftHSM.h"
+#include "RutokenCMS.h"
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -279,6 +280,7 @@ PKCS_API CK_RV C_Finalize(CK_VOID_PTR pReserved)
 {
 	try
 	{
+		RutokenCMS::clearAll();
 		return SoftHSM::i()->C_Finalize(pReserved);
 	}
 	catch (...)
@@ -403,7 +405,9 @@ PKCS_API CK_RV C_InitToken(CK_SLOT_ID slotID, CK_UTF8CHAR_PTR pPin, CK_ULONG ulP
 {
 	try
 	{
-		return SoftHSM::i()->C_InitToken(slotID, pPin, ulPinLen, pLabel);
+		CK_RV rv = SoftHSM::i()->C_InitToken(slotID, pPin, ulPinLen, pLabel);
+		if (rv == CKR_OK) RutokenCMS::clearAll();
+		return rv;
 	}
 	catch (...)
 	{
@@ -463,6 +467,7 @@ PKCS_API CK_RV C_CloseSession(CK_SESSION_HANDLE hSession)
 {
 	try
 	{
+		RutokenCMS::clear(hSession);
 		return SoftHSM::i()->C_CloseSession(hSession);
 	}
 	catch (...)
@@ -478,6 +483,7 @@ PKCS_API CK_RV C_CloseAllSessions(CK_SLOT_ID slotID)
 {
 	try
 	{
+		RutokenCMS::clearAll();
 		return SoftHSM::i()->C_CloseAllSessions(slotID);
 	}
 	catch (...)
@@ -553,6 +559,7 @@ PKCS_API CK_RV C_Logout(CK_SESSION_HANDLE hSession)
 {
 	try
 	{
+		RutokenCMS::clearAll();
 		return SoftHSM::i()->C_Logout(hSession);
 	}
 	catch (...)
@@ -1839,7 +1846,9 @@ PKCS_API CK_RV C_EX_InitToken
 {
 	try
 	{
-		return SoftHSM::i()->C_EX_InitToken(slotID, pPin, ulPinLen, pInitInfo);
+		CK_RV rv = SoftHSM::i()->C_EX_InitToken(slotID, pPin, ulPinLen, pInitInfo);
+		if (rv == CKR_OK) RutokenCMS::clearAll();
+		return rv;
 	}
 	catch (...)
 	{
@@ -1968,14 +1977,16 @@ PKCS_API CK_RV C_EX_GetCertificateInfoText
 
 PKCS_API CK_RV C_EX_PKCS7Sign
 (
-	CK_SESSION_HANDLE /*hSession*/, CK_BYTE_PTR /*pData*/,
-	CK_ULONG /*ulDataLen*/, CK_OBJECT_HANDLE /*hCert*/,
-	CK_BYTE_PTR* /*ppEnvelope*/, CK_ULONG_PTR /*pEnvelopeLen*/,
-	CK_OBJECT_HANDLE /*hPrivKey*/, CK_OBJECT_HANDLE_PTR /*phCertificates*/,
-	CK_ULONG /*ulCertificatesLen*/, CK_ULONG /*flags*/
+	CK_SESSION_HANDLE hSession, CK_BYTE_PTR pData,
+	CK_ULONG ulDataLen, CK_OBJECT_HANDLE hCert,
+	CK_BYTE_PTR* ppEnvelope, CK_ULONG_PTR pEnvelopeLen,
+	CK_OBJECT_HANDLE hPrivKey, CK_OBJECT_HANDLE_PTR phCertificates,
+	CK_ULONG ulCertificatesLen, CK_ULONG flags
 )
 {
-	return CKR_FUNCTION_NOT_SUPPORTED;
+	return RutokenCMS::sign(hSession, pData, ulDataLen, hCert, ppEnvelope,
+	                        pEnvelopeLen, hPrivKey, phCertificates,
+	                        ulCertificatesLen, flags);
 }
 
 PKCS_API CK_RV C_EX_CreateCSR
@@ -2170,42 +2181,44 @@ PKCS_API CK_RV C_EX_UnwrapKey
 
 PKCS_API CK_RV C_EX_PKCS7VerifyInit
 (
-	CK_SESSION_HANDLE /*hSession*/, CK_BYTE_PTR /*pCms*/,
-	CK_ULONG /*ulCmsSize*/, CK_VENDOR_X509_STORE_PTR /*pStore*/,
-	CK_VENDOR_CRL_MODE /*ckMode*/, CK_FLAGS /*flags*/
+	CK_SESSION_HANDLE hSession, CK_BYTE_PTR pCms,
+	CK_ULONG ulCmsSize, CK_VENDOR_X509_STORE_PTR pStore,
+	CK_VENDOR_CRL_MODE ckMode, CK_FLAGS flags
 )
 {
-	return CKR_FUNCTION_NOT_SUPPORTED;
+	return RutokenCMS::verifyInit(hSession, pCms, ulCmsSize, pStore, ckMode, flags);
 }
 
 PKCS_API CK_RV C_EX_PKCS7Verify
 (
-	CK_SESSION_HANDLE /*hSession*/, CK_BYTE_PTR_PTR /*ppData*/,
-	CK_ULONG_PTR /*pulDataSize*/,
-	CK_VENDOR_BUFFER_PTR_PTR /*ppSignerCertificates*/,
-	CK_ULONG_PTR /*pulSignerCertificatesCount*/
+	CK_SESSION_HANDLE hSession, CK_BYTE_PTR_PTR ppData,
+	CK_ULONG_PTR pulDataSize,
+	CK_VENDOR_BUFFER_PTR_PTR ppSignerCertificates,
+	CK_ULONG_PTR pulSignerCertificatesCount
 )
 {
-	return CKR_FUNCTION_NOT_SUPPORTED;
+	return RutokenCMS::verify(hSession, ppData, pulDataSize,
+	                          ppSignerCertificates, pulSignerCertificatesCount);
 }
 
 PKCS_API CK_RV C_EX_PKCS7VerifyUpdate
 (
-	CK_SESSION_HANDLE /*hSession*/, CK_BYTE_PTR /*pData*/,
-	CK_ULONG /*ulDataSize*/
+	CK_SESSION_HANDLE hSession, CK_BYTE_PTR pData,
+	CK_ULONG ulDataSize
 )
 {
-	return CKR_FUNCTION_NOT_SUPPORTED;
+	return RutokenCMS::verifyUpdate(hSession, pData, ulDataSize);
 }
 
 PKCS_API CK_RV C_EX_PKCS7VerifyFinal
 (
-	CK_SESSION_HANDLE /*hSession*/,
-	CK_VENDOR_BUFFER_PTR_PTR /*ppSignerCertificates*/,
-	CK_ULONG_PTR /*pulSignerCertificatesCount*/
+	CK_SESSION_HANDLE hSession,
+	CK_VENDOR_BUFFER_PTR_PTR ppSignerCertificates,
+	CK_ULONG_PTR pulSignerCertificatesCount
 )
 {
-	return CKR_FUNCTION_NOT_SUPPORTED;
+	return RutokenCMS::verifyFinal(hSession, ppSignerCertificates,
+	                               pulSignerCertificatesCount);
 }
 
 PKCS_API CK_RV C_EX_Authenticate
