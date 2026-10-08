@@ -497,7 +497,7 @@ jobs:
         shell: pwsh
         run: |
           $log = "$env:RUNNER_TEMP/packaged-testkit/test-output/battery.log"
-          foreach ($marker in @('C_EX_InitToken behaviour verified', 'C_EX_SetTokenName = CKR_OK', 'C_EX_SetLocalPIN = CKR_OK')) {
+          foreach ($marker in @('C_EX_InitToken behaviour verified', 'C_EX_SetTokenName = CKR_OK', 'C_EX_SetLocalPIN = CKR_OK', 'SO trust transition, permanent freeze and text verified')) {
             if (-not (Select-String -LiteralPath $log -SimpleMatch -Pattern $marker -Quiet)) { throw "missing C_EX evidence: $marker" }
           }
       - uses: actions/upload-artifact@v7
@@ -566,7 +566,7 @@ jobs:
         shell: pwsh
         run: |
           $log = "$env:RUNNER_TEMP/packaged-testkit/test-output/battery.log"
-          foreach ($marker in @('C_EX_InitToken behaviour verified', 'C_EX_SetTokenName = CKR_OK', 'C_EX_SetLocalPIN = CKR_OK')) {
+          foreach ($marker in @('C_EX_InitToken behaviour verified', 'C_EX_SetTokenName = CKR_OK', 'C_EX_SetLocalPIN = CKR_OK', 'SO trust transition, permanent freeze and text verified')) {
             if (-not (Select-String -LiteralPath $log -SimpleMatch -Pattern $marker -Quiet)) { throw "missing C_EX evidence: $marker" }
           }
       - uses: actions/upload-artifact@v7
@@ -635,7 +635,7 @@ jobs:
         shell: pwsh
         run: |
           $log = "$env:RUNNER_TEMP/packaged-testkit/test-output/battery.log"
-          foreach ($marker in @('C_EX_InitToken behaviour verified', 'C_EX_SetTokenName = CKR_OK', 'C_EX_SetLocalPIN = CKR_OK')) {
+          foreach ($marker in @('C_EX_InitToken behaviour verified', 'C_EX_SetTokenName = CKR_OK', 'C_EX_SetLocalPIN = CKR_OK', 'SO trust transition, permanent freeze and text verified')) {
             if (-not (Select-String -LiteralPath $log -SimpleMatch -Pattern $marker -Quiet)) { throw "missing C_EX evidence: $marker" }
           }
       - uses: actions/upload-artifact@v7

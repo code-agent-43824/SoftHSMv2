@@ -40,6 +40,22 @@
 #include "fatal.h"
 #include "cryptoki.h"
 #include "SoftHSM.h"
+#include <cstdlib>
+#include <cstring>
+#include <memory>
+#include <new>
+#include <sstream>
+#include <string>
+#include <vector>
+
+#ifdef WITH_OPENSSL
+#include <openssl/bio.h>
+#include <openssl/x509.h>
+#else
+#include <botan/oids.h>
+#include <botan/x509cert.h>
+#include <botan/x509_dn.h>
+#endif
 
 #if defined(__GNUC__) && \
 	(__GNUC__ >= 4 || (__GNUC__ == 3 && __GNUC_MINOR__ >= 3)) || \
@@ -1884,11 +1900,70 @@ PKCS_API CK_RV C_EX_GetLicense
 
 PKCS_API CK_RV C_EX_GetCertificateInfoText
 (
-	CK_SESSION_HANDLE /*hSession*/, CK_OBJECT_HANDLE /*hCert*/,
-	CK_CHAR_PTR* /*pInfo*/, CK_ULONG_PTR /*pulInfoLen*/
+	CK_SESSION_HANDLE hSession, CK_OBJECT_HANDLE hCert,
+	CK_CHAR_PTR* pInfo, CK_ULONG_PTR pulInfoLen
 )
 {
-	return CKR_FUNCTION_NOT_SUPPORTED;
+	try {
+	if (pInfo == NULL_PTR || pulInfoLen == NULL_PTR) return CKR_ARGUMENTS_BAD;
+	*pInfo = NULL_PTR;
+	*pulInfoLen = 0;
+	CK_OBJECT_CLASS objectClass = CKO_VENDOR_DEFINED;
+	CK_ATTRIBUTE classAttr = { CKA_CLASS, &objectClass, sizeof(objectClass) };
+	CK_RV rv = C_GetAttributeValue(hSession, hCert, &classAttr, 1);
+	if (rv != CKR_OK) return rv;
+	if (objectClass != CKO_CERTIFICATE) return CKR_OBJECT_HANDLE_INVALID;
+	CK_ATTRIBUTE valueAttr = { CKA_VALUE, NULL_PTR, 0 };
+	rv = C_GetAttributeValue(hSession, hCert, &valueAttr, 1);
+	if (rv != CKR_OK) return rv;
+	if (valueAttr.ulValueLen == 0 || valueAttr.ulValueLen > 1024 * 1024)
+		return CKR_DATA_INVALID;
+	std::vector<CK_BYTE> der(valueAttr.ulValueLen);
+	valueAttr.pValue = der.data();
+	rv = C_GetAttributeValue(hSession, hCert, &valueAttr, 1);
+	if (rv != CKR_OK) return rv;
+	der.resize(valueAttr.ulValueLen);
+	std::string description;
+	try {
+#ifdef WITH_OPENSSL
+		const unsigned char* cursor = der.data();
+		std::unique_ptr<X509, decltype(&X509_free)> cert(
+			d2i_X509(NULL, &cursor, static_cast<long>(der.size())), X509_free);
+		if (!cert || cursor != der.data() + der.size()) return CKR_DATA_INVALID;
+		std::unique_ptr<BIO, decltype(&BIO_free)> bio(BIO_new(BIO_s_mem()), BIO_free);
+		if (!bio) return CKR_HOST_MEMORY;
+		if (X509_print(bio.get(), cert.get()) != 1) return CKR_DATA_INVALID;
+		BUF_MEM* buffer = NULL;
+		BIO_get_mem_ptr(bio.get(), &buffer);
+		if (buffer == NULL) return CKR_FUNCTION_FAILED;
+		description.assign(buffer->data, buffer->length);
+#else
+		Botan::X509_Certificate cert(der);
+		std::ostringstream output;
+		output << "Subject: " << cert.subject_dn().to_string() << '\n';
+		output << "Issuer: " << cert.issuer_dn().to_string() << '\n';
+		output << "Serial: ";
+		const char hex[] = "0123456789ABCDEF";
+		for (uint8_t byte : cert.serial_number())
+			output << hex[byte >> 4] << hex[byte & 15];
+		output << "\nNot Before: " << cert.not_before().to_string()
+		       << "\nNot After: " << cert.not_after().to_string()
+		       << "\nPublic Key Algorithm: "
+		       << Botan::OIDS::lookup(cert.subject_public_key_algo().get_oid())
+		       << '\n';
+		description = output.str();
+#endif
+	} catch (const std::bad_alloc&) { return CKR_HOST_MEMORY; }
+	catch (...) { return CKR_DATA_INVALID; }
+	CK_CHAR_PTR result = static_cast<CK_CHAR_PTR>(malloc(description.size() + 1));
+	if (result == NULL_PTR) return CKR_HOST_MEMORY;
+	memcpy(result, description.data(), description.size());
+	result[description.size()] = 0;
+	*pInfo = result;
+	*pulInfoLen = description.size() + 1;
+	return CKR_OK;
+	} catch (const std::bad_alloc&) { return CKR_HOST_MEMORY; }
+	catch (...) { return CKR_FUNCTION_FAILED; }
 }
 
 PKCS_API CK_RV C_EX_PKCS7Sign
@@ -1917,10 +1992,11 @@ PKCS_API CK_RV C_EX_CreateCSR
 
 PKCS_API CK_RV C_EX_FreeBuffer
 (
-	CK_BYTE_PTR /*pBuffer*/
+	CK_BYTE_PTR pBuffer
 )
 {
-	return CKR_FUNCTION_NOT_SUPPORTED;
+	free(pBuffer);
+	return CKR_OK;
 }
 
 PKCS_API CK_RV C_EX_GetTokenName

@@ -4629,7 +4629,7 @@ static void verifyRutokenExtension(Module& module, const CK_TOKEN_INFO& token)
     // Other advertised operations remain unsupported.
     check(invoke("C_EX_FreeBuffer", "pBuffer=NULL_PTR",
                  [&] { return ex->C_EX_FreeBuffer(nullptr); }),
-          CKR_FUNCTION_NOT_SUPPORTED, "C_EX_FreeBuffer(unimplemented extension)");
+          CKR_OK, "C_EX_FreeBuffer(NULL_PTR)");
 }
 
 static CK_OBJECT_HANDLE createGOSTSecret(Module& module, CK_SESSION_HANDLE session,
@@ -6336,6 +6336,196 @@ static void verifyRutokenJournal(const fs::path& modulePath)
     trace("JOURNAL", "last successful GOST signature persisted across restart and format");
 }
 
+static void verifyTrustedCertificate(const fs::path& modulePath)
+{
+    // Public, self-signed RSA test certificate. No private key is embedded.
+    const char* certHex =
+        "3082034930820231a00302010202142bfd2953a05895b8d386d1a823ffe80422"
+        "886767300d06092a864886f70d01010b05003034311e301c06035504030c1550"
+        "6f727461626c652054727573746564205465737431123010060355040a0c0953"
+        "6f667448534d7632301e170d3236313030383133333334355a170d3336313030"
+        "353133333334355a3034311e301c06035504030c15506f727461626c65205472"
+        "7573746564205465737431123010060355040a0c09536f667448534d76323082"
+        "0122300d06092a864886f70d01010105000382010f003082010a0282010100aa"
+        "654fc0053ba50450e13efe175982ba85502c32ec74f394628e50bd175e8f8a09"
+        "54d8dd0ba5e3031f79c00c903e25cd458eed4debf72f60026868946cb6e625c3"
+        "009c8ce768157f151cc0af0e96d19d454c44c5b6b5dcaa93b5e98117a143dbcf"
+        "1fb81e207a74d06e853d2b6410708b78f0dac5a5a67589a4a7138165c47e9f44"
+        "0c3a387a9fec9c0736c414c1479ce4bb5ef14e519d2a863018d16b82df177539"
+        "d1a532c81f9676d696f5ba982be624678911ac5245b2746315f4d09ccf8205c0"
+        "51dce7a4b32b9f4eca23f2b61b54b66fed6e3a93381897d8e0efe090aac6de20"
+        "0442cc0c8b9fc04d97e93558b8c32635861852e3dc8ddebdf4e2271844113b02"
+        "03010001a3533051301d0603551d0e041604140c083770d1747579a10b15c3fe"
+        "e4f50c8fd6f248301f0603551d230418301680140c083770d1747579a10b15c3"
+        "fee4f50c8fd6f248300f0603551d130101ff040530030101ff300d06092a8648"
+        "86f70d01010b050003820101000edfc0409fd52c079adb0428212bc8144a2e43"
+        "a48c4a3a6b87e7a9b70bc4e74e587ead62762c1a78aa6c7d7e428ac29eb5ebf8"
+        "4b495f4f3dd9456b779b557617b21a56ff93a9c11008cf0e919957e5010bda48"
+        "492641b2653e6ad3301800acff45d8f9a411b33e3a731fcbc2d3ccb49aa7018c"
+        "3cccb5d4de3f81a9c796a1b0e614151e4cc4982e0712fa917e38763bf3faa9c7"
+        "cc7c72367657240012c2c29b1d132d67fe873f9b46dbcf2bbe0fd3633d3d2dd4"
+        "1224477bc6709542e7aef11bf0efba519dc8d4a22c947dd717f6e1c20c4274d5"
+        "348e057e4ff48c3a52618a61c09415267c1ada05e2cbab596f987f3451ff5ce3"
+        "8c649835bbb362d0c53db23ce4";
+    Bytes der;
+    for (size_t offset = 0; certHex[offset] != 0; offset += 2)
+        der.push_back(static_cast<unsigned char>(std::stoul(std::string(certHex + offset, 2), nullptr, 16)));
+
+    {
+    Module module(modulePath);
+    const CK_SLOT_ID slot = selectSlot(module, true);
+    CK_SESSION_HANDLE session = openSession(module, slot);
+    const std::string userPin = environment("P11_TEST_USER_PIN", true);
+    const std::string soPin = environment("P11_TEST_SO_PIN", true);
+    login(module, session, CKU_USER, userPin);
+    CK_OBJECT_CLASS certClass = CKO_CERTIFICATE;
+    CK_CERTIFICATE_TYPE certType = CKC_X_509;
+    CK_BBOOL yes = CK_TRUE, no = CK_FALSE;
+    const char subject[] = "Portable Trusted Test";
+    unsigned char validId[] = {0x54, 0x52, 0x55, 0x53, 0x54};
+    unsigned char malformedId[] = {0x42, 0x41, 0x44};
+    CK_ATTRIBUTE attributes[] = {
+        {CKA_CLASS, &certClass, sizeof(certClass)},
+        {CKA_CERTIFICATE_TYPE, &certType, sizeof(certType)},
+        {CKA_TOKEN, &yes, sizeof(yes)},
+        {CKA_SUBJECT, const_cast<char*>(subject), sizeof(subject) - 1},
+        {CKA_VALUE, der.data(), static_cast<CK_ULONG>(der.size())},
+        {CKA_ID, validId, sizeof(validId)}
+    };
+    CK_OBJECT_HANDLE cert = CK_INVALID_HANDLE;
+    callOk("C_CreateObject", "trusted certificate fixture", [&] {
+        return module->C_CreateObject(session, attributes,
+                                      sizeof(attributes) / sizeof(attributes[0]), &cert);
+    });
+
+    auto getList = reinterpret_cast<CK_C_EX_GetFunctionListExtended>(
+        module.symbol("C_EX_GetFunctionListExtended"));
+    CK_FUNCTION_LIST_EXTENDED_PTR ex = nullptr;
+    callOk("C_EX_GetFunctionListExtended", "certificate text", [&] { return getList(&ex); });
+    CK_CHAR_PTR text = nullptr;
+    CK_ULONG length = 0;
+    callOk("C_EX_GetCertificateInfoText", "valid certificate", [&] {
+        return ex->C_EX_GetCertificateInfoText(session, cert, &text, &length);
+    });
+    if (text == nullptr || length == 0)
+        fail("C_EX_GetCertificateInfoText returned no text");
+    const std::string description(reinterpret_cast<const char*>(text), length);
+    if (description.find("Portable Trusted Test") == std::string::npos ||
+        description.find("Issuer") == std::string::npos ||
+        description.find("Serial") == std::string::npos ||
+        description.find("Not Before") == std::string::npos ||
+        description.find("Not After") == std::string::npos ||
+        description.find("Algorithm") == std::string::npos)
+        fail("C_EX_GetCertificateInfoText omitted certificate fields");
+    callOk("C_EX_FreeBuffer", "certificate text", [&] {
+        return ex->C_EX_FreeBuffer(reinterpret_cast<CK_BYTE_PTR>(text));
+    });
+
+    const unsigned char invalidDer[] = {0x30, 0x00};
+    attributes[4].pValue = const_cast<unsigned char*>(invalidDer);
+    attributes[4].ulValueLen = sizeof(invalidDer);
+    attributes[5].pValue = malformedId;
+    attributes[5].ulValueLen = sizeof(malformedId);
+    CK_OBJECT_HANDLE malformed = CK_INVALID_HANDLE;
+    callOk("C_CreateObject", "malformed certificate fixture", [&] {
+        return module->C_CreateObject(session, attributes,
+                                      sizeof(attributes) / sizeof(attributes[0]), &malformed);
+    });
+    text = nullptr;
+    length = 0;
+    check(invoke("C_EX_GetCertificateInfoText", "malformed certificate", [&] {
+        return ex->C_EX_GetCertificateInfoText(session, malformed, &text, &length);
+    }), CKR_DATA_INVALID, "malformed certificate rejected");
+    if (text != nullptr || length != 0) fail("malformed certificate returned allocated text");
+
+    CK_ATTRIBUTE trustTrue = {CKA_TRUSTED, &yes, sizeof(yes)};
+    CK_ATTRIBUTE trustFalse = {CKA_TRUSTED, &no, sizeof(no)};
+    check(invoke("C_SetAttributeValue", "USER sets CKA_TRUSTED=true", [&] {
+        return module->C_SetAttributeValue(session, cert, &trustTrue, 1);
+    }), CKR_ATTRIBUTE_READ_ONLY, "USER cannot trust certificate");
+    check(invoke("C_SetAttributeValue", "USER sets CKA_TRUSTED=false", [&] {
+        return module->C_SetAttributeValue(session, cert, &trustFalse, 1);
+    }), CKR_ATTRIBUTE_READ_ONLY, "USER cannot modify trust attribute");
+    CK_BBOOL readback = CK_TRUE;
+    CK_ATTRIBUTE trustRead = {CKA_TRUSTED, &readback, sizeof(readback)};
+    callOk("C_GetAttributeValue", "trust unchanged after USER attempts", [&] {
+        return module->C_GetAttributeValue(session, cert, &trustRead, 1);
+    });
+    if (readback != CK_FALSE) fail("USER changed the certificate trust state");
+    CK_OBJECT_CLASS dataClass = CKO_DATA;
+    CK_ATTRIBUTE dataAttributes[] = {
+        {CKA_CLASS, &dataClass, sizeof(dataClass)},
+        {CKA_TOKEN, &yes, sizeof(yes)},
+        {CKA_VALUE, der.data(), static_cast<CK_ULONG>(der.size())},
+        {CKA_TRUSTED, &yes, sizeof(yes)}
+    };
+    CK_OBJECT_HANDLE nonCertificate = CK_INVALID_HANDLE;
+    check(invoke("C_CreateObject", "CKA_TRUSTED on DATA", [&] {
+        return module->C_CreateObject(session, dataAttributes,
+                                      sizeof(dataAttributes) / sizeof(dataAttributes[0]),
+                                      &nonCertificate);
+    }), CKR_ATTRIBUTE_TYPE_INVALID, "CKA_TRUSTED is not a DATA attribute");
+    logout(module, session, "CKU_USER");
+    login(module, session, CKU_SO, soPin);
+    callOk("C_SetAttributeValue", "SO sets CKA_TRUSTED=true", [&] {
+        return module->C_SetAttributeValue(session, cert, &trustTrue, 1);
+    });
+    readback = CK_FALSE;
+    callOk("C_GetAttributeValue", "read trusted certificate", [&] {
+        return module->C_GetAttributeValue(session, cert, &trustRead, 1);
+    });
+    if (readback != CK_TRUE) fail("SO trust transition did not persist");
+    unsigned char immediateId[] = {0x53, 0x4f};
+    attributes[4].pValue = der.data();
+    attributes[4].ulValueLen = static_cast<CK_ULONG>(der.size());
+    attributes[5].pValue = immediateId;
+    attributes[5].ulValueLen = sizeof(immediateId);
+    CK_ATTRIBUTE immediateAttributes[7];
+    std::copy(std::begin(attributes), std::end(attributes), immediateAttributes);
+    immediateAttributes[6] = trustTrue;
+    CK_OBJECT_HANDLE immediatelyTrusted = CK_INVALID_HANDLE;
+    callOk("C_CreateObject", "SO creates trusted certificate", [&] {
+        return module->C_CreateObject(session, immediateAttributes, 7, &immediatelyTrusted);
+    });
+    check(invoke("C_SetAttributeValue", "SO changes immediately trusted certificate", [&] {
+        return module->C_SetAttributeValue(session, immediatelyTrusted, &trustFalse, 1);
+    }), CKR_ATTRIBUTE_READ_ONLY, "certificate trusted on creation is frozen");
+    check(invoke("C_SetAttributeValue", "SO clears trusted certificate", [&] {
+        return module->C_SetAttributeValue(session, cert, &trustFalse, 1);
+    }), CKR_ATTRIBUTE_READ_ONLY, "trusted certificate cannot be unfrozen");
+    char label[] = "changed";
+    CK_ATTRIBUTE labelAttr = {CKA_LABEL, label, sizeof(label) - 1};
+    check(invoke("C_SetAttributeValue", "SO changes trusted certificate label", [&] {
+        return module->C_SetAttributeValue(session, cert, &labelAttr, 1);
+    }), CKR_ATTRIBUTE_READ_ONLY, "trusted certificate is frozen");
+    logout(module, session, "CKU_SO");
+    login(module, session, CKU_USER, userPin);
+    check(invoke("C_SetAttributeValue", "USER changes trusted certificate", [&] {
+        return module->C_SetAttributeValue(session, cert, &trustTrue, 1);
+    }), CKR_ATTRIBUTE_READ_ONLY, "USER cannot change frozen certificate");
+    logout(module, session, "CKU_USER");
+    closeSession(module, session);
+    }
+    Module reopened(modulePath);
+    const CK_SLOT_ID reopenedSlot = selectSlot(reopened, true);
+    CK_SESSION_HANDLE reopenedSession = openSession(reopened, reopenedSlot);
+    CK_OBJECT_CLASS certClass = CKO_CERTIFICATE;
+    unsigned char validId[] = {0x54, 0x52, 0x55, 0x53, 0x54};
+    std::vector<CK_ATTRIBUTE> query = {
+        {CKA_CLASS, &certClass, sizeof(certClass)},
+        {CKA_ID, validId, sizeof(validId)}
+    };
+    CK_OBJECT_HANDLE savedCert = findOne(reopened, reopenedSession, query);
+    CK_BBOOL readback = CK_FALSE;
+    CK_ATTRIBUTE trustRead = {CKA_TRUSTED, &readback, sizeof(readback)};
+    callOk("C_GetAttributeValue", "trusted certificate after restart", [&] {
+        return reopened->C_GetAttributeValue(reopenedSession, savedCert, &trustRead, 1);
+    });
+    if (readback != CK_TRUE) fail("trusted certificate lost its state after restart");
+    closeSession(reopened, reopenedSession);
+    trace("CERTIFICATE", "SO trust transition, permanent freeze and text verified");
+}
+
 // Run the whole e2e battery that the Linux CI drives with bash: every case,
 // each in its own isolated store, created here in C++ so Windows and macOS
 // run exactly the same thing against the module handed to them - no second
@@ -6459,6 +6649,17 @@ static void runBattery(const fs::path& modulePath, fs::path workRoot)
         verifyExtendedInitToken(modulePath);
     }
 
+    // certificate-trust: SO transition and the vendor's certificate-text API.
+    {
+        trace("BATTERY", "case certificate-trust");
+        const fs::path dir = workRoot / "certificate-trust";
+        setEnvVar("SOFTHSM2_CONF", writeBatteryConfig(dir, true).generic_string());
+        setEnvVar("P11_TEST_SO_PIN", soPin);
+        setEnvVar("P11_TEST_USER_PIN", userPin);
+        batteryInitToken(modulePath, "Rutoken ECP", soPin, userPin);
+        verifyTrustedCertificate(modulePath);
+    }
+
     // journal: successful GOST signatures update one persistent Rutoken record.
     {
         trace("BATTERY", "case journal");
@@ -6553,6 +6754,15 @@ int main(int argc, char** argv)
             verifyRutokenJournal(fs::absolute(argv[2]));
             return 0;
         }
+        if (argc == 3 && std::string(argv[1]) == "certificate-trust")
+        {
+            const fs::path modulePath = fs::absolute(argv[2]);
+            batteryInitToken(modulePath, "Rutoken ECP",
+                             environment("P11_TEST_SO_PIN", true),
+                             environment("P11_TEST_USER_PIN", true));
+            verifyTrustedCertificate(modulePath);
+            return 0;
+        }
         std::cerr << "usage:\n"
                   << "  portable-token-e2e battery <module> <work-directory>\n"
                   << "  portable-token-e2e probe <module>\n"
@@ -6566,6 +6776,7 @@ int main(int argc, char** argv)
                   << "  portable-token-e2e core-behaviour <module>\n"
                   << "  portable-token-e2e ex-init-token <module>\n"
                   << "  portable-token-e2e journal <module> (fresh test token)\n"
+                  << "  portable-token-e2e certificate-trust <module> (fresh test token)\n"
                   << "environment:\n"
                   << "  P11_TEST_USER_PIN=<required secret>\n"
                   << "  P11_TEST_INITIALIZE_TOKEN=YES|NO (default NO)\n"

@@ -12,9 +12,19 @@
 дождаться аппаратной матрицы владельца.
 
 **Наблюдение до правки.** У P11AttrTrusted стоит check `ck10`, но общий путь
-`P11Attribute::set()` не обрабатывает его при OBJECT_OP_SET; потому
+`P11Attribute::update()` не обрабатывает его при OBJECT_OP_SET; потому
 false→true даёт CKR_ATTRIBUTE_READ_ONLY до вызова проверки SO.
 `C_EX_GetCertificateInfoText` и `C_EX_FreeBuffer` — заглушки 0x54.
+
+**Локально.** Добавлена проверка `ck10` для сертификата при Set и запрет
+изменения атрибута для USER. Первый тест OpenSSL-backend прошёл: SO
+false→true, readback, заморозка, создание сразу доверенного сертификата,
+DATA без `CKA_TRUSTED`, текст DER и ошибочный DER. Состояние сохраняется
+после повторного открытия. Такой же сценарий прошёл на SQLite; полная
+Rutoken battery прошла на локальном модуле OpenSSL 3.5.8. Штатный
+`pkcs11-tool --rutoken-cert-text --id` вывел поля; `pkcs11-spy` увидел
+`C_EX_GetCertificateInfoText` и `C_EX_FreeBuffer`. Далее — ревизия, коммит,
+шесть платформ и приёмка владельца.
 
 ## 2026-10-07 — ГОСТ CMS/PKCS#7 в комплектном OpenSSL
 

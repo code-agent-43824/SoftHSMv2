@@ -484,6 +484,13 @@ CK_RV P11Attribute::update(Token* token, bool isPrivate, CK_VOID_PTR pValue, CK_
 			return updateAttr(token, isPrivate, pValue, ulValueLen, op);
 		}
 	}
+	// ck10 permits the SO to mark an existing certificate trusted.  The
+	// attribute-specific check enforces the SO role and the certificate class.
+	if ((checks & ck10) == ck10 && OBJECT_OP_SET == op &&
+	    osobject->getUnsignedLongValue(CKA_CLASS, CKO_VENDOR_DEFINED) == CKO_CERTIFICATE)
+	{
+		return updateAttr(token, isPrivate, pValue, ulValueLen, op);
+	}
 	// ck11  Can only be changed to CK_TRUE on a C_SetAttributeValue call; actual
 	//       enforcement happens in the specific attribute implementation.
 	if ((checks & ck11) == ck11)
@@ -1125,7 +1132,7 @@ bool P11AttrTrusted::setDefault()
 }
 
 // Update the value if allowed
-CK_RV P11AttrTrusted::updateAttr(Token *token, bool /*isPrivate*/, CK_VOID_PTR pValue, CK_ULONG ulValueLen, int /*op*/)
+CK_RV P11AttrTrusted::updateAttr(Token *token, bool /*isPrivate*/, CK_VOID_PTR pValue, CK_ULONG ulValueLen, int op)
 {
 	OSAttribute attrTrue(true);
 	OSAttribute attrFalse(false);
@@ -1135,6 +1142,11 @@ CK_RV P11AttrTrusted::updateAttr(Token *token, bool /*isPrivate*/, CK_VOID_PTR p
 	if (ulValueLen !=sizeof(CK_BBOOL))
 	{
 		return CKR_ATTRIBUTE_VALUE_INVALID;
+	}
+	if (op == OBJECT_OP_SET && !token->isSOLoggedIn())
+	{
+		ERROR_MSG("Only the SO may modify CKA_TRUSTED");
+		return CKR_ATTRIBUTE_READ_ONLY;
 	}
 
 	// Store data
