@@ -237,10 +237,29 @@ unset RUTOKEN_PIN
 На Windows используйте `scripts/verify-rutoken-cms-cross.ps1` с параметрами
 `-KitDir`, `-Module`, `-Slot`, `-CertificateId`, `-TokenCaPem`; PIN задаётся
 в `RUTOKEN_PIN`. Утилита получает его как `--pin env:RUTOKEN_PIN`, без
-значения PIN в командной строке. Эти проверки не проходят на программном
-`FAKE_RUTOKEN_ECP`: его `C_EX_PKCS7Sign/Verify` ещё не реализованы.
-Релизная матрица подтверждает только self-цикл; аппаратную совместимость
-нужно проверять отдельно на устройстве.
+значения PIN в командной строке. Программный `FAKE_RUTOKEN_ECP` поддерживает
+`C_EX_PKCS7Sign/Verify` для RSA/SHA-256 и ГОСТ 2012/256/512. Его проверки
+не заменяют сравнение с физическим устройством.
+
+После `run-test.sh`/`run-test.cmd` battery сохраняет ГОСТ-конверты в
+`test-output/battery/run-1/cms` (256 бит) и `cms-gost512` (512 бит):
+`gost-attached.der`, `gost-detached.der`, `gost-root.der`,
+`gost-signer.der`, `gost-content.bin`. Комплектный OpenSSL проверяет
+конверт модуля независимо от его PKCS #11 реализации:
+
+```bash
+CASE="$KIT/test-output/battery/run-1/cms"
+cms_gost x509 -inform DER -in "$CASE/gost-root.der" -out "$CASE/gost-root.pem"
+cms_gost smime -verify -inform DER -in "$CASE/gost-attached.der" \
+  -CAfile "$CASE/gost-root.pem" -out "$CASE/recovered.bin"
+cmp "$CASE/gost-content.bin" "$CASE/recovered.bin"
+```
+
+Для 512 бит замените `cms` на `cms-gost512`. Штатная battery также проверяет
+обратное направление: конверт OpenSSL с signed attributes модуль проверяет
+через `C_EX_PKCS7Verify`. Межплатформенная матрица обменивается конвертами
+Linux ↔ Windows для обоих размеров. Для физического Рутокена всё ещё нужна
+отдельная аппаратная проверка.
 
 ## RSA, сертификаты и CMS
 

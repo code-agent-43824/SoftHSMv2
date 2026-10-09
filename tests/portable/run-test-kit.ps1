@@ -263,6 +263,26 @@ if ($BundledMode -eq "YES") {
     }
     Write-Host "[C_EX] PASS: InitToken, SetTokenName and SetLocalPIN functional battery"
     Write-Host "[BATTERY] PASS: full e2e case battery"
+    $GostVerifyStore = Join-Path $OutputDir ("gost-cms-verify-" + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force (Join-Path $GostVerifyStore 'tokens') | Out-Null
+    @('directories.tokendir = ./tokens', 'objectstore.backend = file',
+      'FAKE_RUTOKEN_ECP = true') |
+        Set-Content -LiteralPath (Join-Path $GostVerifyStore 'softhsm.conf') -Encoding ascii
+    $OldSoftHsmConfig = $env:SOFTHSM2_CONF
+    $OldExcludedFunctions = $env:P11_TEST_EXCLUDE_FUNCTIONS
+    try {
+        $env:SOFTHSM2_CONF = Join-Path $GostVerifyStore 'softhsm.conf'
+        $env:P11_TEST_EXCLUDE_FUNCTIONS = ''
+        & $Client cms-gost-verify-external $Module (Join-Path $OutputDir 'gost-cms')
+        if ($LASTEXITCODE -ne 0) { throw 'OpenSSL GOST CMS envelope failed PKCS #11 verification' }
+    }
+    finally {
+        if ($null -eq $OldSoftHsmConfig) { Remove-Item Env:SOFTHSM2_CONF -ErrorAction SilentlyContinue }
+        else { $env:SOFTHSM2_CONF = $OldSoftHsmConfig }
+        if ($null -eq $OldExcludedFunctions) { Remove-Item Env:P11_TEST_EXCLUDE_FUNCTIONS -ErrorAction SilentlyContinue }
+        else { $env:P11_TEST_EXCLUDE_FUNCTIONS = $OldExcludedFunctions }
+    }
+    Write-Host '[GOST-CMS] PASS: OpenSSL envelope verified by PKCS #11 module'
     & (Join-Path $KitDir 'scripts/verify-rutoken-opensc.ps1') `
         -Module $Module -Cli $Pkcs11Tool `
         -Spy (Join-Path $KitDir 'lib/pkcs11-spy.dll') `

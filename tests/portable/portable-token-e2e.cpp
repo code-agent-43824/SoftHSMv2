@@ -6617,6 +6617,85 @@ static CmsKeyPair cmsKeyPair(Module& module, CK_SESSION_HANDLE session,
     return pair;
 }
 
+static CmsKeyPair cmsGostKeyPair(Module& module, CK_SESSION_HANDLE session,
+                                 const Bytes& id, int bits)
+{
+    CK_OBJECT_CLASS publicClass = CKO_PUBLIC_KEY, privateClass = CKO_PRIVATE_KEY;
+    CK_KEY_TYPE keyType = bits == 256 ? CKK_GOSTR3410 : CKK_GOSTR3410_512;
+    CK_BBOOL yes = CK_TRUE, no = CK_FALSE;
+    Bytes curve = bytesFromHex(bits == 256 ? "06072a850302022301"
+                                       : "06092a8503070102010201");
+    Bytes hash = bytesFromHex(bits == 256 ? "06082a85030701010202"
+                                      : "06082a85030701010203");
+    CK_ATTRIBUTE publicAttrs[] = {
+        {CKA_CLASS, &publicClass, sizeof(publicClass)},
+        {CKA_KEY_TYPE, &keyType, sizeof(keyType)},
+        {CKA_TOKEN, &yes, sizeof(yes)}, {CKA_VERIFY, &yes, sizeof(yes)},
+        {CKA_GOSTR3410_PARAMS, curve.data(), static_cast<CK_ULONG>(curve.size())},
+        {CKA_GOSTR3411_PARAMS, hash.data(), static_cast<CK_ULONG>(hash.size())},
+        {CKA_ID, const_cast<unsigned char*>(id.data()), static_cast<CK_ULONG>(id.size())}
+    };
+    CK_ATTRIBUTE privateAttrs[] = {
+        {CKA_CLASS, &privateClass, sizeof(privateClass)},
+        {CKA_KEY_TYPE, &keyType, sizeof(keyType)},
+        {CKA_TOKEN, &yes, sizeof(yes)}, {CKA_PRIVATE, &yes, sizeof(yes)},
+        {CKA_SIGN, &yes, sizeof(yes)}, {CKA_SENSITIVE, &yes, sizeof(yes)},
+        {CKA_EXTRACTABLE, &no, sizeof(no)},
+        {CKA_GOSTR3410_PARAMS, curve.data(), static_cast<CK_ULONG>(curve.size())},
+        {CKA_GOSTR3411_PARAMS, hash.data(), static_cast<CK_ULONG>(hash.size())},
+        {CKA_ID, const_cast<unsigned char*>(id.data()), static_cast<CK_ULONG>(id.size())}
+    };
+    CK_MECHANISM generation{bits == 256 ? CKM_GOSTR3410_KEY_PAIR_GEN
+                                       : CKM_GOSTR3410_512_KEY_PAIR_GEN, nullptr, 0};
+    CmsKeyPair pair{CK_INVALID_HANDLE, CK_INVALID_HANDLE};
+    callOk("C_GenerateKeyPair", "GOST CMS fixture", [&] {
+        return module->C_GenerateKeyPair(session, &generation,
+            publicAttrs, sizeof(publicAttrs) / sizeof(publicAttrs[0]),
+            privateAttrs, sizeof(privateAttrs) / sizeof(privateAttrs[0]),
+            &pair.publicKey, &pair.privateKey);
+    });
+    return pair;
+}
+
+static Bytes cmsGostCertificate(Module& module, CK_SESSION_HANDLE session,
+                                 CK_OBJECT_HANDLE publicKey, CK_OBJECT_HANDLE issuerKey,
+                                 const Bytes& issuerName, const Bytes& subjectName,
+                                 unsigned char serial, bool isCa, int bits)
+{
+    const Bytes point = attribute(module, session, publicKey, CKA_VALUE);
+    const Bytes curve = attribute(module, session, publicKey, CKA_GOSTR3410_PARAMS);
+    const Bytes hash = attribute(module, session, publicKey, CKA_GOSTR3411_PARAMS);
+    const Bytes signatureAlg = sequence({oid({0x2a,0x85,0x03,0x07,0x01,0x01,0x03,
+                                             static_cast<unsigned char>(bits == 256 ? 2 : 3)})});
+    const Bytes validity = sequence({
+        der(0x17, Bytes{'2','0','0','1','0','1','0','0','0','0','0','0','Z'}),
+        der(0x17, Bytes{'4','0','0','1','0','1','0','0','0','0','0','0','Z'})
+    });
+    const Bytes constraint = isCa ? sequence({der(0x01, {0xff})}) : sequence({});
+    const Bytes extension = sequence({
+        oid({0x55, 0x1d, 0x13}), der(0x01, {0xff}), der(0x04, constraint)
+    });
+    const Bytes tbs = sequence({der(0xa0, integer({2})), integer({serial}), signatureAlg,
+        issuerName, validity, subjectName, gostPublicKeyDer(point, curve, hash, bits),
+        der(0xa3, sequence({extension}))});
+    const Bytes hashValue = digest(module, session, bits == 256 ? CKM_GOSTR3411_12_256
+                                                           : CKM_GOSTR3411_12_512,
+                                   tbs, bits / 8);
+    CK_MECHANISM mechanism{bits == 256 ? CKM_GOSTR3410 : CKM_GOSTR3410_512, nullptr, 0};
+    callOk("C_SignInit", "GOST CMS certificate", [&] {
+        return module->C_SignInit(session, &mechanism, issuerKey);
+    });
+    Bytes signature(bits / 4);
+    CK_ULONG size = signature.size();
+    callOk("C_Sign", "GOST CMS certificate", [&] {
+        return module->C_Sign(session, const_cast<unsigned char*>(hashValue.data()),
+                              hashValue.size(), signature.data(), &size);
+    });
+    signature.resize(size);
+    Bytes signatureBits{0}; append(signatureBits, signature);
+    return sequence({tbs, signatureAlg, der(0x03, signatureBits)});
+}
+
 static CK_OBJECT_HANDLE cmsTokenCertificate(Module& module, CK_SESSION_HANDLE session,
                                              const Bytes& id, const Bytes& cert,
                                              const Bytes& subject)
@@ -6819,6 +6898,203 @@ static void verifyCmsBattery(const fs::path& modulePath,
     trace("CMS", "attached/detached, chain, tamper and signer output verified");
 }
 
+static void verifyGostCmsBattery(const fs::path& modulePath,
+                                 const fs::path& vectorDirectory, int bits = 256)
+{
+    Module module(modulePath);
+    CK_SESSION_HANDLE session = openSession(module, selectSlot(module, true));
+    login(module, session, CKU_USER, environment("P11_TEST_USER_PIN", true));
+    auto getList = reinterpret_cast<CK_C_EX_GetFunctionListExtended>(
+        module.symbol("C_EX_GetFunctionListExtended"));
+    CK_FUNCTION_LIST_EXTENDED_PTR ex = nullptr;
+    callOk("C_EX_GetFunctionListExtended", "GOST CMS", [&] { return getList(&ex); });
+    const Bytes rootId = {'G','C','A'}, leafId = {'G','C','M','S'},
+                otherId = {'G','B','A','D'};
+    CmsKeyPair root = cmsGostKeyPair(module, session, rootId, bits);
+    CmsKeyPair leaf = cmsGostKeyPair(module, session, leafId, bits);
+    CmsKeyPair other = cmsGostKeyPair(module, session, otherId, bits);
+    Bytes rootName = cmsName("GOST CMS CA");
+    Bytes leafName = cmsName("GOST CMS Signer");
+    Bytes rootDer = cmsGostCertificate(module, session, root.publicKey,
+        root.privateKey, rootName, rootName, 10, true, bits);
+    Bytes leafDer = cmsGostCertificate(module, session, leaf.publicKey,
+        root.privateKey, rootName, leafName, 11, false, bits);
+    Bytes otherName = cmsName("Unrelated GOST CA");
+    Bytes otherDer = cmsGostCertificate(module, session, other.publicKey,
+        other.privateKey, otherName, otherName, 12, true, bits);
+    CK_OBJECT_HANDLE rootCert = cmsTokenCertificate(module, session,
+        rootId, rootDer, rootName);
+    CK_OBJECT_HANDLE leafCert = cmsTokenCertificate(module, session,
+        leafId, leafDer, leafName);
+    Bytes content = {'G','O','S','T',' ','C','M','S','\n'};
+    CK_OBJECT_HANDLE chain[] = {rootCert};
+    Bytes attached, detached;
+    for (CK_ULONG flags : {CK_ULONG(0), CK_ULONG(PKCS7_DETACHED_SIGNATURE),
+                            CK_ULONG(USE_HARDWARE_HASH)}) {
+        CK_BYTE_PTR envelope = nullptr;
+        CK_ULONG length = 0;
+        callOk("C_EX_PKCS7Sign", "GOST CMS", [&] {
+            return ex->C_EX_PKCS7Sign(session, content.data(), content.size(),
+                leafCert, &envelope, &length, leaf.privateKey, chain, 1, flags);
+        });
+        if (!envelope || !length) fail("GOST CMS returned an empty envelope");
+        Bytes result(envelope, envelope + length);
+        callOk("C_EX_FreeBuffer", "GOST CMS envelope", [&] {
+            return ex->C_EX_FreeBuffer(envelope);
+        });
+        if (flags == 0) {
+            attached = result;
+            writeFile(vectorDirectory / "gost-attached.der", result);
+        }
+        if (flags == PKCS7_DETACHED_SIGNATURE) {
+            detached = result;
+            writeFile(vectorDirectory / "gost-detached.der", result);
+        }
+    }
+    writeFile(vectorDirectory / "gost-root.der", rootDer);
+    writeFile(vectorDirectory / "gost-signer.der", leafDer);
+    writeFile(vectorDirectory / "gost-content.bin", content);
+    CK_BYTE_PTR mismatchedEnvelope = nullptr;
+    CK_ULONG mismatchedLength = 0;
+    check(invoke("C_EX_PKCS7Sign", "mismatched GOST certificate and key", [&] {
+        return ex->C_EX_PKCS7Sign(session, content.data(), content.size(),
+            leafCert, &mismatchedEnvelope, &mismatchedLength,
+            root.privateKey, chain, 1, 0);
+    }), CKR_KEY_HANDLE_INVALID, "GOST CMS rejects a mismatched key");
+    if (mismatchedEnvelope || mismatchedLength)
+        fail("mismatched GOST CMS returned an envelope");
+    CK_VENDOR_BUFFER anchor{rootDer.data(), static_cast<CK_ULONG>(rootDer.size())};
+    CK_VENDOR_BUFFER externalSigner{leafDer.data(), static_cast<CK_ULONG>(leafDer.size())};
+    CK_VENDOR_X509_STORE store{};
+    store.pTrustedCertificates = &anchor;
+    store.ulTrustedCertificateCount = 1;
+    auto verify = [&](const Bytes& envelope, CK_RV expected, bool isDetached,
+                      bool wrongAnchor = false, CK_FLAGS flags = 0,
+                      bool supplySigner = false) {
+        if (wrongAnchor) anchor = {otherDer.data(), static_cast<CK_ULONG>(otherDer.size())};
+        store.pCertificates = supplySigner ? &externalSigner : nullptr;
+        store.ulCertificateCount = supplySigner ? 1 : 0;
+        callOk("C_EX_PKCS7VerifyInit", "GOST CMS", [&] {
+            return ex->C_EX_PKCS7VerifyInit(session,
+                const_cast<unsigned char*>(envelope.data()), envelope.size(),
+                &store, OPTIONAL_CRL_CHECK, flags);
+        });
+        if (isDetached)
+            callOk("C_EX_PKCS7VerifyUpdate", "GOST CMS", [&] {
+                return ex->C_EX_PKCS7VerifyUpdate(session, content.data(), content.size());
+            });
+        CK_BYTE_PTR recovered = nullptr;
+        CK_ULONG recoveredSize = 0, count = 0;
+        CK_VENDOR_BUFFER_PTR signers = nullptr;
+        CK_RV rv = isDetached
+            ? ex->C_EX_PKCS7VerifyFinal(session, &signers, &count)
+            : ex->C_EX_PKCS7Verify(session, &recovered, &recoveredSize,
+                                    &signers, &count);
+        check(rv, expected, "GOST CMS verification");
+        if (expected == CKR_OK && (!signers || count != 1 ||
+            Bytes(signers[0].pData, signers[0].pData + signers[0].ulSize) != leafDer ||
+            (!isDetached && (!recovered ||
+             Bytes(recovered, recovered + recoveredSize) != content))))
+            fail("GOST CMS returned incorrect data or signer");
+        if (recovered) callOk("C_EX_FreeBuffer", "GOST data", [&] {
+            return ex->C_EX_FreeBuffer(recovered);
+        });
+        if (signers) cmsFreeSigners(ex, signers, count);
+        if (wrongAnchor) anchor = {rootDer.data(), static_cast<CK_ULONG>(rootDer.size())};
+    };
+    verify(attached, CKR_OK, false);
+    verify(detached, CKR_OK, true);
+    verify(attached, CKR_CERT_CHAIN_NOT_VERIFIED, false, true);
+    verify(attached, CKR_OK, false, true, CKF_VENDOR_CHECK_SIGNATURE_ONLY);
+    verify(attached, CKR_SIGNATURE_INVALID, false, false,
+           CKF_VENDOR_DO_NOT_USE_INTERNAL_CMS_CERTS);
+    verify(attached, CKR_OK, false, false,
+           CKF_VENDOR_DO_NOT_USE_INTERNAL_CMS_CERTS, true);
+    Bytes tampered = attached;
+    auto found = std::search(tampered.begin(), tampered.end(), content.begin(), content.end());
+    if (found == tampered.end()) fail("GOST CMS content not found in attached envelope");
+    *found ^= 1;
+    verify(tampered, CKR_SIGNATURE_INVALID, false);
+    const Bytes intermediateId = {'G','I','N','T'}, secondLeafId = {'G','L','2'};
+    CmsKeyPair intermediate = cmsGostKeyPair(module, session, intermediateId, bits);
+    Bytes intermediateName = cmsName("GOST CMS Intermediate");
+    Bytes intermediateDer = cmsGostCertificate(module, session, intermediate.publicKey,
+        root.privateKey, rootName, intermediateName, 13, true, bits);
+    CK_OBJECT_HANDLE intermediateCert = cmsTokenCertificate(module, session,
+        intermediateId, intermediateDer, intermediateName);
+    Bytes secondLeafDer = cmsGostCertificate(module, session, leaf.publicKey,
+        intermediate.privateKey, intermediateName, leafName, 14, false, bits);
+    CK_OBJECT_HANDLE secondLeafCert = cmsTokenCertificate(module, session,
+        secondLeafId, secondLeafDer, leafName);
+    CK_OBJECT_HANDLE fullChain[] = {intermediateCert, rootCert};
+    CK_BYTE_PTR partialEnvelope = nullptr;
+    CK_ULONG partialLength = 0;
+    callOk("C_EX_PKCS7Sign", "GOST CMS intermediate chain", [&] {
+        return ex->C_EX_PKCS7Sign(session, content.data(), content.size(),
+            secondLeafCert, &partialEnvelope, &partialLength,
+            leaf.privateKey, fullChain, 2, 0);
+    });
+    Bytes partial(partialEnvelope, partialEnvelope + partialLength);
+    callOk("C_EX_FreeBuffer", "GOST intermediate envelope", [&] {
+        return ex->C_EX_FreeBuffer(partialEnvelope);
+    });
+    logout(module, session, "CKU_USER");
+    login(module, session, CKU_SO, environment("P11_TEST_SO_PIN", true));
+    CK_BBOOL trusted = CK_TRUE;
+    CK_ATTRIBUTE trustAttribute{CKA_TRUSTED, &trusted, sizeof(trusted)};
+    callOk("C_SetAttributeValue", "GOST CMS trusted root", [&] {
+        return module->C_SetAttributeValue(session, rootCert, &trustAttribute, 1);
+    });
+    logout(module, session, "CKU_SO");
+    login(module, session, CKU_USER, environment("P11_TEST_USER_PIN", true));
+    callOk("C_EX_PKCS7VerifyInit", "GOST CMS trusted token root", [&] {
+        return ex->C_EX_PKCS7VerifyInit(session, attached.data(), attached.size(),
+            nullptr, OPTIONAL_CRL_CHECK, CKF_VENDOR_USE_TRUSTED_CERTS_FROM_TOKEN);
+    });
+    CK_BYTE_PTR tokenData = nullptr;
+    CK_ULONG tokenDataLength = 0, tokenSignerCount = 0;
+    CK_VENDOR_BUFFER_PTR tokenSigners = nullptr;
+    callOk("C_EX_PKCS7Verify", "GOST CMS trusted token root", [&] {
+        return ex->C_EX_PKCS7Verify(session, &tokenData, &tokenDataLength,
+                                     &tokenSigners, &tokenSignerCount);
+    });
+    if (!tokenData || Bytes(tokenData, tokenData + tokenDataLength) != content ||
+        !tokenSigners || tokenSignerCount != 1)
+        fail("GOST CMS trusted token root returned incorrect data");
+    callOk("C_EX_FreeBuffer", "GOST token data", [&] {
+        return ex->C_EX_FreeBuffer(tokenData);
+    });
+    cmsFreeSigners(ex, tokenSigners, tokenSignerCount);
+
+    CK_VENDOR_BUFFER partialAnchor{intermediateDer.data(),
+                                    static_cast<CK_ULONG>(intermediateDer.size())};
+    CK_VENDOR_X509_STORE partialStore{};
+    partialStore.pTrustedCertificates = &partialAnchor;
+    partialStore.ulTrustedCertificateCount = 1;
+    for (CK_FLAGS flags : {CK_FLAGS(0), CK_FLAGS(CKF_VENDOR_ALLOW_PARTIAL_CHAINS)}) {
+        callOk("C_EX_PKCS7VerifyInit", "GOST intermediate anchor", [&] {
+            return ex->C_EX_PKCS7VerifyInit(session, partial.data(), partial.size(),
+                &partialStore, OPTIONAL_CRL_CHECK, flags);
+        });
+        CK_BYTE_PTR output = nullptr;
+        CK_ULONG outputLength = 0, count = 0;
+        CK_VENDOR_BUFFER_PTR certificates = nullptr;
+        CK_RV expected = flags ? CKR_OK : CKR_CERT_CHAIN_NOT_VERIFIED;
+        check(invoke("C_EX_PKCS7Verify", "GOST intermediate anchor", [&] {
+            return ex->C_EX_PKCS7Verify(session, &output, &outputLength,
+                                         &certificates, &count);
+        }), expected, "GOST partial chain policy");
+        if (output) callOk("C_EX_FreeBuffer", "GOST intermediate data", [&] {
+            return ex->C_EX_FreeBuffer(output);
+        });
+        if (certificates) cmsFreeSigners(ex, certificates, count);
+    }
+    logout(module, session, "CKU_USER");
+    closeSession(module, session);
+    trace("CMS", "GOST SignedData generated by token mechanism (" +
+          std::to_string(bits) + ")");
+}
+
 static void verifyCmsExternal(const fs::path& modulePath, const fs::path& vectorDirectory)
 {
     batteryInitToken(modulePath, "Rutoken ECP",
@@ -6881,6 +7157,90 @@ static void verifyCmsExternal(const fs::path& modulePath, const fs::path& vector
     logout(module, session, "CKU_USER");
     closeSession(module, session);
     trace("CMS", "external cross-platform envelope verified");
+}
+
+static void verifyGostCmsExternal(const fs::path& modulePath,
+                                   const fs::path& vectorDirectory,
+                                   bool tokenVectors = false)
+{
+    batteryInitToken(modulePath, "Rutoken ECP",
+                     environment("P11_TEST_SO_PIN", true),
+                     environment("P11_TEST_USER_PIN", true));
+    Module module(modulePath);
+    CK_SESSION_HANDLE session = openSession(module, selectSlot(module, true));
+    login(module, session, CKU_USER, environment("P11_TEST_USER_PIN", true));
+    auto getList = reinterpret_cast<CK_C_EX_GetFunctionListExtended>(
+        module.symbol("C_EX_GetFunctionListExtended"));
+    CK_FUNCTION_LIST_EXTENDED_PTR ex = nullptr;
+    callOk("C_EX_GetFunctionListExtended", "external GOST CMS", [&] {
+        return getList(&ex);
+    });
+    Bytes envelope = readFile(vectorDirectory / (tokenVectors
+        ? "gost-attached.der" : "openssl-smime.der"));
+    Bytes ca = readFile(vectorDirectory / (tokenVectors
+        ? "gost-root.der" : "ca.der"));
+    Bytes expectedSigner = tokenVectors
+        ? readFile(vectorDirectory / "gost-signer.der") : ca;
+    Bytes content = readFile(vectorDirectory / (tokenVectors
+        ? "gost-content.bin" : "message.txt"));
+    CK_VENDOR_BUFFER anchor{ca.data(), static_cast<CK_ULONG>(ca.size())};
+    CK_VENDOR_X509_STORE store{};
+    store.pTrustedCertificates = &anchor;
+    store.ulTrustedCertificateCount = 1;
+    callOk("C_EX_PKCS7VerifyInit", "external GOST CMS", [&] {
+        return ex->C_EX_PKCS7VerifyInit(session, envelope.data(), envelope.size(),
+            &store, OPTIONAL_CRL_CHECK, 0);
+    });
+    CK_BYTE_PTR recovered = nullptr;
+    CK_ULONG recoveredSize = 0, count = 0;
+    CK_VENDOR_BUFFER_PTR signers = nullptr;
+    callOk("C_EX_PKCS7Verify", "external GOST CMS", [&] {
+        return ex->C_EX_PKCS7Verify(session, &recovered, &recoveredSize,
+                                     &signers, &count);
+    });
+    if (!recovered || Bytes(recovered, recovered + recoveredSize) != content ||
+        !signers || count != 1 ||
+        Bytes(signers[0].pData, signers[0].pData + signers[0].ulSize) != expectedSigner)
+        fail("external GOST CMS returned incorrect content or signer");
+    callOk("C_EX_FreeBuffer", "external GOST content", [&] {
+        return ex->C_EX_FreeBuffer(recovered);
+    });
+    cmsFreeSigners(ex, signers, count);
+    Bytes tampered = envelope;
+    auto where = std::search(tampered.begin(), tampered.end(), content.begin(), content.end());
+    if (where == tampered.end()) fail("external GOST content was not embedded");
+    *where ^= 1;
+    callOk("C_EX_PKCS7VerifyInit", "tampered external GOST CMS", [&] {
+        return ex->C_EX_PKCS7VerifyInit(session, tampered.data(), tampered.size(),
+            &store, OPTIONAL_CRL_CHECK, 0);
+    });
+    recovered = nullptr; recoveredSize = 0; signers = nullptr; count = 0;
+    check(invoke("C_EX_PKCS7Verify", "tampered external GOST CMS", [&] {
+        return ex->C_EX_PKCS7Verify(session, &recovered, &recoveredSize,
+                                     &signers, &count);
+    }), CKR_SIGNATURE_INVALID, "external GOST tampering");
+    if (recovered || signers) fail("tampered GOST CMS returned output buffers");
+    if (tokenVectors) {
+        Bytes detached = readFile(vectorDirectory / "gost-detached.der");
+        callOk("C_EX_PKCS7VerifyInit", "external detached GOST CMS", [&] {
+            return ex->C_EX_PKCS7VerifyInit(session, detached.data(), detached.size(),
+                &store, OPTIONAL_CRL_CHECK, 0);
+        });
+        callOk("C_EX_PKCS7VerifyUpdate", "external detached GOST CMS", [&] {
+            return ex->C_EX_PKCS7VerifyUpdate(session, content.data(), content.size());
+        });
+        signers = nullptr; count = 0;
+        callOk("C_EX_PKCS7VerifyFinal", "external detached GOST CMS", [&] {
+            return ex->C_EX_PKCS7VerifyFinal(session, &signers, &count);
+        });
+        if (!signers || count != 1 ||
+            Bytes(signers[0].pData, signers[0].pData + signers[0].ulSize) != expectedSigner)
+            fail("external detached GOST CMS returned incorrect signer");
+        cmsFreeSigners(ex, signers, count);
+    }
+    logout(module, session, "CKU_USER");
+    closeSession(module, session);
+    trace("CMS", "external OpenSSL GOST SignedData verified by token");
 }
 
 // Run the whole e2e battery that the Linux CI drives with bash: every case,
@@ -7026,6 +7386,18 @@ static void runBattery(const fs::path& modulePath, fs::path workRoot)
         setEnvVar("P11_TEST_USER_PIN", userPin);
         batteryInitToken(modulePath, "Rutoken ECP", soPin, userPin);
         verifyCmsBattery(modulePath, dir);
+        verifyGostCmsBattery(modulePath, dir);
+    }
+
+    // journal: successful GOST signatures update one persistent Rutoken record.
+    {
+        trace("BATTERY", "case cms-gost512");
+        const fs::path dir = workRoot / "cms-gost512";
+        setEnvVar("SOFTHSM2_CONF", writeBatteryConfig(dir, true).generic_string());
+        setEnvVar("P11_TEST_SO_PIN", soPin);
+        setEnvVar("P11_TEST_USER_PIN", userPin);
+        batteryInitToken(modulePath, "Rutoken ECP", soPin, userPin);
+        verifyGostCmsBattery(modulePath, dir, 512);
     }
 
     // journal: successful GOST signatures update one persistent Rutoken record.
@@ -7140,9 +7512,32 @@ int main(int argc, char** argv)
             verifyCmsBattery(modulePath);
             return 0;
         }
+        if (argc == 4 && (std::string(argv[1]) == "cms-gost" ||
+                          std::string(argv[1]) == "cms-gost-512"))
+        {
+            const fs::path modulePath = fs::absolute(argv[2]);
+            const fs::path vectors = fs::absolute(argv[3]);
+            fs::create_directories(vectors);
+            batteryInitToken(modulePath, "Rutoken ECP",
+                             environment("P11_TEST_SO_PIN", true),
+                             environment("P11_TEST_USER_PIN", true));
+            verifyGostCmsBattery(modulePath, vectors,
+                                 std::string(argv[1]) == "cms-gost" ? 256 : 512);
+            return 0;
+        }
         if (argc == 4 && std::string(argv[1]) == "cms-verify-external")
         {
             verifyCmsExternal(fs::absolute(argv[2]), fs::absolute(argv[3]));
+            return 0;
+        }
+        if (argc == 4 && std::string(argv[1]) == "cms-gost-verify-external")
+        {
+            verifyGostCmsExternal(fs::absolute(argv[2]), fs::absolute(argv[3]));
+            return 0;
+        }
+        if (argc == 4 && std::string(argv[1]) == "cms-gost-verify-vector")
+        {
+            verifyGostCmsExternal(fs::absolute(argv[2]), fs::absolute(argv[3]), true);
             return 0;
         }
         std::cerr << "usage:\n"
@@ -7161,6 +7556,10 @@ int main(int argc, char** argv)
                   << "  portable-token-e2e certificate-trust <module> (fresh test token)\n"
                   << "  portable-token-e2e cms <module> (fresh test token)\n"
                   << "  portable-token-e2e cms-verify-external <module> <vector-directory>\n"
+                  << "  portable-token-e2e cms-gost <module> <vector-directory> (256-bit)\n"
+                  << "  portable-token-e2e cms-gost-512 <module> <vector-directory>\n"
+                  << "  portable-token-e2e cms-gost-verify-external <module> <vector-directory>\n"
+                  << "  portable-token-e2e cms-gost-verify-vector <module> <vector-directory>\n"
                   << "environment:\n"
                   << "  P11_TEST_USER_PIN=<required secret>\n"
                   << "  P11_TEST_INITIALIZE_TOKEN=YES|NO (default NO)\n"

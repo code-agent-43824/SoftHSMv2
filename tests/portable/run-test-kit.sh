@@ -247,6 +247,14 @@ if [[ "$bundled_mode" == YES ]]; then
   printf '[BATTERY] running the full e2e case battery against the bundled module\n'
   "$kit_dir/bin/portable-token-e2e" battery "$module" "$kit_dir/test-output/battery"
   printf '[BATTERY] PASS: full e2e case battery\n'
+  gost_verify_store=$(mktemp -d "$kit_dir/test-output/gost-cms-verify.XXXXXX")
+  mkdir -p "$gost_verify_store/tokens"
+  printf 'directories.tokendir = ./tokens\nobjectstore.backend = file\nFAKE_RUTOKEN_ECP = true\n' \
+    > "$gost_verify_store/softhsm.conf"
+  SOFTHSM2_CONF="$gost_verify_store/softhsm.conf" P11_TEST_EXCLUDE_FUNCTIONS= \
+    "$kit_dir/bin/portable-token-e2e" cms-gost-verify-external "$module" \
+      "$kit_dir/test-output/gost-cms"
+  printf '[GOST-CMS] PASS: OpenSSL envelope verified by PKCS #11 module\n'
   spy_name=pkcs11-spy.so
   [[ $(uname -s) == Darwin ]] && spy_name=pkcs11-spy.dylib
   bash "$kit_dir/scripts/verify-rutoken-opensc.sh" \
