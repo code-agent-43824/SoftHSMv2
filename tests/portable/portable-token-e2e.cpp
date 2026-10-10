@@ -7243,6 +7243,272 @@ static void verifyGostCmsExternal(const fs::path& modulePath,
     trace("CMS", "external OpenSSL GOST SignedData verified by token");
 }
 
+// ---- device-parity: cases with one set of expectations for this module and
+// for the reference Rutoken behind librtpkcs11ecp. Every expectation comes
+// from the device itself (probe runs, JOURNAL of 9 and 10 October 2026);
+// where the two are allowed to differ, the case says so.
+
+static Bytes asciiBytes(const char* text)
+{
+    return Bytes(text, text + std::strlen(text));
+}
+
+static void expectBytes(const Bytes& actual, const Bytes& expected, const char* what)
+{
+    if (actual != expected)
+        fail(std::string(what) + ": expected " + hexBytes(expected.data(), expected.size()) +
+             ", got " + hexBytes(actual.data(), actual.size()));
+    trace("PARITY", std::string(what) + ": as on the device");
+}
+
+static void verifySignatureOk(Module& module, CK_SESSION_HANDLE session, CK_OBJECT_HANDLE key,
+                              CK_MECHANISM_TYPE mechanismType, const Bytes& data,
+                              const Bytes& signature, const char* what)
+{
+    CK_MECHANISM mechanism{mechanismType, nullptr, 0};
+    callOk("C_VerifyInit", what, [&] { return module->C_VerifyInit(session, &mechanism, key); });
+    callOk("C_Verify", what, [&] {
+        return module->C_Verify(session, const_cast<CK_BYTE_PTR>(data.data()),
+                                static_cast<CK_ULONG>(data.size()),
+                                const_cast<CK_BYTE_PTR>(signature.data()),
+                                static_cast<CK_ULONG>(signature.size()));
+    });
+}
+
+static CmsKeyPair parityGostKeyPair(Module& module, CK_SESSION_HANDLE session, const Bytes& id,
+                                    const char* curveHex, bool canSign)
+{
+    CK_OBJECT_CLASS publicClass = CKO_PUBLIC_KEY, privateClass = CKO_PRIVATE_KEY;
+    CK_KEY_TYPE keyType = CKK_GOSTR3410;
+    CK_BBOOL yes = CK_TRUE, no = CK_FALSE;
+    CK_BBOOL sign = static_cast<CK_BBOOL>(canSign ? CK_TRUE : CK_FALSE);
+    Bytes curve = bytesFromHex(curveHex);
+    Bytes hash = bytesFromHex("06082a85030701010202");
+    CK_ATTRIBUTE publicAttrs[] = {
+        {CKA_CLASS, &publicClass, sizeof(publicClass)},
+        {CKA_KEY_TYPE, &keyType, sizeof(keyType)},
+        {CKA_TOKEN, &yes, sizeof(yes)}, {CKA_VERIFY, &yes, sizeof(yes)},
+        {CKA_GOSTR3410_PARAMS, curve.data(), static_cast<CK_ULONG>(curve.size())},
+        {CKA_GOSTR3411_PARAMS, hash.data(), static_cast<CK_ULONG>(hash.size())},
+        {CKA_ID, const_cast<unsigned char*>(id.data()), static_cast<CK_ULONG>(id.size())}
+    };
+    CK_ATTRIBUTE privateAttrs[] = {
+        {CKA_CLASS, &privateClass, sizeof(privateClass)},
+        {CKA_KEY_TYPE, &keyType, sizeof(keyType)},
+        {CKA_TOKEN, &yes, sizeof(yes)}, {CKA_PRIVATE, &yes, sizeof(yes)},
+        {CKA_SIGN, &sign, sizeof(sign)}, {CKA_DERIVE, &no, sizeof(no)},
+        {CKA_GOSTR3410_PARAMS, curve.data(), static_cast<CK_ULONG>(curve.size())},
+        {CKA_GOSTR3411_PARAMS, hash.data(), static_cast<CK_ULONG>(hash.size())},
+        {CKA_ID, const_cast<unsigned char*>(id.data()), static_cast<CK_ULONG>(id.size())}
+    };
+    CK_MECHANISM generation{CKM_GOSTR3410_KEY_PAIR_GEN, nullptr, 0};
+    CmsKeyPair pair{CK_INVALID_HANDLE, CK_INVALID_HANDLE};
+    callOk("C_GenerateKeyPair", "device-parity GOST-256 fixture", [&] {
+        return module->C_GenerateKeyPair(session, &generation,
+            publicAttrs, sizeof(publicAttrs) / sizeof(publicAttrs[0]),
+            privateAttrs, sizeof(privateAttrs) / sizeof(privateAttrs[0]),
+            &pair.publicKey, &pair.privateKey);
+    });
+    return pair;
+}
+
+static CK_RV createCsr(CK_FUNCTION_LIST_EXTENDED_PTR ex, CK_SESSION_HANDLE session,
+                       CK_OBJECT_HANDLE publicKey, CK_OBJECT_HANDLE privateKey,
+                       std::vector<const char*> dn, std::vector<const char*> attributes,
+                       std::vector<const char*> extensions, Bytes* output, const char* what)
+{
+    auto strings = [](std::vector<const char*>& list) {
+        return list.empty() ? nullptr
+                            : reinterpret_cast<CK_CHAR_PTR*>(const_cast<char**>(list.data()));
+    };
+    CK_BYTE_PTR csr = nullptr;
+    CK_ULONG csrLength = 0;
+    const CK_RV rv = invoke("C_EX_CreateCSR", what, [&] {
+        return ex->C_EX_CreateCSR(session, publicKey, strings(dn),
+                                  static_cast<CK_ULONG>(dn.size()), &csr, &csrLength,
+                                  privateKey, strings(attributes),
+                                  static_cast<CK_ULONG>(attributes.size()), strings(extensions),
+                                  static_cast<CK_ULONG>(extensions.size()));
+    });
+    if (rv == CKR_OK)
+    {
+        if (csr == nullptr || csrLength == 0) fail("C_EX_CreateCSR returned CKR_OK and no request");
+        trace("OUTPUT", "CSR " + std::to_string(csrLength) + " bytes, hex=" + hexBytes(csr, csrLength));
+        if (output) output->assign(csr, csr + csrLength);
+    }
+    if (csr != nullptr)
+        callOk("C_EX_FreeBuffer", "CSR", [&] { return ex->C_EX_FreeBuffer(csr); });
+    return rv;
+}
+
+struct CsrParts
+{
+    Bytes info, version, subject, publicKey, attributes, algorithm, signature;
+};
+
+static CsrParts csrParts(const Bytes& csr)
+{
+    const Tlv outer = parseTlv(csr, 0);
+    if (outer.tag != 0x30 || outer.total() != csr.size()) fail("CSR is not one DER sequence");
+    const Tlv info = parseTlv(csr, outer.content());
+    if (info.tag != 0x30) fail("CSR has no CertificationRequestInfo");
+    size_t cursor = info.content();
+    const Tlv version = parseTlv(csr, cursor); cursor += version.total();
+    const Tlv subject = parseTlv(csr, cursor); cursor += subject.total();
+    const Tlv publicKey = parseTlv(csr, cursor); cursor += publicKey.total();
+    const Tlv attributes = parseTlv(csr, cursor); cursor += attributes.total();
+    if (cursor != info.offset + info.total()) fail("CertificationRequestInfo has extra fields");
+    const Tlv algorithm = parseTlv(csr, cursor); cursor += algorithm.total();
+    const Tlv signature = parseTlv(csr, cursor); cursor += signature.total();
+    if (cursor != csr.size()) fail("CSR has extra fields");
+    if (signature.tag != 0x03 || signature.length < 2 || csr[signature.content()] != 0)
+        fail("CSR signature is not a whole-byte BIT STRING");
+    return {encodedTlv(csr, info), encodedTlv(csr, version), encodedTlv(csr, subject),
+            encodedTlv(csr, publicKey), encodedTlv(csr, attributes), encodedTlv(csr, algorithm),
+            Bytes(csr.begin() + static_cast<std::ptrdiff_t>(signature.content() + 1),
+                  csr.begin() + static_cast<std::ptrdiff_t>(signature.content() + signature.length))};
+}
+
+static Bytes nameEntry(const Bytes& type, unsigned char stringTag, const char* value)
+{
+    return der(0x31, sequence({type, der(stringTag, asciiBytes(value))}));
+}
+
+// C_EX_CreateCSR as the device builds it: every name/value pair its own RDN in
+// the given order, string types by attribute (C PrintableString, emailAddress
+// IA5String, INN and legal-entity INN NumericString, the rest UTF8String),
+// extensions in one extensionRequest, an empty [0] when nothing is added,
+// GOST signed over Streebog-256 without parameters, RSA with the OIW
+// sha1WithRSA; and the device's refusals.
+static void verifyCsrParity(Module& module, CK_SESSION_HANDLE session,
+                            CK_FUNCTION_LIST_EXTENDED_PTR ex)
+{
+    const Bytes gostId = asciiBytes("parity-csr-gost");
+    const Bytes otherId = asciiBytes("parity-csr-other");
+    const Bytes noSignId = asciiBytes("parity-csr-nosign");
+    const Bytes rsaId = asciiBytes("parity-csr-rsa");
+    for (const Bytes* id : {&gostId, &otherId, &noSignId, &rsaId})
+        removePriorTestObjects(module, session, *id);
+    const CmsKeyPair gost = parityGostKeyPair(module, session, gostId, "06072a850302022301", true);
+    const CmsKeyPair other = parityGostKeyPair(module, session, otherId, "06092a8503070102010101", true);
+    const CmsKeyPair noSign = parityGostKeyPair(module, session, noSignId, "06072a850302022301", false);
+    const CmsKeyPair rsa = cmsKeyPair(module, session, rsaId);
+
+    const Bytes commonName = oid({0x55, 0x04, 0x03});
+    const std::vector<const char*> dn = {"CN", "CryptoMost Battery", "O", "CryptoMost", "C", "RU"};
+    const Bytes subject = sequence({nameEntry(commonName, 0x0c, "CryptoMost Battery"),
+                                    nameEntry(oid({0x55, 0x04, 0x0a}), 0x0c, "CryptoMost"),
+                                    nameEntry(oid({0x55, 0x04, 0x06}), 0x13, "RU")});
+
+    // GOST-256 on the CryptoPro-A curve, with a keyUsage extension.
+    Bytes request;
+    check(createCsr(ex, session, gost.publicKey, gost.privateKey, dn, {},
+                    {"keyUsage", "digitalSignature,nonRepudiation"}, &request,
+                    "GOST-256, DN {CN, O, C}, keyUsage"), CKR_OK, "C_EX_CreateCSR(GOST-256)");
+    CsrParts parts = csrParts(request);
+    expectBytes(parts.version, integer({0}), "GOST CSR version");
+    expectBytes(parts.subject, subject, "GOST CSR subject");
+    expectBytes(parts.publicKey,
+                gostPublicKeyDer(attribute(module, session, gost.publicKey, CKA_VALUE),
+                                 attribute(module, session, gost.publicKey, CKA_GOSTR3410_PARAMS),
+                                 attribute(module, session, gost.publicKey, CKA_GOSTR3411_PARAMS),
+                                 256), "GOST CSR public key");
+    expectBytes(parts.attributes, der(0xa0, sequence({
+                    oid({0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x0e}),
+                    der(0x31, sequence({sequence({oid({0x55, 0x1d, 0x0f}),
+                                                  der(0x04, {0x03, 0x02, 0x06, 0xc0})})}))})),
+                "GOST CSR extensionRequest with a non-critical keyUsage");
+    expectBytes(parts.algorithm, sequence({oid({0x2a, 0x85, 0x03, 0x07, 0x01, 0x01, 0x03, 0x02})}),
+                "GOST CSR signature algorithm");
+    if (parts.signature.size() != 64) fail("GOST-256 CSR signature is not 64 bytes");
+    verifySignatureOk(module, session, gost.publicKey, CKM_GOSTR3410,
+                      digest(module, session, CKM_GOSTR3411_12_256, parts.info, 32),
+                      parts.signature, "GOST CSR self-signature");
+
+    // Russian identifiers and e-mail: the string types the device chooses.
+    check(createCsr(ex, session, gost.publicKey, gost.privateKey,
+                    {"CN", "CryptoMost Battery", "emailAddress", "battery@example.com",
+                     "1.2.643.3.131.1.1", "123456789012", "1.2.643.100.4", "1234567890"},
+                    {}, {}, &request, "GOST-256, DN with e-mail, INN, legal-entity INN"),
+          CKR_OK, "C_EX_CreateCSR(Russian identifiers)");
+    parts = csrParts(request);
+    expectBytes(parts.subject, sequence({
+                    nameEntry(commonName, 0x0c, "CryptoMost Battery"),
+                    nameEntry(oid({0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x01}), 0x16,
+                              "battery@example.com"),
+                    nameEntry(oid({0x2a, 0x85, 0x03, 0x03, 0x81, 0x03, 0x01, 0x01}), 0x12,
+                              "123456789012"),
+                    nameEntry(oid({0x2a, 0x85, 0x03, 0x64, 0x04}), 0x12, "1234567890")}),
+                "CSR subject with IA5String e-mail and NumericString INN");
+    expectBytes(parts.attributes, der(0xa0, {}), "CSR without attributes has an empty [0]");
+
+    // RSA-2048.
+    check(createCsr(ex, session, rsa.publicKey, rsa.privateKey, dn, {}, {}, &request,
+                    "RSA-2048, DN {CN, O, C}"), CKR_OK, "C_EX_CreateCSR(RSA-2048)");
+    parts = csrParts(request);
+    expectBytes(parts.subject, subject, "RSA CSR subject");
+    Bytes rsaBits{0};
+    append(rsaBits, sequence({integer(attribute(module, session, rsa.publicKey, CKA_MODULUS)),
+                              integer(attribute(module, session, rsa.publicKey,
+                                                CKA_PUBLIC_EXPONENT))}));
+    expectBytes(parts.publicKey, sequence({rsaAlgorithm(), der(0x03, rsaBits)}),
+                "RSA CSR public key");
+    expectBytes(parts.attributes, der(0xa0, {}), "RSA CSR empty [0]");
+    expectBytes(parts.algorithm, sequence({oid({0x2b, 0x0e, 0x03, 0x02, 0x1d}), nullValue()}),
+                "RSA CSR signature algorithm (OIW sha1WithRSA)");
+    verifySignatureOk(module, session, rsa.publicKey, CKM_SHA1_RSA_PKCS, parts.info,
+                      parts.signature, "RSA CSR self-signature");
+
+    // Refusals, each with the device's own code.
+    check(createCsr(ex, session, noSign.publicKey, noSign.privateKey, dn, {}, {}, nullptr,
+                    "private key with CKA_SIGN=false"),
+          CKR_KEY_FUNCTION_NOT_PERMITTED, "C_EX_CreateCSR(no CKA_SIGN)");
+    check(createCsr(ex, session, gost.publicKey, gost.privateKey, {"CN", "CryptoMost", "O"},
+                    {}, {}, nullptr, "odd number of DN strings"),
+          CKR_ARGUMENTS_BAD, "C_EX_CreateCSR(odd DN)");
+    check(createCsr(ex, session, gost.publicKey, gost.privateKey, {"XYZ", "value"}, {}, {},
+                    nullptr, "unknown DN type"),
+          CKR_ARGUMENTS_BAD, "C_EX_CreateCSR(unknown DN type)");
+    check(createCsr(ex, session, gost.privateKey, gost.privateKey, dn, {}, {}, nullptr,
+                    "private key passed as the public key"),
+          CKR_KEY_TYPE_INCONSISTENT, "C_EX_CreateCSR(private key as public)");
+    check(createCsr(ex, session, gost.publicKey, other.privateKey, dn, {}, {}, nullptr,
+                    "public and private keys of different pairs"),
+          CKR_FUNCTION_FAILED, "C_EX_CreateCSR(different pairs)");
+    logout(module, session, "CKU_USER");
+    check(createCsr(ex, session, gost.publicKey, gost.privateKey, dn, {}, {}, nullptr,
+                    "application logged out"),
+          CKR_USER_NOT_LOGGED_IN, "C_EX_CreateCSR(logged out)");
+    login(module, session, CKU_USER, environment("P11_TEST_USER_PIN", true));
+
+    for (const Bytes* id : {&gostId, &otherId, &noSignId, &rsaId})
+        removePriorTestObjects(module, session, *id);
+    trace("PARITY", "case csr passed");
+}
+
+// Runs against an initialized token with P11_TEST_USER_PIN and leaves it as it
+// found it: every object a case creates is removed.
+static void verifyDeviceParity(const fs::path& modulePath)
+{
+    Module module(modulePath);
+    const CK_SLOT_ID slot = selectSlot(module, true);
+    const CK_SESSION_HANDLE session = openSession(module, slot);
+    login(module, session, CKU_USER, environment("P11_TEST_USER_PIN", true));
+    auto getList = reinterpret_cast<CK_C_EX_GetFunctionListExtended>(
+        module.symbol("C_EX_GetFunctionListExtended"));
+    if (getList == nullptr) fail("C_EX_GetFunctionListExtended is not exported");
+    CK_FUNCTION_LIST_EXTENDED_PTR ex = nullptr;
+    callOk("C_EX_GetFunctionListExtended", "device-parity", [&] { return getList(&ex); });
+    if (ex == nullptr) fail("C_EX_GetFunctionListExtended returned no table");
+
+    trace("PARITY", "case csr");
+    verifyCsrParity(module, session, ex);
+
+    logout(module, session, "CKU_USER");
+    closeSession(module, session);
+    std::cout << "DEVICE-PARITY: all cases passed\n";
+}
+
 // Run the whole e2e battery that the Linux CI drives with bash: every case,
 // each in its own isolated store, created here in C++ so Windows and macOS
 // run exactly the same thing against the module handed to them - no second
@@ -7411,6 +7677,17 @@ static void runBattery(const fs::path& modulePath, fs::path workRoot)
         verifyRutokenJournal(modulePath);
     }
 
+    // device-parity: the cases written to hold on the reference Rutoken too.
+    {
+        trace("BATTERY", "case device-parity");
+        const fs::path dir = workRoot / "device-parity";
+        setEnvVar("SOFTHSM2_CONF", writeBatteryConfig(dir, true).generic_string());
+        setEnvVar("P11_TEST_SO_PIN", soPin);
+        setEnvVar("P11_TEST_USER_PIN", userPin);
+        batteryInitToken(modulePath, "Rutoken ECP", soPin, userPin);
+        verifyDeviceParity(modulePath);
+    }
+
     // core-behaviour: plain PKCS #11 under the Rutoken profile, with the store directory
     // exposed so the case can confirm private attributes are stored encrypted.
     {
@@ -7494,6 +7771,11 @@ int main(int argc, char** argv)
             verifyRutokenJournal(fs::absolute(argv[2]));
             return 0;
         }
+        if (argc == 3 && std::string(argv[1]) == "device-parity")
+        {
+            verifyDeviceParity(fs::absolute(argv[2]));
+            return 0;
+        }
         if (argc == 3 && std::string(argv[1]) == "certificate-trust")
         {
             const fs::path modulePath = fs::absolute(argv[2]);
@@ -7553,6 +7835,9 @@ int main(int argc, char** argv)
                   << "  portable-token-e2e core-behaviour <module>\n"
                   << "  portable-token-e2e ex-init-token <module>\n"
                   << "  portable-token-e2e journal <module> (fresh test token)\n"
+                  << "  portable-token-e2e device-parity <module> (this module or the\n"
+                  << "                      reference Rutoken; initialized token, leaves\n"
+                  << "                      no objects behind)\n"
                   << "  portable-token-e2e certificate-trust <module> (fresh test token)\n"
                   << "  portable-token-e2e cms <module> (fresh test token)\n"
                   << "  portable-token-e2e cms-verify-external <module> <vector-directory>\n"

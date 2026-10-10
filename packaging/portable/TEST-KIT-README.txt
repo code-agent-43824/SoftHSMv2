@@ -96,6 +96,19 @@ GOST-2012 256/512 signatures and tamper rejection, and Kuznyechik/Magma CTR
 and CTR-ACPKM encryption round trips. These checks do not claim that all
 SoftHSM mechanisms have one-to-one OpenSSL provider equivalents.
 
+The client's device-parity command holds the cases written to pass both on
+this module and on a real Rutoken ECP through the vendor library: so far
+C_EX_CreateCSR (GOST-256 and RSA-2048 requests, their exact DER, the
+self-signature and the device's refusals). Every expectation was read off the
+device. It needs an initialized token and its user PIN, logs out and back in
+once, does not format the token and removes every object it creates. The
+battery runs it against the bundled module. Against a token:
+
+  P11_TEST_USER_PIN=12345678 bin/portable-token-e2e device-parity \
+    /usr/lib/librtpkcs11ecp.so
+
+Success ends with "DEVICE-PARITY: all cases passed" and exit code 0.
+
 Linux or macOS:
   bash run-test.sh
   bash run-test.sh /path/to/alternative/libsofthsm2.so

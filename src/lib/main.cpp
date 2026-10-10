@@ -41,6 +41,7 @@
 #include "cryptoki.h"
 #include "SoftHSM.h"
 #include "RutokenCMS.h"
+#include "RutokenCSR.h"
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -1991,14 +1992,17 @@ PKCS_API CK_RV C_EX_PKCS7Sign
 
 PKCS_API CK_RV C_EX_CreateCSR
 (
-	CK_SESSION_HANDLE /*hSession*/, CK_OBJECT_HANDLE /*hPublicKey*/,
-	CK_CHAR_PTR* /*dn*/, CK_ULONG /*dnLength*/, CK_BYTE_PTR* /*pCsr*/,
-	CK_ULONG_PTR /*pulCsrLength*/, CK_OBJECT_HANDLE /*hPrivKey*/,
-	CK_CHAR_PTR* /*pAttributes*/, CK_ULONG /*ulAttributesLength*/,
-	CK_CHAR_PTR* /*pExtensions*/, CK_ULONG /*ulExtensionsLength*/
+	CK_SESSION_HANDLE hSession, CK_OBJECT_HANDLE hPublicKey,
+	CK_CHAR_PTR* dn, CK_ULONG dnLength, CK_BYTE_PTR* pCsr,
+	CK_ULONG_PTR pulCsrLength, CK_OBJECT_HANDLE hPrivKey,
+	CK_CHAR_PTR* pAttributes, CK_ULONG ulAttributesLength,
+	CK_CHAR_PTR* pExtensions, CK_ULONG ulExtensionsLength
 )
 {
-	return CKR_FUNCTION_NOT_SUPPORTED;
+	return RutokenCSR::create(hSession, hPublicKey, dn, dnLength, pCsr,
+	                          pulCsrLength, hPrivKey, pAttributes,
+	                          ulAttributesLength, pExtensions,
+	                          ulExtensionsLength);
 }
 
 PKCS_API CK_RV C_EX_FreeBuffer

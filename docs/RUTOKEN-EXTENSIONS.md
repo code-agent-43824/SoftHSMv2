@@ -653,6 +653,28 @@ TC26-Z: так делает устройство, сверено на 4096 ба�
   `C_EX_FreeBuffer`.
 - **`C_EX_CreateCSR(...)`** — запрос на сертификат в формате PKCS #10. `dn`,
   `pAttributes` и `pExtensions` — массивы строк парами «тип, значение».
+  **Реализовано** на OpenSSL backend (`src/lib/RutokenCSR.cpp`) по снятому с
+  устройства 10.10 (`docs/JOURNAL.md`), в обоих профилях, вход User обязателен.
+  Ключи ГОСТ Р 34.10-2012 (256 и 512) и RSA. Каждая пара DN — отдельный RDN в
+  порядке передачи; тип — короткое или длинное имя OpenSSL либо OID в точечной
+  записи (`E` не принимается). Строки: C — `PrintableString`, emailAddress —
+  `IA5String`, ИНН, ОГРН, СНИЛС и ИНН ЮЛ (`1.2.643.100.4`) — `NumericString`,
+  остальное — `UTF8String`. Расширения — синтаксис x509v3 OpenSSL (`keyUsage`,
+  `extendedKeyUsage`, `basicConstraints`, `certificatePolicies`, произвольный
+  OID с `ASN1:`/`DER:`) в одном атрибуте extensionRequest; `subjectSignTool`
+  принимается только с `ASN1:`/`DER:`. Атрибуты (`challengePassword`,
+  `unstructuredName`) — `UTF8String`. SPKI ГОСТ несёт `CKA_GOSTR3410_PARAMS` и
+  `CKA_GOSTR3411_PARAMS` ключа; подпись — Стрибог на токене и `CKM_GOSTR3410`
+  (`1.2.643.7.1.1.3.2`/`.3.3` без параметров), у RSA — `CKM_SHA1_RSA_PKCS` и
+  OIW `sha1WithRSA` (`1.3.14.3.2.29`) с NULL. Отказы как у устройства:
+  нечётное число строк и неизвестный тип — `CKR_ARGUMENTS_BAD` (форк так же
+  отвечает на значение, которое OpenSSL не кодирует, — не сверено);
+  закрытый ключ вместо открытого — `CKR_KEY_TYPE_INCONSISTENT`; без
+  `CKA_SIGN` — `CKR_KEY_FUNCTION_NOT_PERMITTED`; ключи разных пар —
+  `CKR_FUNCTION_FAILED`; без входа — `CKR_USER_NOT_LOGGED_IN`. Буфер
+  освобождается `C_EX_FreeBuffer`. С устройством не сверены: EC-ключи (здесь
+  `CKR_KEY_TYPE_INCONSISTENT`), другие имена расширений, `critical,`, пределы
+  длин строк.
 - **`C_EX_FreeBuffer(pBuffer)`** — освободить буфер, выделенный любой из
   функций расширения. Реализовано вместе с текстом сертификата; `NULL_PTR`
   допустим. CMS-функции используют тот же вызов.

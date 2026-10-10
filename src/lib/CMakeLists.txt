@@ -26,6 +26,7 @@ set(INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/common
 set(SOURCES access.cpp
             main.cpp
             RutokenCMS.cpp
+            RutokenCSR.cpp
             P11Attributes.cpp
             P11Objects.cpp
             SoftHSM.cpp

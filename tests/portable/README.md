@@ -154,6 +154,26 @@ Ordinary RSA/GOST generation, CSR/CMS, and signing checks remain mandatory.
 The client also provides `probe <module>`, a PIN-free initialization and slot
 enumeration check used by CI to verify first-use configuration selection.
 
+`device-parity <module>` runs the cases written to hold both on this module
+and on the reference Rutoken through the vendor's `librtpkcs11ecp`: every
+expectation in them was read off the device by
+`tests/portable/rutoken-ext-probe.c` (see `docs/JOURNAL.md`). So far it holds
+one case, `csr`: `C_EX_CreateCSR` for GOST-256 and RSA-2048 key pairs, the
+exact DER of the subject, public key, extension request and signature
+algorithm, the self-signature checked by the token, and the device's
+refusals (no `CKA_SIGN`, odd or unknown DN strings, a private key as the
+public one, keys of different pairs, no login). It needs an initialized token
+and `P11_TEST_USER_PIN`, does not format it, logs the user out and back in
+once, and removes every object it creates:
+
+```sh
+P11_TEST_USER_PIN=12345678 ./bin/portable-token-e2e device-parity \
+  /usr/lib/librtpkcs11ecp.so
+```
+
+Success ends with `DEVICE-PARITY: all cases passed` and exit code 0. The
+`battery` command runs the same cases against the bundled module.
+
 The trace contains explicit `BEGIN GOST`/`END GOST`, `BEGIN RSA PREPARE`/
 `END RSA PREPARE`, and `BEGIN RSA FINISH`/`END RSA FINISH` boundaries. The
 functional test does not request `CKA_KEY_GEN_MECHANISM`; it verifies generated
