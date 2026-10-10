@@ -9,13 +9,15 @@
 батареи со стенда недоступен — данные сняты пробой v2 (JOURNAL 10.10), кейсы
 пишутся в `portable-token-e2e` командой `device-parity` (PLAN, этапы 1–5).
 
-**Сделано:** этап 1 (CSR, `.70`) владелец прогнал на токене — EXIT=0;
-поправка CSR без `hPrivKey` — `d0ae1f94`; этап 2 (ГОСТ-CMS parity и кейс `cms`)
-написан и сверен на форке (WORKLOG 10.10). **Точный следующий шаг:** релиз
-этапа 2, проверка логов и архива, затем пауза: владелец запускает
-`device-parity` на токене. После его ответа — этап 3 (token-manage, локальный
-PIN; в форке `TokenManage`/`SlotManage` — 0x54). RSA CMS остаётся (решение
-10.10); в батарее — dual: 0x63 на устройстве, конверт на форке.
+**Сделано:** этап 1 (CSR, `.70`) владелец прогнал на токене — EXIT=0; поправка
+CSR без `hPrivKey` и этап 2 (ГОСТ-CMS parity, кейс `cms`) выпущены в
+`v2.7.0-portable.71` и проверены (WORKLOG 10.10). **Пауза на проверку
+владельцем:** `device-parity` из кита `.71` на токене. **Точный следующий шаг
+после его ответа:** этап 3 — token-manage (`force-user-pin-change`,
+`standard-default-user-pin`, `MODE_GET_PIN_SET_TO_BE_CHANGED`, unblock,
+restore-factory-defaults) и локальный PIN (`MODE_GET_LOCAL_PIN_INFO`); в форке
+`TokenManage`/`SlotManage` — 0x54. RSA CMS остаётся (решение 10.10); в батарее —
+dual: 0x63 на устройстве, конверт на форке.
 
 ## Закрыто: ГОСТ SignedData в CMS (`.67`)
 
