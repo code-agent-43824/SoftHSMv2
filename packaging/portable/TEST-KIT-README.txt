@@ -97,10 +97,12 @@ and CTR-ACPKM encryption round trips. These checks do not claim that all
 SoftHSM mechanisms have one-to-one OpenSSL provider equivalents.
 
 The client's device-parity command holds the cases written to pass both on
-this module and on a real Rutoken ECP through the vendor library: so far
+this module and on a real Rutoken ECP through the vendor library:
 C_EX_CreateCSR (GOST-256 and RSA-2048 requests, their exact DER, the
-self-signature and the device's refusals). Every expectation was read off the
-device. It needs an initialized token and its user PIN, logs out and back in
+self-signature and the device's refusals) and GOST-256 CMS (C_EX_PKCS7Sign
+and C_EX_PKCS7Verify*: envelope structure, attached/detached/hardware hash,
+trusted root, tampering, unrelated CA, signature only, partial chain).
+Every expectation was read off the device. It needs an initialized token and its user PIN, logs out and back in
 once, does not format the token and removes every object it creates. The
 battery runs it against the bundled module. Against a token:
 

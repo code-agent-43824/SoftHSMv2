@@ -632,25 +632,44 @@ TC26-Z: так делает устройство, сверено на 4096 ба�
   с subject, issuer, serial, сроком действия и алгоритмом открытого ключа.
   Повреждённый DER возвращает `CKR_DATA_INVALID`. Буфер выделяет библиотека;
   вызывающая сторона освобождает его через `C_EX_FreeBuffer`.
-- **`C_EX_PKCS7Sign(...)`** — на OpenSSL backend создаёт CMS SignedData
-  с RSA/SHA-256: приватная операция проходит через `C_Sign` токена, а
-  сертификат подписанта и необязательная цепочка берутся из объектов токена.
-  `PKCS7_DETACHED_SIGNATURE` отделяет данные. При `USE_HARDWARE_HASH` модуль
-  вычисляет SHA-256 через `C_Digest` и сверяет его с атрибутом
-  `messageDigest` конверта; это программная эмуляция, не утверждение о
-  физическом аппаратном хешировании. EC/ГОСТ подпись этим вызовом пока не
-  поддерживается. Без OpenSSL backend эта группа возвращает
-  `CKR_FUNCTION_NOT_SUPPORTED`.
+- **`C_EX_PKCS7Sign(...)`** — на OpenSSL backend создаёт CMS SignedData;
+  приватная операция проходит через `C_Sign` токена, сертификат подписанта и
+  необязательная цепочка берутся из объектов токена,
+  `PKCS7_DETACHED_SIGNATURE` отделяет данные. `hPrivKey = CK_INVALID_HANDLE` —
+  ключ с `CKA_ID` сертификата; открытый ключ вместо закрытого —
+  `CKR_KEY_TYPE_INCONSISTENT`, как у устройства.
+  **ГОСТ 2012 (256 и 512)** — конверт как у устройства (сверен с его дампами,
+  JOURNAL 10.10): подписанные атрибуты contentType, signingTime (UTCTime),
+  messageDigest и SMIMECapabilities (стандартный список OpenSSL, байты
+  устройства); в SignerInfo — Стрибог с NULL и `1.2.643.7.1.1.1.1`/`.1.1.2` с
+  NULL, в SignedData — Стрибог без параметров. Переданный ключ подписывает без
+  сверки с сертификатом: чужой ключ даёт конверт, который не проходит проверку,
+  а не ошибку. Стрибог считается на токене при любом `USE_HARDWARE_HASH`;
+  структура конверта от флага не зависит. Структура 512 с устройством не
+  сверена — у пробы были только 256.
+  **RSA** — SHA-256 через OpenSSL CMS, хотя устройство RSA отвергает
+  (`CKR_KEY_TYPE_INCONSISTENT`; решение владельца 10.10 оставить, «Settled
+  decisions» в `AGENTS.md`). При `USE_HARDWARE_HASH` модуль вычисляет SHA-256
+  через `C_Digest` и сверяет его с `messageDigest`; несовпадение ключа с
+  сертификатом — `CKR_KEY_HANDLE_INVALID`. Без OpenSSL backend эта группа
+  возвращает `CKR_FUNCTION_NOT_SUPPORTED`.
 - **`C_EX_PKCS7VerifyInit(hSession, pCms, ulCmsSize, pStore, ckMode, flags)`**,
   **`C_EX_PKCS7Verify(...)`**, **`C_EX_PKCS7VerifyUpdate(...)`**,
   **`C_EX_PKCS7VerifyFinal(...)`** — проверка подписи PKCS #7, одним вызовом
   или потоком. `CK_VENDOR_X509_STORE` несёт доверенные сертификаты,
   сертификаты подписантов и списки отзыва; `ckMode` задаёт строгость проверки
-  CRL (`OPTIONAL_CRL_CHECK`, `LEAF_CRL_CHECK`, `ALL_CRL_CHECK`). Повреждённая
-  подпись даёт `CKR_SIGNATURE_INVALID`, чужой CA —
-  `CKR_CERT_CHAIN_NOT_VERIFIED`. При последнем коде данные и сертификаты
-  подписанта всё равно возвращаются; освобождать их нужно через
-  `C_EX_FreeBuffer`.
+  CRL (`OPTIONAL_CRL_CHECK`, `LEAF_CRL_CHECK`, `ALL_CRL_CHECK`). Как у
+  устройства (JOURNAL 10.10): повреждённая подпись — `CKR_SIGNATURE_INVALID`,
+  чужой CA — `CKR_CERT_CHAIN_NOT_VERIFIED`, и при любой ошибке не
+  возвращаются ни данные, ни подписанты; `CKF_VENDOR_CHECK_SIGNATURE_ONLY` —
+  данные без подписантов; ни хранилища, ни флагов — `CKR_ARGUMENTS_BAD` уже в
+  `VerifyInit`; `CKF_VENDOR_ALLOW_PARTIAL_CHAINS` принимает цепочку,
+  кончающуюся любым доверенным сертификатом, в том числе самим подписантом.
+  Для RSA-конвертов действует то же правило, хотя снято оно на ГОСТ.
+  `CKF_VENDOR_USE_TRUSTED_CERTS_FROM_TOKEN` берёт сертификаты с
+  `CKA_TRUSTED = TRUE`; устройство на этом флаге всегда отвечает
+  `CKR_CERT_CHAIN_NOT_VERIFIED` — расхождение по `CKA_TRUSTED`, оставленное
+  владельцем dual. Буферы освобождаются через `C_EX_FreeBuffer`.
 - **`C_EX_CreateCSR(...)`** — запрос на сертификат в формате PKCS #10. `dn`,
   `pAttributes` и `pExtensions` — массивы строк парами «тип, значение».
   **Реализовано** на OpenSSL backend (`src/lib/RutokenCSR.cpp`) по снятому с

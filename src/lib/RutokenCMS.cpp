@@ -3,6 +3,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <algorithm>
 #include <limits>
 #include <map>
@@ -243,31 +244,86 @@ CK_RV gostSign(CK_SESSION_HANDLE session, CK_OBJECT_HANDLE key,
     return length == signature.size() ? CKR_OK : CKR_FUNCTION_FAILED;
 }
 
-CK_RV verifyGostSignature(CK_SESSION_HANDLE session, X509* publicCert,
-                          const unsigned char* data, size_t length,
-                          const unsigned char* signature, size_t signatureLength);
+// The S/MIME capabilities attribute exactly as the reference device writes it
+// into every GOST envelope: OpenSSL's standard list (JOURNAL, 10 October 2026).
+const unsigned char smimeCapabilities[] = {
+    0x30, 0x81, 0xa7, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x0f,
+    0x31, 0x81, 0x99, 0x30, 0x81, 0x96, 0x30, 0x0b, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01,
+    0x65, 0x03, 0x04, 0x01, 0x2a, 0x30, 0x0a, 0x06, 0x08, 0x2a, 0x85, 0x03, 0x07, 0x01,
+    0x01, 0x02, 0x02, 0x30, 0x0a, 0x06, 0x08, 0x2a, 0x85, 0x03, 0x07, 0x01, 0x01, 0x02,
+    0x03, 0x30, 0x08, 0x06, 0x06, 0x2a, 0x85, 0x03, 0x02, 0x02, 0x09, 0x30, 0x08, 0x06,
+    0x06, 0x2a, 0x85, 0x03, 0x02, 0x02, 0x15, 0x30, 0x0b, 0x06, 0x09, 0x60, 0x86, 0x48,
+    0x01, 0x65, 0x03, 0x04, 0x01, 0x16, 0x30, 0x0b, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01,
+    0x65, 0x03, 0x04, 0x01, 0x02, 0x30, 0x0a, 0x06, 0x08, 0x2a, 0x86, 0x48, 0x86, 0xf7,
+    0x0d, 0x03, 0x07, 0x30, 0x0e, 0x06, 0x08, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x03,
+    0x02, 0x02, 0x02, 0x00, 0x80, 0x30, 0x0d, 0x06, 0x08, 0x2a, 0x86, 0x48, 0x86, 0xf7,
+    0x0d, 0x03, 0x02, 0x02, 0x01, 0x40, 0x30, 0x07, 0x06, 0x05, 0x2b, 0x0e, 0x03, 0x02,
+    0x07, 0x30, 0x0d, 0x06, 0x08, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x03, 0x02, 0x02,
+    0x01, 0x28
+};
 
+Bytes signedAttribute(const char* type, const Bytes& value)
+{
+    return tagged(0x30, joined({oid(type), tagged(0x31, value)}));
+}
+
+Bytes utcTimeNow()
+{
+    std::unique_ptr<ASN1_UTCTIME, decltype(&ASN1_UTCTIME_free)> now(
+        ASN1_UTCTIME_set(nullptr, time(nullptr)), ASN1_UTCTIME_free);
+    if (!now) return {};
+    int length = i2d_ASN1_UTCTIME(now.get(), nullptr);
+    if (length <= 0) return {};
+    Bytes result(length);
+    unsigned char* cursor = result.data();
+    if (i2d_ASN1_UTCTIME(now.get(), &cursor) != length) return {};
+    return result;
+}
+
+// The envelope the reference device makes (JOURNAL, 10 October 2026), which is
+// OpenSSL's CMS with the GOST engine: signed attributes contentType,
+// signingTime, messageDigest and the S/MIME capabilities; the digest algorithm
+// with NULL parameters in the signer info and without them in SignedData; the
+// GOST public-key OID with NULL as the signature algorithm. The key passed in
+// signs without being matched to the certificate, as on the device, so a
+// wrong key gives an envelope that does not verify rather than an error.
 CK_RV signGostCms(CK_SESSION_HANDLE session, const unsigned char* data,
                   CK_ULONG dataLen, X509* cert, CK_OBJECT_HANDLE key,
                   const std::vector<Bytes>& chain, CK_ULONG flags, Bytes& output)
 {
     const int bits = gostBits(cert);
     if (!bits) return CKR_MECHANISM_INVALID;
-    Bytes signature;
-    CK_RV rv = gostSign(session, key, data, dataLen, bits, signature);
-    if (rv != CKR_OK) return rv;
-    rv = verifyGostSignature(session, cert, data, dataLen,
-                             signature.data(), signature.size());
-    if (rv != CKR_OK) return CKR_KEY_HANDLE_INVALID;
     const char* digestName = bits == 256 ? "1.2.643.7.1.1.2.2" : "1.2.643.7.1.1.2.3";
-    const char* signatureName = bits == 256 ? "1.2.643.7.1.1.3.2" : "1.2.643.7.1.1.3.3";
-    Bytes digestAlg = tagged(0x30, oid(digestName));
-    Bytes signatureAlg = tagged(0x30, oid(signatureName));
+    const char* keyName = bits == 256 ? "1.2.643.7.1.1.1.1" : "1.2.643.7.1.1.1.2";
+    Bytes contentDigest;
+    CK_RV rv = tokenDigest(session, bits, data, dataLen, contentDigest);
+    if (rv != CKR_OK) return rv;
+    const Bytes signingTime = utcTimeNow();
+    if (signingTime.empty()) return CKR_FUNCTION_FAILED;
+    std::vector<Bytes> attributes = {
+        signedAttribute("1.2.840.113549.1.9.3", oid("1.2.840.113549.1.7.1")),
+        signedAttribute("1.2.840.113549.1.9.5", signingTime),
+        signedAttribute("1.2.840.113549.1.9.4", tagged(0x04, contentDigest)),
+        Bytes(std::begin(smimeCapabilities), std::end(smimeCapabilities))
+    };
+    std::sort(attributes.begin(), attributes.end());
+    Bytes signedAttributes;
+    for (const auto& item : attributes)
+        signedAttributes.insert(signedAttributes.end(), item.begin(), item.end());
+    const Bytes signedInput = tagged(0x31, signedAttributes);
+    Bytes signature;
+    rv = gostSign(session, key, signedInput.data(),
+                  static_cast<CK_ULONG>(signedInput.size()), bits, signature);
+    if (rv != CKR_OK) return rv;
+    const Bytes null{0x05, 0x00};
     Bytes issuer = encodedName(X509_get_issuer_name(cert));
     Bytes serial = encodedSerial(X509_get_serialNumber(cert));
     if (issuer.empty() || serial.empty()) return CKR_DATA_INVALID;
     Bytes signer = tagged(0x30, joined({tagged(0x02, {1}),
-        tagged(0x30, joined({issuer, serial})), digestAlg, signatureAlg,
+        tagged(0x30, joined({issuer, serial})),
+        tagged(0x30, joined({oid(digestName), null})),
+        tagged(0xa0, signedAttributes),
+        tagged(0x30, joined({oid(keyName), null})),
         tagged(0x04, signature)}));
     int certLength = i2d_X509(cert, nullptr);
     if (certLength <= 0) return CKR_DATA_INVALID;
@@ -289,7 +345,7 @@ CK_RV signGostCms(CK_SESSION_HANDLE session, const unsigned char* data,
         contentInfo.insert(contentInfo.end(), wrapped.begin(), wrapped.end());
     }
     Bytes signedData = tagged(0x30, joined({tagged(0x02, {1}),
-        tagged(0x31, digestAlg), tagged(0x30, contentInfo),
+        tagged(0x31, tagged(0x30, oid(digestName))), tagged(0x30, contentInfo),
         tagged(0xa0, certificates), tagged(0x31, signer)}));
     output = tagged(0x30, joined({oid("1.2.840.113549.1.7.2"), tagged(0xa0, signedData)}));
     return output.size() <= maxCms ? CKR_OK : CKR_DATA_LEN_RANGE;
@@ -418,10 +474,12 @@ CK_RV verifyGostChain(CK_SESSION_HANDLE session, X509* signer,
             return CKR_CERT_CHAIN_NOT_VERIFIED;
         for (int i = 0; i < sk_X509_num(anchors.get()); ++i)
             if (X509_cmp(current, sk_X509_value(anchors.get(), i)) == 0) {
+                // A partial chain may end at any trusted certificate, the
+                // signer's own included: the device accepts a trusted leaf.
+                if (state.flags & CKF_VENDOR_ALLOW_PARTIAL_CHAINS) return CKR_OK;
                 if (X509_check_ca(current) <= 0 ||
-                    (X509_NAME_cmp(X509_get_subject_name(current),
-                                   X509_get_issuer_name(current)) != 0 &&
-                     !(state.flags & CKF_VENDOR_ALLOW_PARTIAL_CHAINS)))
+                    X509_NAME_cmp(X509_get_subject_name(current),
+                                  X509_get_issuer_name(current)) != 0)
                     return CKR_CERT_CHAIN_NOT_VERIFIED;
                 return CKR_OK;
             }
@@ -672,29 +730,41 @@ CK_RV verifyGostCms(CK_SESSION_HANDLE session, const VerifyState& state,
                                     signature->length);
     if (rv != CKR_OK) return CKR_SIGNATURE_INVALID;
 
-    CK_RV chainResult = CKR_OK;
-    if (!(state.flags & CKF_VENDOR_CHECK_SIGNATURE_ONLY))
-        chainResult = verifyGostChain(session, signer, state, internal.get());
-    int certLength = i2d_X509(signer, nullptr);
-    if (certLength <= 0) return CKR_FUNCTION_FAILED;
-    auto* signerOutput = static_cast<CK_VENDOR_BUFFER_PTR>(calloc(1, sizeof(CK_VENDOR_BUFFER)));
-    if (!signerOutput) return CKR_HOST_MEMORY;
-    signerOutput[0].pData = static_cast<CK_BYTE_PTR>(malloc(certLength));
-    if (!signerOutput[0].pData) { free(signerOutput); return CKR_HOST_MEMORY; }
-    unsigned char* cursor = signerOutput[0].pData;
-    if (i2d_X509(signer, &cursor) != certLength) {
-        free(signerOutput[0].pData); free(signerOutput); return CKR_FUNCTION_FAILED;
+    // As on the device: a chain that does not verify returns neither data nor
+    // signers, and a check of the signature alone returns no signers.
+    const bool signatureOnly = (state.flags & CKF_VENDOR_CHECK_SIGNATURE_ONLY) != 0;
+    if (!signatureOnly) {
+        CK_RV chainResult = verifyGostChain(session, signer, state, internal.get());
+        if (chainResult != CKR_OK) return chainResult;
     }
-    signerOutput[0].ulSize = certLength;
+    CK_VENDOR_BUFFER_PTR signerOutput = nullptr;
+    if (!signatureOnly) {
+        int certLength = i2d_X509(signer, nullptr);
+        if (certLength <= 0) return CKR_FUNCTION_FAILED;
+        signerOutput = static_cast<CK_VENDOR_BUFFER_PTR>(calloc(1, sizeof(CK_VENDOR_BUFFER)));
+        if (!signerOutput) return CKR_HOST_MEMORY;
+        signerOutput[0].pData = static_cast<CK_BYTE_PTR>(malloc(certLength));
+        if (!signerOutput[0].pData) { free(signerOutput); return CKR_HOST_MEMORY; }
+        unsigned char* cursor = signerOutput[0].pData;
+        if (i2d_X509(signer, &cursor) != certLength) {
+            free(signerOutput[0].pData); free(signerOutput); return CKR_FUNCTION_FAILED;
+        }
+        signerOutput[0].ulSize = certLength;
+    }
     if (data) {
         *data = static_cast<CK_BYTE_PTR>(malloc(content.empty() ? 1 : content.size()));
-        if (!*data) { free(signerOutput[0].pData); free(signerOutput); return CKR_HOST_MEMORY; }
+        if (!*data) {
+            if (signerOutput) { free(signerOutput[0].pData); free(signerOutput); }
+            return CKR_HOST_MEMORY;
+        }
         if (!content.empty()) memcpy(*data, content.data(), content.size());
         *dataLen = content.size();
     }
-    *signers = signerOutput;
-    *signerCount = 1;
-    return chainResult;
+    if (signerOutput) {
+        *signers = signerOutput;
+        *signerCount = 1;
+    }
+    return CKR_OK;
 }
 
 CK_RV verifyCms(const VerifyState& state, bool detached,
@@ -743,8 +813,10 @@ CK_RV verifyCms(const VerifyState& state, bool detached,
     if (CMS_verify(cms.get(), extra.get(), nullptr, signedInput.get(),
                    recovered.get(), cmsFlags | CMS_NO_SIGNER_CERT_VERIFY) != 1)
         return CKR_SIGNATURE_INVALID;
-    CK_RV result = CKR_OK;
-    if (!(state.flags & CKF_VENDOR_CHECK_SIGNATURE_ONLY)) {
+    // The same rule as for GOST envelopes, where it was read off the device:
+    // a failed chain returns nothing, a signature-only check no signers.
+    const bool signatureOnly = (state.flags & CKF_VENDOR_CHECK_SIGNATURE_ONLY) != 0;
+    if (!signatureOnly) {
         BioPtr chainInput = input();
         BioPtr ignored(BIO_new(BIO_s_mem()), BIO_free);
         if (detached && !chainInput) return CKR_HOST_MEMORY;
@@ -752,15 +824,18 @@ CK_RV verifyCms(const VerifyState& state, bool detached,
         if (state.trusted.empty() ||
             CMS_verify(cms.get(), extra.get(), store.get(), chainInput.get(),
                        ignored.get(), cmsFlags) != 1)
-            result = CKR_CERT_CHAIN_NOT_VERIFIED;
+            return CKR_CERT_CHAIN_NOT_VERIFIED;
     }
     STACK_OF(X509)* signerList = CMS_get0_signers(cms.get());
     SignerStack signerOwner(signerList);
     if (!signerList || sk_X509_num(signerList) <= 0) return CKR_SIGNATURE_INVALID;
-    const int count = sk_X509_num(signerList);
-    CK_VENDOR_BUFFER_PTR signerOutput = static_cast<CK_VENDOR_BUFFER_PTR>(
-        calloc(static_cast<size_t>(count), sizeof(CK_VENDOR_BUFFER)));
-    if (!signerOutput) return CKR_HOST_MEMORY;
+    const int count = signatureOnly ? 0 : sk_X509_num(signerList);
+    CK_VENDOR_BUFFER_PTR signerOutput = nullptr;
+    if (count) {
+        signerOutput = static_cast<CK_VENDOR_BUFFER_PTR>(
+            calloc(static_cast<size_t>(count), sizeof(CK_VENDOR_BUFFER)));
+        if (!signerOutput) return CKR_HOST_MEMORY;
+    }
     for (int i = 0; i < count; ++i) {
         X509* cert = sk_X509_value(signerList, i);
         int length = i2d_X509(cert, nullptr);
@@ -796,7 +871,7 @@ CK_RV verifyCms(const VerifyState& state, bool detached,
     }
     *signers = signerOutput;
     *signerCount = static_cast<CK_ULONG>(count);
-    return result;
+    return CKR_OK;
 }
 #endif
 }
@@ -832,8 +907,12 @@ CK_RV sign(CK_SESSION_HANDLE session, CK_BYTE_PTR data, CK_ULONG dataLen,
             rv = findPrivateKey(session, id, privateKey);
             if (rv != CKR_OK) return rv;
         }
-        rv = objectClass(session, privateKey, CKO_PRIVATE_KEY);
+        CK_OBJECT_CLASS keyClass = CKO_VENDOR_DEFINED;
+        CK_ATTRIBUTE keyClassAttr = { CKA_CLASS, &keyClass, sizeof(keyClass) };
+        rv = C_GetAttributeValue(session, privateKey, &keyClassAttr, 1);
         if (rv != CKR_OK) return rv;
+        // The device answers a public key passed as the private one with this.
+        if (keyClass != CKO_PRIVATE_KEY) return CKR_KEY_TYPE_INCONSISTENT;
         if (gostBits(cert.get())) {
             std::vector<Bytes> chainDer;
             for (CK_ULONG i = 0; i < chainLen; ++i) {
@@ -952,6 +1031,8 @@ CK_RV verifyInit(CK_SESSION_HANDLE session, CK_BYTE_PTR cms, CK_ULONG cmsLen,
                        CKF_VENDOR_CHECK_SIGNATURE_ONLY |
                        CKF_VENDOR_USE_TRUSTED_CERTS_FROM_TOKEN)))
             return CKR_ARGUMENTS_BAD;
+        // Neither a store nor a flag: the device refuses here, not at Verify.
+        if (!store && !flags) return CKR_ARGUMENTS_BAD;
         CK_RV rv = userSession(session);
         if (rv != CKR_OK) return rv;
         VerifyState state;

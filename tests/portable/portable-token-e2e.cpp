@@ -90,6 +90,8 @@ static const char* rvName(CK_RV rv)
         case CKR_KEY_HANDLE_INVALID: return "CKR_KEY_HANDLE_INVALID";
         case CKR_KEY_SIZE_RANGE: return "CKR_KEY_SIZE_RANGE";
         case CKR_KEY_TYPE_INCONSISTENT: return "CKR_KEY_TYPE_INCONSISTENT";
+        case CKR_KEY_FUNCTION_NOT_PERMITTED: return "CKR_KEY_FUNCTION_NOT_PERMITTED";
+        case CKR_CERT_CHAIN_NOT_VERIFIED: return "CKR_CERT_CHAIN_NOT_VERIFIED";
         case CKR_MECHANISM_INVALID: return "CKR_MECHANISM_INVALID";
         case CKR_MECHANISM_PARAM_INVALID: return "CKR_MECHANISM_PARAM_INVALID";
         case CKR_OBJECT_HANDLE_INVALID: return "CKR_OBJECT_HANDLE_INVALID";
@@ -6829,11 +6831,19 @@ static void verifyCmsBattery(const fs::path& modulePath,
             return ex->C_EX_PKCS7Verify(session, &returnedData, &returnedLen,
                                         &signers, &signerCount);
         }), expected, "attached CMS verification");
-        if (expected == CKR_OK || expected == CKR_CERT_CHAIN_NOT_VERIFIED) {
-            if (!returnedData || Bytes(returnedData, returnedData + returnedLen) != content ||
-                signerCount != 1 || !signers ||
-                Bytes(signers[0].pData, signers[0].pData + signers[0].ulSize) != leafDer)
-                fail("CMS verification returned wrong data or signer certificate");
+        // The rule the device follows for GOST envelopes: a failure returns
+        // neither data nor signers, a signature-only check no signers.
+        if (expected != CKR_OK) {
+            if (returnedData || returnedLen || signers || signerCount)
+                fail("failed CMS verification returned data or signers");
+        } else if (!returnedData ||
+                   Bytes(returnedData, returnedData + returnedLen) != content) {
+            fail("CMS verification returned wrong data");
+        } else if (flags & CKF_VENDOR_CHECK_SIGNATURE_ONLY) {
+            if (signers || signerCount) fail("signature-only CMS check returned signers");
+        } else if (signerCount != 1 || !signers ||
+                   Bytes(signers[0].pData, signers[0].pData + signers[0].ulSize) != leafDer) {
+            fail("CMS verification returned a wrong signer certificate");
         }
         if (returnedData) callOk("C_EX_FreeBuffer", "CMS data", [&] {
             return ex->C_EX_FreeBuffer(returnedData);
@@ -6954,15 +6964,21 @@ static void verifyGostCmsBattery(const fs::path& modulePath,
     writeFile(vectorDirectory / "gost-root.der", rootDer);
     writeFile(vectorDirectory / "gost-signer.der", leafDer);
     writeFile(vectorDirectory / "gost-content.bin", content);
+    // As on the device, the key passed signs without being matched to the
+    // certificate; the envelope then fails verification.
     CK_BYTE_PTR mismatchedEnvelope = nullptr;
     CK_ULONG mismatchedLength = 0;
-    check(invoke("C_EX_PKCS7Sign", "mismatched GOST certificate and key", [&] {
+    callOk("C_EX_PKCS7Sign", "mismatched GOST certificate and key", [&] {
         return ex->C_EX_PKCS7Sign(session, content.data(), content.size(),
             leafCert, &mismatchedEnvelope, &mismatchedLength,
             root.privateKey, chain, 1, 0);
-    }), CKR_KEY_HANDLE_INVALID, "GOST CMS rejects a mismatched key");
-    if (mismatchedEnvelope || mismatchedLength)
-        fail("mismatched GOST CMS returned an envelope");
+    });
+    if (!mismatchedEnvelope || !mismatchedLength)
+        fail("mismatched GOST CMS returned no envelope");
+    const Bytes mismatched(mismatchedEnvelope, mismatchedEnvelope + mismatchedLength);
+    callOk("C_EX_FreeBuffer", "mismatched GOST envelope", [&] {
+        return ex->C_EX_FreeBuffer(mismatchedEnvelope);
+    });
     CK_VENDOR_BUFFER anchor{rootDer.data(), static_cast<CK_ULONG>(rootDer.size())};
     CK_VENDOR_BUFFER externalSigner{leafDer.data(), static_cast<CK_ULONG>(leafDer.size())};
     CK_VENDOR_X509_STORE store{};
@@ -6991,11 +7007,18 @@ static void verifyGostCmsBattery(const fs::path& modulePath,
             : ex->C_EX_PKCS7Verify(session, &recovered, &recoveredSize,
                                     &signers, &count);
         check(rv, expected, "GOST CMS verification");
-        if (expected == CKR_OK && (!signers || count != 1 ||
-            Bytes(signers[0].pData, signers[0].pData + signers[0].ulSize) != leafDer ||
-            (!isDetached && (!recovered ||
-             Bytes(recovered, recovered + recoveredSize) != content))))
-            fail("GOST CMS returned incorrect data or signer");
+        if (expected != CKR_OK) {
+            if (recovered || recoveredSize || signers || count)
+                fail("failed GOST CMS verification returned data or signers");
+        } else if (!isDetached && (!recovered ||
+                   Bytes(recovered, recovered + recoveredSize) != content)) {
+            fail("GOST CMS returned incorrect data");
+        } else if (flags & CKF_VENDOR_CHECK_SIGNATURE_ONLY) {
+            if (signers || count) fail("signature-only GOST CMS check returned signers");
+        } else if (!signers || count != 1 ||
+                   Bytes(signers[0].pData, signers[0].pData + signers[0].ulSize) != leafDer) {
+            fail("GOST CMS returned an incorrect signer");
+        }
         if (recovered) callOk("C_EX_FreeBuffer", "GOST data", [&] {
             return ex->C_EX_FreeBuffer(recovered);
         });
@@ -7004,6 +7027,7 @@ static void verifyGostCmsBattery(const fs::path& modulePath,
     };
     verify(attached, CKR_OK, false);
     verify(detached, CKR_OK, true);
+    verify(mismatched, CKR_SIGNATURE_INVALID, false);
     verify(attached, CKR_CERT_CHAIN_NOT_VERIFIED, false, true);
     verify(attached, CKR_OK, false, true, CKF_VENDOR_CHECK_SIGNATURE_ONLY);
     verify(attached, CKR_SIGNATURE_INVALID, false, false,
@@ -7503,6 +7527,360 @@ static void verifyCsrParity(Module& module, CK_SESSION_HANDLE session,
     trace("PARITY", "case csr passed");
 }
 
+struct SignedDataParts
+{
+    Bytes digestAlgorithms, contentType, content;
+    bool hasContent = false;
+    std::vector<Bytes> certificates;
+    Bytes signerVersion, sid, digestAlgorithm, signatureAlgorithm, signature;
+    std::vector<Bytes> signedAttributes;
+    Bytes signedAttributesSet;
+};
+
+static std::vector<Tlv> tlvChildren(const Bytes& bytes, const Tlv& parent)
+{
+    std::vector<Tlv> children;
+    for (size_t cursor = parent.content(); cursor < parent.content() + parent.length;)
+    {
+        const Tlv child = parseTlv(bytes, cursor);
+        children.push_back(child);
+        cursor += child.total();
+    }
+    return children;
+}
+
+static SignedDataParts signedDataParts(const Bytes& envelope)
+{
+    const Tlv outer = parseTlv(envelope, 0);
+    if (outer.tag != 0x30 || outer.total() != envelope.size())
+        fail("CMS envelope is not one DER sequence");
+    const std::vector<Tlv> top = tlvChildren(envelope, outer);
+    if (top.size() != 2 || encodedTlv(envelope, top[0]) != cmsSignedDataOid() || top[1].tag != 0xa0)
+        fail("CMS envelope is not SignedData");
+    const Tlv signedData = parseTlv(envelope, top[1].content());
+    if (signedData.tag != 0x30) fail("SignedData is not a sequence");
+    std::vector<Tlv> fields = tlvChildren(envelope, signedData);
+    if (fields.size() < 4 || encodedTlv(envelope, fields[0]) != integer({1}))
+        fail("SignedData version is not 1");
+    SignedDataParts parts;
+    parts.digestAlgorithms = encodedTlv(envelope, fields[1]);
+    const std::vector<Tlv> encapsulated = tlvChildren(envelope, fields[2]);
+    if (encapsulated.empty()) fail("SignedData has no content type");
+    parts.contentType = encodedTlv(envelope, encapsulated[0]);
+    if (encapsulated.size() > 1)
+    {
+        const Tlv octets = parseTlv(envelope, encapsulated[1].content());
+        if (encapsulated[1].tag != 0xa0 || octets.tag != 0x04) fail("eContent is not [0] OCTET STRING");
+        parts.hasContent = true;
+        parts.content.assign(envelope.begin() + static_cast<std::ptrdiff_t>(octets.content()),
+                             envelope.begin() + static_cast<std::ptrdiff_t>(octets.content() + octets.length));
+    }
+    size_t index = 3;
+    if (fields[index].tag == 0xa0)
+    {
+        for (const Tlv& certificate : tlvChildren(envelope, fields[index]))
+            parts.certificates.push_back(encodedTlv(envelope, certificate));
+        ++index;
+    }
+    if (index < fields.size() && fields[index].tag == 0xa1) ++index;
+    if (index + 1 != fields.size() || fields[index].tag != 0x31) fail("SignedData has no single signerInfos");
+    const std::vector<Tlv> signerInfos = tlvChildren(envelope, fields[index]);
+    if (signerInfos.size() != 1) fail("CMS envelope does not carry exactly one SignerInfo");
+    const std::vector<Tlv> signer = tlvChildren(envelope, signerInfos[0]);
+    if (signer.size() != 6 || signer[3].tag != 0xa0 || signer[5].tag != 0x04)
+        fail("SignerInfo is not {version, sid, digest, [0] attributes, algorithm, signature}");
+    parts.signerVersion = encodedTlv(envelope, signer[0]);
+    parts.sid = encodedTlv(envelope, signer[1]);
+    parts.digestAlgorithm = encodedTlv(envelope, signer[2]);
+    for (const Tlv& attribute : tlvChildren(envelope, signer[3]))
+        parts.signedAttributes.push_back(encodedTlv(envelope, attribute));
+    parts.signedAttributesSet = encodedTlv(envelope, signer[3]);
+    parts.signedAttributesSet[0] = 0x31;
+    parts.signatureAlgorithm = encodedTlv(envelope, signer[4]);
+    parts.signature.assign(envelope.begin() + static_cast<std::ptrdiff_t>(signer[5].content()),
+                           envelope.begin() + static_cast<std::ptrdiff_t>(signer[5].content() + signer[5].length));
+    return parts;
+}
+
+struct CmsVerifyResult
+{
+    CK_RV initRv = CKR_OK;
+    CK_RV rv = CKR_OK;
+    bool hasData = false;
+    Bytes data;
+    std::vector<Bytes> signers;
+};
+
+// One C_EX_PKCS7VerifyInit and Verify (or Update and Final for a detached
+// envelope), the outputs copied out and released.
+static CmsVerifyResult cmsVerify(CK_FUNCTION_LIST_EXTENDED_PTR ex, CK_SESSION_HANDLE session,
+                                 const Bytes& envelope, const Bytes* trusted, const Bytes* extra,
+                                 bool useStore, CK_FLAGS flags, const Bytes* detachedContent,
+                                 const char* what)
+{
+    CK_VENDOR_BUFFER anchor{nullptr, 0}, signerCertificate{nullptr, 0};
+    CK_VENDOR_X509_STORE store{};
+    if (trusted)
+    {
+        anchor = {const_cast<unsigned char*>(trusted->data()), static_cast<CK_ULONG>(trusted->size())};
+        store.pTrustedCertificates = &anchor;
+        store.ulTrustedCertificateCount = 1;
+    }
+    if (extra)
+    {
+        signerCertificate = {const_cast<unsigned char*>(extra->data()), static_cast<CK_ULONG>(extra->size())};
+        store.pCertificates = &signerCertificate;
+        store.ulCertificateCount = 1;
+    }
+    CmsVerifyResult result;
+    result.initRv = invoke("C_EX_PKCS7VerifyInit", what, [&] {
+        return ex->C_EX_PKCS7VerifyInit(session, const_cast<unsigned char*>(envelope.data()),
+                                        static_cast<CK_ULONG>(envelope.size()),
+                                        useStore ? &store : nullptr, OPTIONAL_CRL_CHECK, flags);
+    });
+    if (result.initRv != CKR_OK) return result;
+    CK_BYTE_PTR data = nullptr;
+    CK_ULONG dataLength = 0, count = 0;
+    CK_VENDOR_BUFFER_PTR signers = nullptr;
+    if (detachedContent)
+    {
+        callOk("C_EX_PKCS7VerifyUpdate", what, [&] {
+            return ex->C_EX_PKCS7VerifyUpdate(session, const_cast<unsigned char*>(detachedContent->data()),
+                                              static_cast<CK_ULONG>(detachedContent->size()));
+        });
+        result.rv = invoke("C_EX_PKCS7VerifyFinal", what, [&] {
+            return ex->C_EX_PKCS7VerifyFinal(session, &signers, &count);
+        });
+    }
+    else
+    {
+        result.rv = invoke("C_EX_PKCS7Verify", what, [&] {
+            return ex->C_EX_PKCS7Verify(session, &data, &dataLength, &signers, &count);
+        });
+    }
+    if (data)
+    {
+        result.hasData = true;
+        result.data.assign(data, data + dataLength);
+        callOk("C_EX_FreeBuffer", "verified data", [&] { return ex->C_EX_FreeBuffer(data); });
+    }
+    if (count && !signers) fail(std::string(what) + ": a signer count without signers");
+    for (CK_ULONG i = 0; i < count; ++i)
+        result.signers.emplace_back(signers[i].pData, signers[i].pData + signers[i].ulSize);
+    if (signers) cmsFreeSigners(ex, signers, count);
+    trace("PARITY", std::string(what) + ": rv=" + rvName(result.rv) + ", signers=" +
+                    std::to_string(result.signers.size()) +
+                    (result.hasData ? ", data returned" : ", no data"));
+    return result;
+}
+
+static void expectVerified(const CmsVerifyResult& result, const Bytes* content,
+                           const Bytes* signer, const char* what)
+{
+    check(result.initRv, CKR_OK, what);
+    check(result.rv, CKR_OK, what);
+    if (content && (!result.hasData || result.data != *content))
+        fail(std::string(what) + ": the data is not the signed data");
+    if (signer && (result.signers.size() != 1 || result.signers[0] != *signer))
+        fail(std::string(what) + ": not exactly the signer's certificate");
+    if (!signer && !result.signers.empty())
+        fail(std::string(what) + ": signers returned where the device returns none");
+    trace("PARITY", std::string(what) + ": as on the device");
+}
+
+static void expectRejected(const CmsVerifyResult& result, CK_RV expected, const char* what)
+{
+    check(result.initRv, CKR_OK, what);
+    check(result.rv, expected, what);
+    if (result.hasData || !result.signers.empty())
+        fail(std::string(what) + ": data or signers returned where the device returns none");
+    trace("PARITY", std::string(what) + ": as on the device");
+}
+
+static CK_RV cmsSign(CK_FUNCTION_LIST_EXTENDED_PTR ex, CK_SESSION_HANDLE session,
+                     const Bytes& content, CK_OBJECT_HANDLE certificate, CK_OBJECT_HANDLE key,
+                     std::vector<CK_OBJECT_HANDLE> chain, CK_ULONG flags, Bytes* output,
+                     const char* what)
+{
+    CK_BYTE_PTR envelope = nullptr;
+    CK_ULONG length = 0;
+    const CK_RV rv = invoke("C_EX_PKCS7Sign", what, [&] {
+        return ex->C_EX_PKCS7Sign(session, const_cast<unsigned char*>(content.data()),
+                                  static_cast<CK_ULONG>(content.size()), certificate,
+                                  &envelope, &length, key, chain.empty() ? nullptr : chain.data(),
+                                  static_cast<CK_ULONG>(chain.size()), flags);
+    });
+    if (rv == CKR_OK)
+    {
+        if (!envelope || !length) fail("C_EX_PKCS7Sign returned CKR_OK and no envelope");
+        trace("OUTPUT", std::string(what) + ": envelope " + std::to_string(length) + " bytes");
+        if (output) output->assign(envelope, envelope + length);
+    }
+    if (envelope) callOk("C_EX_FreeBuffer", "CMS envelope", [&] { return ex->C_EX_FreeBuffer(envelope); });
+    return rv;
+}
+
+// GOST SignedData as the device builds and checks it (probe v2, JOURNAL of
+// 10 October 2026): signed attributes contentType, signingTime, messageDigest
+// and OpenSSL's standard S/MIME capabilities; the digest algorithm with NULL
+// in the signer info; the GOST public-key OID with NULL as the signature
+// algorithm; the key passed signing without being matched to the
+// certificate; Verify returning neither data nor signers on failure and no
+// signers for a signature-only check. CKA_TRUSTED and the token's trusted
+// store are left out: there the two differ by the owner's decision.
+static void verifyGostCmsParity(Module& module, CK_SESSION_HANDLE session,
+                                CK_FUNCTION_LIST_EXTENDED_PTR ex)
+{
+    const Bytes rootId = asciiBytes("parity-cms-root");
+    const Bytes leafId = asciiBytes("parity-cms-leaf");
+    const Bytes otherId = asciiBytes("parity-cms-other");
+    for (const Bytes* id : {&rootId, &leafId, &otherId})
+        removePriorTestObjects(module, session, *id);
+    const CmsKeyPair root = cmsGostKeyPair(module, session, rootId, 256);
+    const CmsKeyPair leaf = cmsGostKeyPair(module, session, leafId, 256);
+    const CmsKeyPair other = cmsGostKeyPair(module, session, otherId, 256);
+    const Bytes rootName = cmsName("CryptoMost Parity CA");
+    const Bytes leafName = cmsName("CryptoMost Parity Signer");
+    const Bytes otherName = cmsName("CryptoMost Unrelated CA");
+    const Bytes rootDer = cmsGostCertificate(module, session, root.publicKey, root.privateKey,
+                                             rootName, rootName, 21, true, 256);
+    const Bytes leafDer = cmsGostCertificate(module, session, leaf.publicKey, root.privateKey,
+                                             rootName, leafName, 22, false, 256);
+    const Bytes otherDer = cmsGostCertificate(module, session, other.publicKey, other.privateKey,
+                                              otherName, otherName, 23, true, 256);
+    const CK_OBJECT_HANDLE rootCert = cmsTokenCertificate(module, session, rootId, rootDer, rootName);
+    const CK_OBJECT_HANDLE leafCert = cmsTokenCertificate(module, session, leafId, leafDer, leafName);
+    (void)cmsTokenCertificate(module, session, otherId, otherDer, otherName);
+    const Bytes content = asciiBytes("CryptoMost GOST CMS parity payload");
+
+    Bytes attached;
+    check(cmsSign(ex, session, content, leafCert, leaf.privateKey, {rootCert}, 0, &attached,
+                  "attached, explicit key, chain [root]"), CKR_OK, "C_EX_PKCS7Sign(attached)");
+    const SignedDataParts parts = signedDataParts(attached);
+    const Bytes streebog = oid({0x2a, 0x85, 0x03, 0x07, 0x01, 0x01, 0x02, 0x02});
+    expectBytes(parts.digestAlgorithms, der(0x31, sequence({streebog})),
+                "CMS digestAlgorithms (no parameters)");
+    expectBytes(parts.contentType, cmsDataOid(), "CMS content type");
+    if (!parts.hasContent || parts.content != content) fail("attached CMS does not carry the data");
+    std::vector<Bytes> expectedCertificates = {leafDer, rootDer};
+    std::sort(expectedCertificates.begin(), expectedCertificates.end());
+    if (parts.certificates != expectedCertificates)
+        fail("CMS certificates are not the signer's and the chain's, in DER order");
+    expectBytes(parts.signerVersion, integer({1}), "SignerInfo version");
+    expectBytes(parts.sid, sequence({certificateFields(leafDer).issuer, certificateFields(leafDer).serial}),
+                "SignerInfo issuerAndSerialNumber");
+    expectBytes(parts.digestAlgorithm, sequence({streebog, nullValue()}),
+                "SignerInfo digest algorithm (with NULL)");
+    expectBytes(parts.signatureAlgorithm,
+                sequence({oid({0x2a, 0x85, 0x03, 0x07, 0x01, 0x01, 0x01, 0x01}), nullValue()}),
+                "SignerInfo signature algorithm (GOST key OID with NULL)");
+    if (parts.signedAttributes.size() != 4) fail("CMS does not carry the device's four signed attributes");
+    std::vector<Bytes> sortedAttributes = parts.signedAttributes;
+    std::sort(sortedAttributes.begin(), sortedAttributes.end());
+    if (sortedAttributes != parts.signedAttributes) fail("CMS signed attributes are not in DER order");
+    const Bytes contentDigest = digest(module, session, CKM_GOSTR3411_12_256, content, 32);
+    const Bytes contentTypeAttribute = sequence({oid({0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x03}),
+                                                 der(0x31, cmsDataOid())});
+    const Bytes digestAttribute = sequence({oid({0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x04}),
+                                            der(0x31, der(0x04, contentDigest))});
+    const Bytes capabilities = bytesFromHex(
+        "3081a706092a864886f70d01090f318199308196300b060960864801650304012a"
+        "300a06082a85030701010202300a06082a85030701010203300806062a8503020209"
+        "300806062a8503020215300b0609608648016503040116300b060960864801650304"
+        "0102300a06082a864886f70d0307300e06082a864886f70d030202020080300d0608"
+        "2a864886f70d0302020140300706052b0e030207300d06082a864886f70d0302020128");
+    const Bytes signingTimeOid = oid({0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x05});
+    bool sawType = false, sawTime = false, sawDigest = false, sawCapabilities = false;
+    for (const Bytes& attribute : parts.signedAttributes)
+    {
+        if (attribute == contentTypeAttribute) sawType = true;
+        else if (attribute == digestAttribute) sawDigest = true;
+        else if (attribute == capabilities) sawCapabilities = true;
+        else if (attribute.size() == 30 &&
+                 Bytes(attribute.begin() + 2, attribute.begin() + 2 + signingTimeOid.size()) == signingTimeOid &&
+                 attribute[2 + signingTimeOid.size()] == 0x31 && attribute[4 + signingTimeOid.size()] == 0x17)
+            sawTime = true;
+    }
+    if (!sawType || !sawTime || !sawDigest || !sawCapabilities)
+        fail("CMS signed attributes differ from the device's contentType, signingTime (UTCTime), "
+             "messageDigest and S/MIME capabilities");
+    trace("PARITY", "CMS signed attributes: as on the device");
+    if (parts.signature.size() != 64) fail("GOST-256 CMS signature is not 64 bytes");
+    verifySignatureOk(module, session, leaf.publicKey, CKM_GOSTR3410,
+                      digest(module, session, CKM_GOSTR3411_12_256, parts.signedAttributesSet, 32),
+                      parts.signature, "CMS signature over the signed attributes");
+
+    expectVerified(cmsVerify(ex, session, attached, &rootDer, nullptr, true, 0, nullptr,
+                             "verify, root trusted"), &content, &leafDer, "verify, root trusted");
+    Bytes tampered = attached;
+    tampered[tampered.size() - 3] ^= 1;
+    expectRejected(cmsVerify(ex, session, tampered, &rootDer, nullptr, true, 0, nullptr,
+                             "verify, tampered signature"), CKR_SIGNATURE_INVALID,
+                   "verify, tampered signature");
+    expectRejected(cmsVerify(ex, session, attached, &otherDer, nullptr, true, 0, nullptr,
+                             "verify, unrelated CA trusted"), CKR_CERT_CHAIN_NOT_VERIFIED,
+                   "verify, unrelated CA trusted");
+    expectVerified(cmsVerify(ex, session, attached, nullptr, nullptr, false,
+                             CKF_VENDOR_CHECK_SIGNATURE_ONLY, nullptr, "verify, signature only"),
+                   &content, nullptr, "verify, signature only, no store");
+    const CmsVerifyResult noStore = cmsVerify(ex, session, attached, nullptr, nullptr, false, 0,
+                                              nullptr, "verify, no store and no flags");
+    check(noStore.initRv, CKR_ARGUMENTS_BAD, "C_EX_PKCS7VerifyInit(no store, no flags)");
+    trace("PARITY", "verify, no store and no flags: as on the device");
+    expectVerified(cmsVerify(ex, session, attached, &leafDer, nullptr, true,
+                             CKF_VENDOR_ALLOW_PARTIAL_CHAINS, nullptr, "verify, partial chain"),
+                   &content, &leafDer, "verify, partial chain to a trusted leaf");
+    expectRejected(cmsVerify(ex, session, attached, &rootDer, nullptr, true,
+                             CKF_VENDOR_DO_NOT_USE_INTERNAL_CMS_CERTS, nullptr,
+                             "verify, envelope certificates ignored"), CKR_SIGNATURE_INVALID,
+                   "verify, envelope certificates ignored");
+    expectVerified(cmsVerify(ex, session, attached, &rootDer, &leafDer, true,
+                             CKF_VENDOR_DO_NOT_USE_INTERNAL_CMS_CERTS, nullptr,
+                             "verify, signer given in the store"),
+                   &content, &leafDer, "verify, signer given in the store");
+
+    Bytes envelope;
+    check(cmsSign(ex, session, content, leafCert, CK_INVALID_HANDLE, {rootCert}, 0, &envelope,
+                  "attached, key found by the certificate's CKA_ID"),
+          CKR_OK, "C_EX_PKCS7Sign(CK_INVALID_HANDLE)");
+    expectVerified(cmsVerify(ex, session, envelope, &rootDer, nullptr, true, 0, nullptr,
+                             "verify, key found by CKA_ID"), &content, &leafDer,
+                   "verify, key found by CKA_ID");
+    check(cmsSign(ex, session, content, leafCert, leaf.privateKey, {}, 0, &envelope,
+                  "attached, no chain"), CKR_OK, "C_EX_PKCS7Sign(no chain)");
+    if (signedDataParts(envelope).certificates != std::vector<Bytes>{leafDer})
+        fail("CMS without a chain does not carry exactly the signer's certificate");
+    expectVerified(cmsVerify(ex, session, envelope, &rootDer, nullptr, true, 0, nullptr,
+                             "verify, no chain in the envelope"), &content, &leafDer,
+                   "verify, no chain in the envelope");
+    for (CK_ULONG flags : {CK_ULONG(PKCS7_DETACHED_SIGNATURE),
+                           CK_ULONG(PKCS7_DETACHED_SIGNATURE | USE_HARDWARE_HASH)})
+    {
+        check(cmsSign(ex, session, content, leafCert, leaf.privateKey, {rootCert}, flags, &envelope,
+                      "detached"), CKR_OK, "C_EX_PKCS7Sign(detached)");
+        if (signedDataParts(envelope).hasContent) fail("detached CMS carries the data");
+        expectVerified(cmsVerify(ex, session, envelope, &rootDer, nullptr, true, 0, &content,
+                                 "verify, detached"), nullptr, &leafDer, "verify, detached");
+    }
+    check(cmsSign(ex, session, content, leafCert, leaf.privateKey, {rootCert}, USE_HARDWARE_HASH,
+                  &envelope, "attached, hardware hash"), CKR_OK, "C_EX_PKCS7Sign(hardware hash)");
+    expectVerified(cmsVerify(ex, session, envelope, &rootDer, nullptr, true, 0, nullptr,
+                             "verify, hardware hash"), &content, &leafDer, "verify, hardware hash");
+    check(cmsSign(ex, session, content, leafCert, root.privateKey, {}, 0, &envelope,
+                  "the signer's certificate with the root's key"),
+          CKR_OK, "C_EX_PKCS7Sign(key of another pair)");
+    expectRejected(cmsVerify(ex, session, envelope, &rootDer, nullptr, true, 0, nullptr,
+                             "verify, signed by another key"), CKR_SIGNATURE_INVALID,
+                   "verify, signed by another key");
+    check(cmsSign(ex, session, content, leafCert, leaf.publicKey, {}, 0, nullptr,
+                  "public key passed as the private key"),
+          CKR_KEY_TYPE_INCONSISTENT, "C_EX_PKCS7Sign(public key as private)");
+
+    for (const Bytes* id : {&rootId, &leafId, &otherId})
+        removePriorTestObjects(module, session, *id);
+    trace("PARITY", "case cms passed");
+}
+
 // Runs against an initialized token with P11_TEST_USER_PIN and leaves it as it
 // found it: every object a case creates is removed.
 static void verifyDeviceParity(const fs::path& modulePath)
@@ -7520,6 +7898,8 @@ static void verifyDeviceParity(const fs::path& modulePath)
 
     trace("PARITY", "case csr");
     verifyCsrParity(module, session, ex);
+    trace("PARITY", "case cms");
+    verifyGostCmsParity(module, session, ex);
 
     logout(module, session, "CKU_USER");
     closeSession(module, session);

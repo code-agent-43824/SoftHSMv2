@@ -250,9 +250,9 @@ jobs:
           P11_TEST_USER_PIN=12345678 \
             ./portable-token-e2e ex-init-token "$module"
       # The cases written to hold on the reference Rutoken as well, the same
-      # command the owner runs against librtpkcs11ecp: C_EX_CreateCSR so far.
-      # Windows and macOS reach it through the battery in the release
-      # verifier jobs.
+      # command the owner runs against librtpkcs11ecp: C_EX_CreateCSR and
+      # GOST CMS. Windows and macOS reach it through the battery in the
+      # release verifier jobs.
       - name: Verify the device-parity cases
         run: |
           export HOME="$GITHUB_WORKSPACE/device-parity-home"

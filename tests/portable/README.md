@@ -157,14 +157,24 @@ enumeration check used by CI to verify first-use configuration selection.
 `device-parity <module>` runs the cases written to hold both on this module
 and on the reference Rutoken through the vendor's `librtpkcs11ecp`: every
 expectation in them was read off the device by
-`tests/portable/rutoken-ext-probe.c` (see `docs/JOURNAL.md`). So far it holds
-one case, `csr`: `C_EX_CreateCSR` for GOST-256 and RSA-2048 key pairs, the
-exact DER of the subject, public key, extension request and signature
-algorithm, the self-signature checked by the token, and the device's
-refusals (no `CKA_SIGN`, odd or unknown DN strings, a private key as the
-public one, keys of different pairs, no login). It needs an initialized token
-and `P11_TEST_USER_PIN`, does not format it, logs the user out and back in
-once, and removes every object it creates:
+`tests/portable/rutoken-ext-probe.c` (see `docs/JOURNAL.md`). Its cases:
+
+- `csr`: `C_EX_CreateCSR` for GOST-256 and RSA-2048 key pairs, with and
+  without a private key handle, the exact DER of the subject, public key,
+  extension request and signature algorithm, the self-signature checked by
+  the token, and the device's refusals (no `CKA_SIGN`, odd or unknown DN
+  strings, a private key as the public one, keys of different pairs, no
+  login);
+- `cms`: GOST-256 `C_EX_PKCS7Sign` and the `C_EX_PKCS7Verify*` family -
+  the envelope's structure and signed attributes, attached, detached,
+  hardware hash, no chain, the key found by the certificate's `CKA_ID`, a key
+  of another pair, a public key as the private one; verification with a
+  trusted root, a tampered signature, an unrelated CA, signature only, no
+  store, a partial chain, and the envelope's certificates ignored. On every
+  failure neither data nor signers come back, as on the device.
+
+It needs an initialized token and `P11_TEST_USER_PIN`, does not format it,
+logs the user out and back in once, and removes every object it creates:
 
 ```sh
 P11_TEST_USER_PIN=12345678 ./bin/portable-token-e2e device-parity \
