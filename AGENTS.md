@@ -374,6 +374,14 @@ name.
   the device, not better compatibility. "The application got further" is a
   weaker test than "this is what the device does", and the two have already
   disagreed once.
+- **RSA in `C_EX_PKCS7Sign` stays, although the device refuses it.** The
+  reference Rutoken answers `CKR_KEY_TYPE_INCONSISTENT` (0x63) to an RSA key
+  in `C_EX_PKCS7Sign` (probe run of 9 October 2026, JOURNAL); this module
+  signs RSA CMS. *Reason:* the owner's decision of 10 October 2026, made after
+  being shown the device's refusal: RSA CMS was his own request (request №3,
+  released in `.66`), and it stays. This is the one deliberate exception to
+  the rule above. The battery treats it as dual: 0x63 on the device, a valid
+  envelope on the fork.
 
 ## Departures from the rules above
 
