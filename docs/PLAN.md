@@ -20,12 +20,19 @@
       Этапы в порядке владельца, после каждого — пауза на его проверку:
       1. [x] CSR: `C_EX_CreateCSR` в форке по структуре устройства + кейс `csr`.
          Выпущено в `v2.7.0-portable.70` (`40569da8`), проверено на шести
-         платформах и по опубликованному архиву (WORKLOG 10.10). Ждёт прогона
-         владельцем `device-parity` на токене.
-      2. [ ] ГОСТ-CMS parity: подпись указанным ключом без самопроверки,
-         signedAttrs и алгоритмы как у устройства, signers/данные при ошибках
-         и `CHECK_SIGNATURE_ONLY`, `VerifyInit` без хранилища → 0x7,
-         `ALLOW_PARTIAL_CHAINS`; кейс `cms`.
+         платформах и по опубликованному архиву (WORKLOG 10.10). Владелец
+         прогнал `device-parity` на токене 10.10: EXIT=0.
+         [~] Поправка по отчёту владельца 10.10: `hPrivKey = CK_INVALID_HANDLE`
+         — закрытый ключ искать по `CKA_ID` открытого, как устройство
+         (pkcs11-tool форка OpenSC шлёт именно так; сейчас форк отвечает
+         0x82); в кейс `csr` — вызов без явного ключа.
+      2. [~] ГОСТ-CMS parity: подпись указанным ключом без самопроверки,
+         открытый ключ вместо закрытого → 0x63, signedAttrs и алгоритмы как у
+         устройства, ни signers, ни данных при ошибке, signers=0 при
+         `CHECK_SIGNATURE_ONLY`, `VerifyInit` без хранилища и флагов → 0x7,
+         `ALLOW_PARTIAL_CHAINS` с доверенным листом; кейс `cms`.
+         `USE_TRUSTED_CERTS_FROM_TOKEN` не трогаем: это расхождение по
+         `CKA_TRUSTED`, которое владелец велел оставить dual (этап 4).
       3. [ ] token-manage (`force-user-pin-change`, `standard-default-user-pin`,
          `MODE_GET_PIN_SET_TO_BE_CHANGED`, unblock, restore-factory-defaults) и
          локальный PIN (`MODE_GET_LOCAL_PIN_INFO`) — в форке сейчас 0x54.
