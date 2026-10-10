@@ -168,6 +168,29 @@ CK_RV readPublicKey(CK_SESSION_HANDLE session, CK_OBJECT_HANDLE handle, PublicKe
     return CKR_KEY_TYPE_INCONSISTENT;
 }
 
+// No private key handle: the device signs with the private key carrying the
+// public key's CKA_ID, which is how pkcs11-tool of the OpenSC fork calls it.
+CK_RV findPrivateKey(CK_SESSION_HANDLE session, CK_OBJECT_HANDLE publicKey,
+                     CK_OBJECT_HANDLE& privateKey)
+{
+    Bytes id;
+    CK_RV rv = attribute(session, publicKey, CKA_ID, id);
+    if (rv != CKR_OK) return rv;
+    CK_OBJECT_CLASS privateClass = CKO_PRIVATE_KEY;
+    CK_ATTRIBUTE query[] = {
+        { CKA_CLASS, &privateClass, sizeof(privateClass) },
+        { CKA_ID, id.empty() ? NULL_PTR : id.data(), static_cast<CK_ULONG>(id.size()) }
+    };
+    rv = C_FindObjectsInit(session, query, 2);
+    if (rv != CKR_OK) return rv;
+    CK_ULONG count = 0;
+    rv = C_FindObjects(session, &privateKey, 1, &count);
+    CK_RV finished = C_FindObjectsFinal(session);
+    if (rv != CKR_OK) return rv;
+    if (finished != CKR_OK) return finished;
+    return count ? CKR_OK : CKR_KEY_HANDLE_INVALID;
+}
+
 using RequestPtr = std::unique_ptr<X509_REQ, decltype(&X509_REQ_free)>;
 using ConfPtr = std::unique_ptr<CONF, decltype(&NCONF_free)>;
 using NamePtr = std::unique_ptr<X509_NAME, decltype(&X509_NAME_free)>;
@@ -494,6 +517,10 @@ CK_RV create(CK_SESSION_HANDLE session, CK_OBJECT_HANDLE publicKey,
         PublicKey key;
         rv = readPublicKey(session, publicKey, key);
         if (rv != CKR_OK) return rv;
+        if (privateKey == CK_INVALID_HANDLE) {
+            rv = findPrivateKey(session, publicKey, privateKey);
+            if (rv != CKR_OK) return rv;
+        }
         CK_OBJECT_CLASS privateClass = CKO_VENDOR_DEFINED;
         rv = scalar(session, privateKey, CKA_CLASS, privateClass);
         if (rv != CKR_OK) return rv;

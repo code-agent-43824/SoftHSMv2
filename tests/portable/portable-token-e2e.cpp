@@ -7425,6 +7425,17 @@ static void verifyCsrParity(Module& module, CK_SESSION_HANDLE session,
                       digest(module, session, CKM_GOSTR3411_12_256, parts.info, 32),
                       parts.signature, "GOST CSR self-signature");
 
+    // No private key handle: the device signs with the private key that has
+    // the public key's CKA_ID - the call pkcs11-tool of the OpenSC fork makes.
+    check(createCsr(ex, session, gost.publicKey, CK_INVALID_HANDLE, dn, {}, {}, &request,
+                    "GOST-256, hPrivKey = CK_INVALID_HANDLE"),
+          CKR_OK, "C_EX_CreateCSR(GOST-256, key found by CKA_ID)");
+    parts = csrParts(request);
+    expectBytes(parts.subject, subject, "GOST CSR subject, key found by CKA_ID");
+    verifySignatureOk(module, session, gost.publicKey, CKM_GOSTR3410,
+                      digest(module, session, CKM_GOSTR3411_12_256, parts.info, 32),
+                      parts.signature, "GOST CSR signed by the key found by CKA_ID");
+
     // Russian identifiers and e-mail: the string types the device chooses.
     check(createCsr(ex, session, gost.publicKey, gost.privateKey,
                     {"CN", "CryptoMost Battery", "emailAddress", "battery@example.com",
@@ -7458,6 +7469,12 @@ static void verifyCsrParity(Module& module, CK_SESSION_HANDLE session,
                 "RSA CSR signature algorithm (OIW sha1WithRSA)");
     verifySignatureOk(module, session, rsa.publicKey, CKM_SHA1_RSA_PKCS, parts.info,
                       parts.signature, "RSA CSR self-signature");
+    check(createCsr(ex, session, rsa.publicKey, CK_INVALID_HANDLE, dn, {}, {}, &request,
+                    "RSA-2048, hPrivKey = CK_INVALID_HANDLE"),
+          CKR_OK, "C_EX_CreateCSR(RSA-2048, key found by CKA_ID)");
+    parts = csrParts(request);
+    verifySignatureOk(module, session, rsa.publicKey, CKM_SHA1_RSA_PKCS, parts.info,
+                      parts.signature, "RSA CSR signed by the key found by CKA_ID");
 
     // Refusals, each with the device's own code.
     check(createCsr(ex, session, noSign.publicKey, noSign.privateKey, dn, {}, {}, nullptr,

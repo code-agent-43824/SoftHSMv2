@@ -671,7 +671,10 @@ TC26-Z: так делает устройство, сверено на 4096 ба�
   отвечает на значение, которое OpenSSL не кодирует, — не сверено);
   закрытый ключ вместо открытого — `CKR_KEY_TYPE_INCONSISTENT`; без
   `CKA_SIGN` — `CKR_KEY_FUNCTION_NOT_PERMITTED`; ключи разных пар —
-  `CKR_FUNCTION_FAILED`; без входа — `CKR_USER_NOT_LOGGED_IN`. Буфер
+  `CKR_FUNCTION_FAILED`; без входа — `CKR_USER_NOT_LOGGED_IN`.
+  `hPrivKey = CK_INVALID_HANDLE` — закрытый ключ с `CKA_ID` открытого, как у
+  устройства (так вызывает pkcs11-tool форка OpenSC); не найден —
+  `CKR_KEY_HANDLE_INVALID` (с устройством не сверено). Буфер
   освобождается `C_EX_FreeBuffer`. С устройством не сверены: EC-ключи (здесь
   `CKR_KEY_TYPE_INCONSISTENT`), другие имена расширений, `critical,`, пределы
   длин строк.
