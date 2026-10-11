@@ -1,15 +1,26 @@
 # STATUS — состояние проекта
 
-Обновлено: 2026-10-10. Транк: `main`.
+Обновлено: 2026-10-11. Транк: `main`.
 
-Текущий релиз `v2.7.0-portable.71` на `bd2c9dbd`: ГОСТ-CMS собирается и
-проверяется как на устройстве, `C_EX_CreateCSR` без `hPrivKey` ищет ключ по
-`CKA_ID`, `device-parity` — кейсы `csr` и `cms`. CI `38061336174` и релиз
-`38061563739` успешны, оба кейса прошли во всех шести verifier jobs. Linux x64
-ZIP: SHA-256 и CRC в порядке, BuildID модуля `f4ce7bf6…`; проба v2 на
-опубликованном модуле совпала с устройством в разделах CSR и ГОСТ-CMS (кроме
-длин журнала). Владелец прогнал `device-parity` `.70` (`csr`) на токене —
-EXIT=0; кейс `cms` на устройстве ещё не запускался.
+Текущий релиз `v2.7.0-portable.72` на `3c1adb26` закрывает задание 09.10
+(dual-профильная батарея под реальный Рутокен). Под профилем работают
+`C_EX_TokenManage` (force-user-pin-change, standard-default-user-pin) и
+`C_EX_SlotManage` (признак смены PIN, статус локального PIN,
+restore-factory-defaults); hardware feature не находится пустым шаблоном, как
+у устройства. Команды `device-parity` (кейсы `csr`, `cms`, `divergences`,
+`journal`) и `device-parity-write` (`token-manage`, `local-pin`, `trusted`,
+`factory`) — в CI и в `battery`. CI `38121417824` и релиз `38121551176`
+успешны, все кейсы прошли во всех шести verifier jobs. Linux x64 ZIP: SHA-256
+и CRC в порядке, BuildID модуля `bd89d56d…`; проба v2 на опубликованном модуле
+совпала с устройством в разделах 7–9 по всем кодам. Владелец прогнал
+`device-parity` `.71` (`csr`, `cms`) на токене — EXIT=0; кейсы этапов 3–5 на
+устройстве ещё не запускались. Известные несовпадения с устройством, не
+тронутые по слову владельца: флаги PIN после формата, длины и состав записи
+журнала, установка `CKA_TRUSTED` пользователем (JOURNAL 11.10).
+
+Предыдущий релиз `v2.7.0-portable.71` на `bd2c9dbd`: ГОСТ-CMS как на
+устройстве, `C_EX_CreateCSR` без `hPrivKey`, `device-parity` — кейсы `csr` и
+`cms`; BuildID `f4ce7bf6…`.
 
 Предыдущий релиз `v2.7.0-portable.70` на `40569da8`: `C_EX_CreateCSR` и команда
 `device-parity` (кейс `csr`), BuildID `b6c2e413…`. `.68` и `.69` меняли только
