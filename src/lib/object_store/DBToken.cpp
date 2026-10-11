@@ -704,6 +704,43 @@ bool DBToken::updateLocalPIN(CK_ULONG id, const ByteString& expected,
 	return true;
 }
 
+bool DBToken::getUserPinExpired(bool& expired)
+{
+	if (_connection == NULL) return false;
+	DBObject object(_connection);
+	if (!object.startTransaction(DBObject::ReadOnly)) return false;
+	if (!object.find(DBTOKEN_OBJECT_TOKENINFO))
+	{
+		object.abortTransaction();
+		return false;
+	}
+	expired = object.attributeExists(CKA_OS_USERPINEXPIRED) &&
+	          object.getAttribute(CKA_OS_USERPINEXPIRED).getBooleanValue();
+	return object.commitTransaction();
+}
+
+bool DBToken::setUserPinExpired(bool expired)
+{
+	if (_connection == NULL) return false;
+	DBObject object(_connection);
+	if (!object.startTransaction(DBObject::ReadWrite)) return false;
+	if (!object.find(DBTOKEN_OBJECT_TOKENINFO))
+	{
+		object.abortTransaction();
+		return false;
+	}
+	const bool stored = expired
+		? object.setAttribute(CKA_OS_USERPINEXPIRED, OSAttribute(true))
+		: !object.attributeExists(CKA_OS_USERPINEXPIRED) ||
+		  object.deleteAttribute(CKA_OS_USERPINEXPIRED);
+	if (!stored || !object.commitTransaction())
+	{
+		object.abortTransaction();
+		return false;
+	}
+	return true;
+}
+
 // Retrieve the token serial
 bool DBToken::getTokenSerial(ByteString& serial)
 {
@@ -1162,6 +1199,12 @@ bool DBToken::resetToken(const ByteString& label)
 			tokenObject.abortTransaction();
 			return false;
 		}
+	}
+	if (tokenObject.attributeExists(CKA_OS_USERPINEXPIRED) &&
+	    !tokenObject.deleteAttribute(CKA_OS_USERPINEXPIRED))
+	{
+		tokenObject.abortTransaction();
+		return false;
 	}
 
 	if (!tokenObject.attributeExists(CKA_OS_TOKENFLAGS))

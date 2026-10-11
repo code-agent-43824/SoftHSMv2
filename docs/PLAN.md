@@ -39,7 +39,7 @@
          `CKA_TRUSTED`, которое владелец велел оставить dual (этап 4).
       Владелец 11.10: «доделай то, что хотел, дальше не залезай, поставь
       точку» — этапы 3–5 без промежуточных пауз, новых тем не открывать.
-      3. [~] token-manage и локальный PIN. Форк: `TokenManage` режимы 6
+      3. [x] token-manage и локальный PIN. Форк: `TokenManage` режимы 6
          (`force-user-pin-change`) и 3 (`standard-default-user-pin`) под SO;
          `SlotManage` — `MODE_GET_PIN_SET_TO_BE_CHANGED`,
          `MODE_GET_LOCAL_PIN_INFO`, `MODE_RESTORE_FACTORY_DEFAULTS` (данные —
@@ -48,7 +48,9 @@
          пользователем и форматом. Режимы 4 и 5 остаются 0x54. В клиенте —
          команда `device-parity-write`: нужен SO PIN, меняет состояние PIN,
          ставит локальный PIN 3 и в конце форматирует токен в заводские PIN
-         (restore-factory — только с ключом эмитента из окружения).
+         (restore-factory — только с ключом эмитента из окружения). Сделано,
+         проверено на форке (WORKLOG 11.10); заодно hardware feature больше не
+         находится пустым шаблоном — как у устройства (`26396fb8`).
       4. [~] Расхождения dual: `CKA_EXTRACTABLE` false→true (0x0 и TRUE либо
          0x10 и FALSE), приватный `CKA_VALUE` (0x11 или 0x12), RSA CMS (0x63
          либо проверяемый конверт), `CKA_TRUSTED` после переоткрытия (FALSE и

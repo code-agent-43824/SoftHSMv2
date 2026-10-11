@@ -265,6 +265,22 @@ typedef CK_LOCAL_PIN_INFO CK_PTR CK_LOCAL_PIN_INFO_PTR;
 #define LOCAL_PIN_FLAGS_FROM_SCREEN	0x00000002UL
 #define LOCAL_PIN_FLAGS_IS_UTF8		0x00000004UL
 
+/* Parameters of C_EX_SlotManage(MODE_RESTORE_FACTORY_DEFAULTS): the current
+ * SO PIN, the format parameters of C_EX_InitToken and the new emitent key.
+ * The layout is the one pkcs11-tool of the OpenSC fork passes to the device. */
+typedef struct CK_VENDOR_RESTORE_FACTORY_DEFAULTS_PARAMS {
+	CK_ULONG ulSizeofThisStructure;
+	CK_BYTE_PTR pAdminPin;
+	CK_ULONG ulAdminPinLen;
+	CK_RUTOKEN_INIT_PARAM_PTR pInitParam;
+	CK_BYTE_PTR pNewEmitentKey;
+	CK_ULONG ulNewEmitentKeyLen;
+	CK_ULONG ulNewEmitentKeyRetryCount;
+	CK_KEY_TYPE newEmitentKeyType;
+} CK_VENDOR_RESTORE_FACTORY_DEFAULTS_PARAMS;
+
+typedef CK_VENDOR_RESTORE_FACTORY_DEFAULTS_PARAMS CK_PTR CK_VENDOR_RESTORE_FACTORY_DEFAULTS_PARAMS_PTR;
+
 /* C_EX_SlotManage and C_EX_TokenManage modes. */
 #define MODE_SET_BLUETOOTH_POWEROFF_TIMEOUT	0x01UL
 #define MODE_SET_CHANNEL_TYPE			0x02UL

@@ -18,6 +18,7 @@
 #include <iterator>
 #include <limits>
 #include <optional>
+#include <random>
 #include <sstream>
 #include <stdexcept>
 #include <string>

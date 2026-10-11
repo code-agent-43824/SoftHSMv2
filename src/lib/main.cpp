@@ -2103,11 +2103,13 @@ PKCS_API CK_RV C_EX_FormatDrive
 
 PKCS_API CK_RV C_EX_TokenManage
 (
-	CK_SESSION_HANDLE /*hSession*/, CK_ULONG /*ulMode*/,
-	CK_VOID_PTR /*pValue*/
+	CK_SESSION_HANDLE hSession, CK_ULONG ulMode,
+	CK_VOID_PTR pValue
 )
 {
-	return CKR_FUNCTION_NOT_SUPPORTED;
+	try { return SoftHSM::i()->C_EX_TokenManage(hSession, ulMode, pValue); }
+	catch (...) { FatalException(); }
+	return CKR_FUNCTION_FAILED;
 }
 
 PKCS_API CK_RV C_EX_GenerateActivationPassword
@@ -2152,10 +2154,12 @@ PKCS_API CK_RV C_EX_SignInvisible
 
 PKCS_API CK_RV C_EX_SlotManage
 (
-	CK_SLOT_ID /*slotID*/, CK_ULONG /*ulMode*/, CK_VOID_PTR /*pValue*/
+	CK_SLOT_ID slotID, CK_ULONG ulMode, CK_VOID_PTR pValue
 )
 {
-	return CKR_FUNCTION_NOT_SUPPORTED;
+	try { return SoftHSM::i()->C_EX_SlotManage(slotID, ulMode, pValue); }
+	catch (...) { FatalException(); }
+	return CKR_FUNCTION_FAILED;
 }
 
 PKCS_API CK_RV C_EX_WrapKey

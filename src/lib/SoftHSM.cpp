@@ -1479,6 +1479,92 @@ CK_RV SoftHSM::C_EX_SetLocalPIN(CK_SLOT_ID slotID, CK_UTF8CHAR_PTR pUserPin,
 	return slot->getToken()->setLocalPIN(ulLocalID, currentPIN, newPIN);
 }
 
+// The modes the reference device was observed in (probe v2 of 10 October 2026
+// and the OpenSC fork's probe 3; docs/JOURNAL.md): a forced change of the user
+// PIN and the return to the standard default PIN, both in an SO session. The
+// Bluetooth modes answer as the device does on a token without Bluetooth;
+// resetting to and setting the default PIN are not modelled.
+CK_RV SoftHSM::C_EX_TokenManage(CK_SESSION_HANDLE hSession, CK_ULONG ulMode, CK_VOID_PTR pValue)
+{
+	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;
+	if (!fakeRutokenECP) return CKR_FUNCTION_NOT_SUPPORTED;
+	Session* session = (Session*)handleManager->getSession(hSession);
+	if (session == NULL) return CKR_SESSION_HANDLE_INVALID;
+	if (ulMode != MODE_FORCE_USER_TO_CHANGE_PIN && ulMode != MODE_RESET_CUSTOM_PIN_TO_STANDARD)
+		return CKR_FUNCTION_NOT_SUPPORTED;
+	if (session->getState() != CKS_RW_SO_FUNCTIONS) return CKR_USER_NOT_LOGGED_IN;
+	if (pValue == NULL_PTR || *static_cast<CK_USER_TYPE*>(pValue) != CKU_USER)
+		return CKR_ARGUMENTS_BAD;
+	Token* token = session->getToken();
+	if (token == NULL) return CKR_GENERAL_ERROR;
+	if (ulMode == MODE_FORCE_USER_TO_CHANGE_PIN) return token->forceUserPINChange();
+	// No custom default PIN is ever set here, so the standard one is in force.
+	return CKR_OK;
+}
+
+// The slot-level modes the device was observed in: whether a PIN must be
+// changed, the state of a local PIN and the restore of factory defaults.
+CK_RV SoftHSM::C_EX_SlotManage(CK_SLOT_ID slotID, CK_ULONG ulMode, CK_VOID_PTR pValue)
+{
+	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;
+	if (!fakeRutokenECP) return CKR_FUNCTION_NOT_SUPPORTED;
+	if (slotID >= fakeRutokenLayout().size())
+		return slotID < FAKE_RUTOKEN_SLOT_COUNT ? CKR_TOKEN_NOT_PRESENT : CKR_SLOT_ID_INVALID;
+	Slot* slot = fakeRutokenSlot(slotID);
+	Token* token = slot == NULL ? NULL : slot->getToken();
+	if (token == NULL) return CKR_TOKEN_NOT_PRESENT;
+	switch (ulMode)
+	{
+		case MODE_GET_PIN_SET_TO_BE_CHANGED:
+		{
+			if (pValue == NULL_PTR) return CKR_ARGUMENTS_BAD;
+			const CK_USER_TYPE user = *static_cast<CK_USER_TYPE*>(pValue);
+			if (user != CKU_USER && user != CKU_SO) return CKR_USER_TYPE_INVALID;
+			// Only the user PIN can be forced; a factory PIN is not "expired":
+			// the device answers CKR_OK for both on a fresh token.
+			if (user == CKU_SO) return CKR_OK;
+			bool expired = false;
+			if (!token->getUserPINExpired(expired)) return CKR_DEVICE_ERROR;
+			return expired ? CKR_PIN_EXPIRED : CKR_OK;
+		}
+		case MODE_GET_LOCAL_PIN_INFO:
+		{
+			if (pValue == NULL_PTR) return CKR_ARGUMENTS_BAD;
+			CK_LOCAL_PIN_INFO_PTR info = static_cast<CK_LOCAL_PIN_INFO_PTR>(pValue);
+			if (info->ulPinID < 3 || info->ulPinID > 31) return CKR_ARGUMENTS_BAD;
+			CK_ULONG minLength = 0, maxRetries = 0, retriesLeft = 0;
+			const CK_RV rv = token->getLocalPINInfo(info->ulPinID, minLength, maxRetries, retriesLeft);
+			if (rv != CKR_OK) return rv;
+			// The values the device reports for a local PIN it holds.
+			info->ulMinSize = minLength;
+			info->ulMaxSize = 249;
+			info->ulMaxRetryCount = maxRetries;
+			info->ulCurrentRetryCount = retriesLeft;
+			info->flags = LOCAL_PIN_FLAGS_NOT_DEFAULT | LOCAL_PIN_FLAGS_IS_UTF8;
+			return CKR_OK;
+		}
+		case MODE_RESTORE_FACTORY_DEFAULTS:
+		{
+			// On the device: C_EX_InitToken with the current SO PIN, plus a new
+			// emitent key. This model has no use for the key; it is checked
+			// for shape and not kept.
+			CK_VENDOR_RESTORE_FACTORY_DEFAULTS_PARAMS_PTR params =
+				static_cast<CK_VENDOR_RESTORE_FACTORY_DEFAULTS_PARAMS_PTR>(pValue);
+			if (params == NULL_PTR ||
+			    params->ulSizeofThisStructure != sizeof(CK_VENDOR_RESTORE_FACTORY_DEFAULTS_PARAMS) ||
+			    params->pInitParam == NULL_PTR || params->pInitParam->UseRepairMode != 0 ||
+			    params->pNewEmitentKey == NULL_PTR || params->ulNewEmitentKeyLen != 32 ||
+			    (params->newEmitentKeyType != CKK_KUZNECHIK && params->newEmitentKeyType != CKK_MAGMA) ||
+			    params->ulNewEmitentKeyRetryCount < 1 || params->ulNewEmitentKeyRetryCount > 15)
+				return CKR_ARGUMENTS_BAD;
+			return C_EX_InitToken(slotID, params->pAdminPin, params->ulAdminPinLen,
+			                      params->pInitParam);
+		}
+		default:
+			return CKR_FUNCTION_NOT_SUPPORTED;
+	}
+}
+
 void SoftHSM::prepareSupportedMechanisms(std::map<std::string, CK_MECHANISM_TYPE> &t)
 {
 #ifndef WITH_FIPS

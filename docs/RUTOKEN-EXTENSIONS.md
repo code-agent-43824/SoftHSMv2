@@ -597,15 +597,38 @@ TC26-Z: так делает устройство, сверено на 4096 ба�
   — задать локальный PIN для ID 3–31. Создание авторизуется User PIN, смена —
   текущим значением этого локального PIN. У каждого локального PIN свой
   постоянный счётчик из 10 попыток с блокировкой на нуле. Данные удаляются
-  при форматировании. Чтение сведений о нём через `SlotManage` пока отложено.
-- **`C_EX_TokenManage(hSession, ulMode, pValue)`** — режимы `MODE_*`: таймаут
-  выключения Bluetooth, тип канала (USB/Bluetooth), сброс PIN к стандартному
-  или к заводскому, смена PIN по умолчанию, принудительная смена
-  пользовательского PIN.
-- **`C_EX_SlotManage(slotID, ulMode, pValue)`** — чтение: сведения о локальных
-  PIN-кодах (`MODE_GET_LOCAL_PIN_INFO` → массив `CK_LOCAL_PIN_INFO`),
-  информация о принудительной смене PIN (`MODE_GET_PIN_SET_TO_BE_CHANGED`),
-  имитовставка (`MODE_GET_IMIT`), сброс к заводским настройкам.
+  при форматировании. Сведения о нём — `C_EX_SlotManage`
+  (`MODE_GET_LOCAL_PIN_INFO`, ниже).
+- **`C_EX_TokenManage(hSession, ulMode, pValue)`** — `pValue` указывает на
+  `CK_USER_TYPE`. **Реализованы под профилем** два режима, снятые с устройства
+  (проба v2, JOURNAL 10.10), оба — в R/W SO-сессии, иначе
+  `CKR_USER_NOT_LOGGED_IN`, и оба только для `CKU_USER`, иначе
+  `CKR_ARGUMENTS_BAD`: `MODE_FORCE_USER_TO_CHANGE_PIN` (0x06) ставит признак
+  «PIN пользователя просрочен» — вход прежним PIN по-прежнему работает, признак
+  снимает смена PIN пользователем или формат; `MODE_RESET_CUSTOM_PIN_TO_STANDARD`
+  (0x03) отвечает `CKR_OK`: своего PIN по умолчанию модель не задаёт, в силе
+  стандартный. Bluetooth-режимы (0x01, 0x02), сброс к заводскому PIN (0x04) и
+  смена PIN по умолчанию (0x05) — `CKR_FUNCTION_NOT_SUPPORTED`. Признак
+  хранится необязательным атрибутом токена (`CKA_OS_USERPINEXPIRED`) в обоих
+  backend; токен без него никогда не принуждали. Флаги `C_GetTokenInfo` он не
+  меняет: что делает с ними устройство на незаводском токене, не снято.
+- **`C_EX_SlotManage(slotID, ulMode, pValue)`** — **реализованы под профилем**
+  три режима. `MODE_GET_PIN_SET_TO_BE_CHANGED` (0x07, `pValue` →
+  `CK_USER_TYPE`): `CKR_PIN_EXPIRED` для `CKU_USER` после принудительной смены,
+  иначе `CKR_OK` — и на заводском токене тоже, как у устройства; `CKU_SO` —
+  `CKR_OK`, другой тип — `CKR_USER_TYPE_INVALID`. `MODE_GET_LOCAL_PIN_INFO`
+  (0x05, `pValue` → один `CK_LOCAL_PIN_INFO` с заполненным `ulPinID`): для
+  заданного локального PIN — минимум из PIN-политики пользователя, максимум
+  249, попыток 10 и остаток, флаги `NOT_DEFAULT|IS_UTF8` (0x5), как у
+  устройства; незаданный ID 3–31 — `CKR_DEVICE_ERROR`, вне 3–31 —
+  `CKR_ARGUMENTS_BAD`. `MODE_RESTORE_FACTORY_DEFAULTS` (0x06, `pValue` →
+  `CK_VENDOR_RESTORE_FACTORY_DEFAULTS_PARAMS`: текущий SO PIN, полный
+  `CK_RUTOKEN_INIT_PARAM` и новый ключ эмитента) — формат как
+  `C_EX_InitToken` с теми же проверками; ключ эмитента (32 байта, Кузнечик или
+  Магма, попыток 1–15) проверяется по форме и не хранится — модели он ни для
+  чего не нужен. Ответ устройства на этот режим нашей пробой не снят; раскладка
+  структуры — как у pkcs11-tool форка OpenSC. `MODE_GET_IMIT` (0x04) —
+  `CKR_FUNCTION_NOT_SUPPORTED`.
 - **`C_EX_GetJournal(slotID, pJournal, pulJournalSize)`** — реализовано под
   профилем: двухпроходное чтение последней успешной подписи ГОСТ без входа.
   Пустой журнал возвращает нулевую длину. Запись сохраняется при перезапуске

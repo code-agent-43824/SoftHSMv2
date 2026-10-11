@@ -411,6 +411,29 @@ bool OSToken::updateLocalPIN(CK_ULONG id, const ByteString& expected,
 	return true;
 }
 
+bool OSToken::getUserPinExpired(bool& expired)
+{
+	if (!valid || !tokenObject->isValid()) return false;
+	expired = tokenObject->attributeExists(CKA_OS_USERPINEXPIRED) &&
+	          tokenObject->getAttribute(CKA_OS_USERPINEXPIRED).getBooleanValue();
+	return true;
+}
+
+bool OSToken::setUserPinExpired(bool expired)
+{
+	if (!valid || !tokenObject->startTransaction(OSObject::ReadWrite)) return false;
+	const bool stored = expired
+		? tokenObject->setAttribute(CKA_OS_USERPINEXPIRED, OSAttribute(true))
+		: !tokenObject->attributeExists(CKA_OS_USERPINEXPIRED) ||
+		  tokenObject->deleteAttribute(CKA_OS_USERPINEXPIRED);
+	if (!stored || !tokenObject->commitTransaction())
+	{
+		tokenObject->abortTransaction();
+		return false;
+	}
+	return true;
+}
+
 // Retrieve the token serial
 bool OSToken::getTokenSerial(ByteString& serial)
 {
@@ -797,6 +820,8 @@ bool OSToken::resetToken(const ByteString& label)
 	for (CK_ULONG id = 3; id <= 31; ++id)
 		if (tokenObject->attributeExists(CKA_OS_LOCALPIN(id)) &&
 		    !tokenObject->deleteAttribute(CKA_OS_LOCALPIN(id))) return false;
+	if (tokenObject->attributeExists(CKA_OS_USERPINEXPIRED) &&
+	    !tokenObject->deleteAttribute(CKA_OS_USERPINEXPIRED)) return false;
 
 	DEBUG_MSG("Token instance %s was succesfully reset", tokenPath.c_str());
 

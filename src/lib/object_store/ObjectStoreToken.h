@@ -87,6 +87,8 @@ public:
 	virtual bool getLocalPIN(CK_ULONG id, ByteString& record, bool& exists) = 0;
 	virtual bool updateLocalPIN(CK_ULONG id, const ByteString& expected,
 	                            const ByteString& replacement, bool& changed) = 0;
+	virtual bool getUserPinExpired(bool& expired) = 0;
+	virtual bool setUserPinExpired(bool expired) = 0;
 
 	// Retrieve the token serial
 	virtual bool getTokenSerial(ByteString& serial) = 0;

@@ -224,6 +224,8 @@ public:
 	CK_RV C_EX_SetLocalPIN(CK_SLOT_ID slotID, CK_UTF8CHAR_PTR pUserPin,
 	                      CK_ULONG ulUserPinLen, CK_UTF8CHAR_PTR pNewLocalPin,
 	                      CK_ULONG ulNewLocalPinLen, CK_ULONG ulLocalID);
+	CK_RV C_EX_TokenManage(CK_SESSION_HANDLE hSession, CK_ULONG ulMode, CK_VOID_PTR pValue);
+	CK_RV C_EX_SlotManage(CK_SLOT_ID slotID, CK_ULONG ulMode, CK_VOID_PTR pValue);
 
 private:
 	// Constructor

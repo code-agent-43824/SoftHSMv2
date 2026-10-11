@@ -392,6 +392,7 @@ static bool isModifiable(CK_ATTRIBUTE_TYPE type)
 	case CKA_OS_TOKENNAME:
 	case CKA_OS_SOPIN:
 	case CKA_OS_USERPIN:
+	case CKA_OS_USERPINEXPIRED:
 		return true;
 	default:
 		return false;
@@ -528,6 +529,7 @@ static AttributeKind attributeKind(CK_ATTRIBUTE_TYPE type)
 	case CKA_OS_USERPIN: return akBinary;
 	case CKA_OS_PINPOLICY: return akBinary;
 	case CKA_OS_TOKENNAME: return akBinary;
+	case CKA_OS_USERPINEXPIRED: return akBoolean;
 
 	case CKA_PARAMETER_SET: return akInteger;
 	case CKA_SEED: return akBinary;

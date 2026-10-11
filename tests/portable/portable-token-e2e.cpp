@@ -22,6 +22,7 @@
 #include <iterator>
 #include <limits>
 #include <optional>
+#include <random>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -98,6 +99,8 @@ static const char* rvName(CK_RV rv)
         case CKR_OPERATION_ACTIVE: return "CKR_OPERATION_ACTIVE";
         case CKR_OPERATION_NOT_INITIALIZED: return "CKR_OPERATION_NOT_INITIALIZED";
         case CKR_PIN_INCORRECT: return "CKR_PIN_INCORRECT";
+        case CKR_PIN_EXPIRED: return "CKR_PIN_EXPIRED";
+        case CKR_PIN_LOCKED: return "CKR_PIN_LOCKED";
         case CKR_PIN_INVALID: return "CKR_PIN_INVALID";
         case CKR_PIN_LEN_RANGE: return "CKR_PIN_LEN_RANGE";
         case CKR_SESSION_CLOSED: return "CKR_SESSION_CLOSED";
@@ -7881,6 +7884,16 @@ static void verifyGostCmsParity(Module& module, CK_SESSION_HANDLE session,
     trace("PARITY", "case cms passed");
 }
 
+static CK_BBOOL booleanAttribute(Module& module, CK_SESSION_HANDLE session,
+                                 CK_OBJECT_HANDLE object, CK_ATTRIBUTE_TYPE type)
+{
+    CK_BBOOL value = CK_FALSE;
+    CK_ATTRIBUTE query{type, &value, sizeof(value)};
+    callOk("C_GetAttributeValue", std::string("read ") + attributeName(type),
+           [&] { return module->C_GetAttributeValue(session, object, &query, 1); });
+    return value;
+}
+
 // Runs against an initialized token with P11_TEST_USER_PIN and leaves it as it
 // found it: every object a case creates is removed.
 static void verifyDeviceParity(const fs::path& modulePath)
@@ -7904,6 +7917,524 @@ static void verifyDeviceParity(const fs::path& modulePath)
     logout(module, session, "CKU_USER");
     closeSession(module, session);
     std::cout << "DEVICE-PARITY: all cases passed\n";
+}
+
+// ---- device-parity-write: the cases that change the token's state - PINs, a
+// local PIN, CKA_TRUSTED - and the format that returns it to factory state.
+// Needs P11_TEST_SO_PIN; the SO PIN is used, never guessed.
+
+struct ParityToken
+{
+    Module& module;
+    CK_FUNCTION_LIST_EXTENDED_PTR ex;
+    CK_SLOT_ID slot;
+    std::string userPin;
+    std::string soPin;
+};
+
+static void parityCloseAll(const ParityToken& t)
+{
+    callOk("C_CloseAllSessions", "slotID=" + std::to_string(t.slot),
+           [&] { return t.module->C_CloseAllSessions(t.slot); });
+}
+
+// A fresh R/W session logged in as one identity; the others are closed first,
+// because a user and the SO cannot be logged in at the same time.
+static CK_SESSION_HANDLE parityOpen(const ParityToken& t, CK_USER_TYPE user)
+{
+    parityCloseAll(t);
+    const CK_SESSION_HANDLE session = openSession(t.module, t.slot);
+    login(t.module, session, user, user == CKU_SO ? t.soPin : t.userPin);
+    return session;
+}
+
+static void parityClose(const ParityToken& t, CK_SESSION_HANDLE session, const char* identity)
+{
+    logout(t.module, session, identity);
+    closeSession(t.module, session);
+}
+
+static CK_RV parityUserLogin(const ParityToken& t, const std::string& pin, const char* what)
+{
+    parityCloseAll(t);
+    const CK_SESSION_HANDLE session = openSession(t.module, t.slot);
+    const CK_RV rv = invoke("C_Login", std::string("CKU_USER, ") + what + ", pPin=<redacted>", [&] {
+        return t.module->C_Login(session, CKU_USER,
+                                 reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(pin.data())),
+                                 static_cast<CK_ULONG>(pin.size()));
+    });
+    if (rv == CKR_OK) logout(t.module, session, "CKU_USER");
+    closeSession(t.module, session);
+    return rv;
+}
+
+static CK_RV paritySetUserPin(const ParityToken& t, const std::string& from, const std::string& to,
+                              const char* what)
+{
+    parityCloseAll(t);
+    const CK_SESSION_HANDLE session = openSession(t.module, t.slot);
+    login(t.module, session, CKU_USER, from);
+    const CK_RV rv = invoke("C_SetPIN", std::string(what) + ", pOldPin=<redacted>, pNewPin=<redacted>", [&] {
+        return t.module->C_SetPIN(session,
+                                  reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(from.data())),
+                                  static_cast<CK_ULONG>(from.size()),
+                                  reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(to.data())),
+                                  static_cast<CK_ULONG>(to.size()));
+    });
+    logout(t.module, session, "CKU_USER");
+    closeSession(t.module, session);
+    return rv;
+}
+
+static CK_RV pinToBeChanged(const ParityToken& t, CK_USER_TYPE user)
+{
+    CK_USER_TYPE value = user;
+    return invoke("C_EX_SlotManage", std::string("MODE_GET_PIN_SET_TO_BE_CHANGED, ") +
+                  (user == CKU_SO ? "CKU_SO" : "CKU_USER"),
+                  [&] { return t.ex->C_EX_SlotManage(t.slot, MODE_GET_PIN_SET_TO_BE_CHANGED, &value); });
+}
+
+static void parityTokenManage(const ParityToken& t, CK_ULONG mode, const char* what)
+{
+    const CK_SESSION_HANDLE session = parityOpen(t, CKU_SO);
+    CK_USER_TYPE user = CKU_USER;
+    callOk("C_EX_TokenManage", std::string(what) + ", pValue=&CKU_USER", [&] {
+        return t.ex->C_EX_TokenManage(session, mode, &user);
+    });
+    parityClose(t, session, "CKU_SO");
+}
+
+static CK_TOKEN_INFO_EXTENDED parityExtendedInfo(const ParityToken& t, const char* when)
+{
+    CK_TOKEN_INFO_EXTENDED info{};
+    info.ulSizeofThisStructure = sizeof(info);
+    callOk("C_EX_GetTokenInfoExtended", when,
+           [&] { return t.ex->C_EX_GetTokenInfoExtended(t.slot, &info); });
+    trace("TOKEN", std::string(when) + ": SO " + std::to_string(info.ulAdminRetryCountLeft) + "/" +
+                   std::to_string(info.ulMaxAdminRetryCount) + ", user " +
+                   std::to_string(info.ulUserRetryCountLeft) + "/" +
+                   std::to_string(info.ulMaxUserRetryCount));
+    return info;
+}
+
+static bool userPinCountLow(const ParityToken& t)
+{
+    CK_TOKEN_INFO info{};
+    callOk("C_GetTokenInfo", "CKF_USER_PIN_COUNT_LOW",
+           [&] { return t.module->C_GetTokenInfo(t.slot, &info); });
+    return (info.flags & CKF_USER_PIN_COUNT_LOW) != 0;
+}
+
+// Unblock and token-manage as the device answered them (probe v2, JOURNAL of
+// 10 October 2026). The token's PIN flags are not compared: the factory
+// state differs between the two, which is a separate item.
+static void verifyTokenManageParity(const ParityToken& t)
+{
+    check(pinToBeChanged(t, CKU_USER), CKR_OK, "MODE_GET_PIN_SET_TO_BE_CHANGED(CKU_USER), starting token");
+    check(pinToBeChanged(t, CKU_SO), CKR_OK, "MODE_GET_PIN_SET_TO_BE_CHANGED(CKU_SO), starting token");
+    trace("PARITY", "no PIN due for a change on the starting token: as on the device");
+
+    const std::string wrongPin = t.userPin == "00000000" ? "11111111" : "00000000";
+    check(parityUserLogin(t, wrongPin, "a wrong PIN"), CKR_PIN_INCORRECT, "C_Login(wrong user PIN)");
+    CK_TOKEN_INFO_EXTENDED info = parityExtendedInfo(t, "after one wrong user PIN");
+    if (info.ulUserRetryCountLeft + 1 != info.ulMaxUserRetryCount || !userPinCountLow(t))
+        fail("one wrong user PIN must cost one attempt and raise CKF_USER_PIN_COUNT_LOW");
+    trace("PARITY", "one wrong user PIN: one attempt fewer and CKF_USER_PIN_COUNT_LOW, as on the device");
+    {
+        const CK_SESSION_HANDLE session = parityOpen(t, CKU_SO);
+        callOk("C_EX_UnblockUserPIN", "SO session",
+               [&] { return t.ex->C_EX_UnblockUserPIN(session); });
+        parityClose(t, session, "CKU_SO");
+    }
+    info = parityExtendedInfo(t, "after C_EX_UnblockUserPIN");
+    if (info.ulUserRetryCountLeft != info.ulMaxUserRetryCount || userPinCountLow(t))
+        fail("C_EX_UnblockUserPIN must restore every user attempt");
+    trace("PARITY", "C_EX_UnblockUserPIN under SO: every attempt back, as on the device");
+
+    // force-user-pin-change: the PIN is now due, the old one still logs in,
+    // and the user's own change clears it. Back to the original PIN after,
+    // which the device allows (no PIN history).
+    parityTokenManage(t, MODE_FORCE_USER_TO_CHANGE_PIN, "MODE_FORCE_USER_TO_CHANGE_PIN");
+    check(pinToBeChanged(t, CKU_USER), CKR_PIN_EXPIRED,
+          "MODE_GET_PIN_SET_TO_BE_CHANGED(CKU_USER) after the forced change");
+    check(parityUserLogin(t, t.userPin, "the current PIN after the forced change"), CKR_OK,
+          "C_Login(current user PIN after the forced change)");
+    const std::string temporaryPin = t.userPin == "13572468" ? "24681357" : "13572468";
+    check(paritySetUserPin(t, t.userPin, temporaryPin, "current -> temporary"), CKR_OK,
+          "C_SetPIN(user, current -> temporary)");
+    check(pinToBeChanged(t, CKU_USER), CKR_OK,
+          "MODE_GET_PIN_SET_TO_BE_CHANGED(CKU_USER) after the user changed the PIN");
+    check(paritySetUserPin(t, temporaryPin, t.userPin, "temporary -> original"), CKR_OK,
+          "C_SetPIN(user, temporary -> original)");
+    trace("PARITY", "force-user-pin-change: CKR_PIN_EXPIRED until the user changes the PIN, as on the device");
+
+    parityTokenManage(t, MODE_RESET_CUSTOM_PIN_TO_STANDARD, "MODE_RESET_CUSTOM_PIN_TO_STANDARD");
+    check(parityUserLogin(t, t.userPin, "the PIN in force"), CKR_OK, "C_Login(user PIN in force)");
+    trace("PARITY", "standard-default-user-pin: CKR_OK, the PIN unchanged, as on the device");
+    trace("PARITY", "case token-manage passed");
+}
+
+static CK_RV parityLocalPinInfo(const ParityToken& t, CK_ULONG id, CK_LOCAL_PIN_INFO& info)
+{
+    info = CK_LOCAL_PIN_INFO{};
+    info.ulPinID = id;
+    return invoke("C_EX_SlotManage", "MODE_GET_LOCAL_PIN_INFO, ulPinID=" + std::to_string(id),
+                  [&] { return t.ex->C_EX_SlotManage(t.slot, MODE_GET_LOCAL_PIN_INFO, &info); });
+}
+
+static void expectLocalPin(const ParityToken& t, CK_ULONG retriesLeft, const char* when)
+{
+    CK_LOCAL_PIN_INFO info{};
+    check(parityLocalPinInfo(t, 3, info), CKR_OK, "MODE_GET_LOCAL_PIN_INFO(3)");
+    trace("TOKEN", std::string("local PIN 3 ") + when + ": min " + std::to_string(info.ulMinSize) +
+                   ", max " + std::to_string(info.ulMaxSize) + ", attempts " +
+                   std::to_string(info.ulCurrentRetryCount) + "/" + std::to_string(info.ulMaxRetryCount) +
+                   ", flags " + hexNumber(info.flags));
+    if (info.ulMinSize != 6 || info.ulMaxSize != 249 || info.ulMaxRetryCount != 10 ||
+        info.ulCurrentRetryCount != retriesLeft ||
+        info.flags != (LOCAL_PIN_FLAGS_NOT_DEFAULT | LOCAL_PIN_FLAGS_IS_UTF8))
+        fail(std::string("local PIN 3 ") + when + " is not min 6, max 249, " +
+             std::to_string(retriesLeft) + " of 10 attempts, flags 0x5 as on the device");
+}
+
+static CK_RV paritySetLocalPin(const ParityToken& t, const std::string& current,
+                               const std::string& next, const char* what)
+{
+    return invoke("C_EX_SetLocalPIN", std::string(what) + ", ulLocalID=3, PINs <redacted>", [&] {
+        return t.ex->C_EX_SetLocalPIN(t.slot,
+            reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(current.data())),
+            static_cast<CK_ULONG>(current.size()),
+            reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(next.data())),
+            static_cast<CK_ULONG>(next.size()), 3);
+    });
+}
+
+// Local PIN 3 as the device keeps it: created with the user PIN, changed
+// only by its own value, ten attempts with a miss costing one, every other
+// ID unset, and no login as a local PIN.
+static void verifyLocalPinParity(const ParityToken& t)
+{
+    parityCloseAll(t);
+    const std::string first = "135790", second = "246802", unused = "112233";
+    check(paritySetLocalPin(t, t.userPin, first, "create, authorised by the user PIN"), CKR_OK,
+          "C_EX_SetLocalPIN(create)");
+    expectLocalPin(t, 10, "after creation");
+    check(paritySetLocalPin(t, first, second, "change by its value"), CKR_OK,
+          "C_EX_SetLocalPIN(change by value)");
+    expectLocalPin(t, 10, "after the change");
+    check(paritySetLocalPin(t, t.userPin, unused, "change with the user PIN"), CKR_PIN_INCORRECT,
+          "C_EX_SetLocalPIN(user PIN on an existing local PIN)");
+    expectLocalPin(t, 9, "after the user PIN was refused");
+    check(paritySetLocalPin(t, "000000", unused, "change with a wrong value"), CKR_PIN_INCORRECT,
+          "C_EX_SetLocalPIN(wrong value)");
+    expectLocalPin(t, 8, "after a wrong value");
+    check(paritySetLocalPin(t, second, first, "change back by its value"), CKR_OK,
+          "C_EX_SetLocalPIN(change back)");
+    expectLocalPin(t, 10, "after the change back");
+    trace("PARITY", "local PIN 3: set, changed by value, misses counted, as on the device");
+    for (CK_ULONG id = 4; id <= 31; ++id)
+    {
+        CK_LOCAL_PIN_INFO info{};
+        check(parityLocalPinInfo(t, id, info), CKR_DEVICE_ERROR, "MODE_GET_LOCAL_PIN_INFO(unset ID)");
+    }
+    trace("PARITY", "local PIN IDs 4..31, never set: CKR_DEVICE_ERROR, as on the device");
+    parityCloseAll(t);
+    const CK_SESSION_HANDLE session = openSession(t.module, t.slot);
+    check(invoke("C_Login", "userType=3 (a local PIN), pPin=<redacted>", [&] {
+              return t.module->C_Login(session, 3,
+                  reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(first.data())),
+                  static_cast<CK_ULONG>(first.size()));
+          }), CKR_USER_TYPE_INVALID, "C_Login(userType=3)");
+    closeSession(t.module, session);
+    trace("PARITY", "C_Login with a local PIN: CKR_USER_TYPE_INVALID, as on the device");
+    trace("PARITY", "case local-pin passed");
+}
+
+static CK_OBJECT_HANDLE parityCertificate(const ParityToken& t, CK_SESSION_HANDLE session,
+                                           const Bytes& id)
+{
+    CK_OBJECT_CLASS certificateClass = CKO_CERTIFICATE;
+    return findOne(t.module, session, {
+        {CKA_CLASS, &certificateClass, sizeof(certificateClass)},
+        {CKA_ID, const_cast<unsigned char*>(id.data()), static_cast<CK_ULONG>(id.size())}
+    });
+}
+
+// CKA_TRUSTED and the token's trusted store, where the two differ by the
+// owner's decision: on the device the SO's CKA_TRUSTED reads TRUE only until
+// the library is reopened and USE_TRUSTED_CERTS_FROM_TOKEN never verifies;
+// here the trust persists and the store is used. Either is accepted, but one
+// of them throughout. Setting it a second time is refused by both.
+static void verifyTrustedParity(const ParityToken& t)
+{
+    const Bytes caId = asciiBytes("parity-trust-ca");
+    const Bytes leafId = asciiBytes("parity-trust-leaf");
+    const Bytes content = asciiBytes("CryptoMost trusted-store payload");
+    CK_SESSION_HANDLE session = parityOpen(t, CKU_USER);
+    for (const Bytes* id : {&caId, &leafId})
+        removePriorTestObjects(t.module, session, *id);
+    const CmsKeyPair ca = cmsGostKeyPair(t.module, session, caId, 256);
+    const CmsKeyPair leaf = cmsGostKeyPair(t.module, session, leafId, 256);
+    const Bytes caName = cmsName("CryptoMost Trust CA");
+    const Bytes leafName = cmsName("CryptoMost Trust Signer");
+    const Bytes caDer = cmsGostCertificate(t.module, session, ca.publicKey, ca.privateKey,
+                                           caName, caName, 41, true, 256);
+    const Bytes leafDer = cmsGostCertificate(t.module, session, leaf.publicKey, ca.privateKey,
+                                             caName, leafName, 42, false, 256);
+    (void)cmsTokenCertificate(t.module, session, caId, caDer, caName);
+    const CK_OBJECT_HANDLE leafCert = cmsTokenCertificate(t.module, session, leafId, leafDer, leafName);
+    Bytes envelope;
+    check(cmsSign(t.ex, session, content, leafCert, leaf.privateKey, {}, 0, &envelope,
+                  "sign for the trusted-store checks"), CKR_OK, "C_EX_PKCS7Sign(trusted store)");
+    expectRejected(cmsVerify(t.ex, session, envelope, nullptr, nullptr, false,
+                             CKF_VENDOR_USE_TRUSTED_CERTS_FROM_TOKEN, nullptr,
+                             "USE_TRUSTED_CERTS_FROM_TOKEN, CA not yet trusted"),
+                   CKR_CERT_CHAIN_NOT_VERIFIED, "USE_TRUSTED_CERTS_FROM_TOKEN, CA not yet trusted");
+    parityClose(t, session, "CKU_USER");
+
+    CK_BBOOL yes = CK_TRUE;
+    CK_ATTRIBUTE trust{CKA_TRUSTED, &yes, sizeof(yes)};
+    session = parityOpen(t, CKU_SO);
+    CK_OBJECT_HANDLE caCert = parityCertificate(t, session, caId);
+    callOk("C_SetAttributeValue", "SO: CKA_TRUSTED false->true on the CA",
+           [&] { return t.module->C_SetAttributeValue(session, caCert, &trust, 1); });
+    if (booleanAttribute(t.module, session, caCert, CKA_TRUSTED) != CK_TRUE)
+        fail("CKA_TRUSTED does not read TRUE in the SO session that set it");
+    trace("PARITY", "SO: CKA_TRUSTED false->true, reads TRUE in the same session, as on the device");
+    parityClose(t, session, "CKU_SO");
+
+    // The two diverge from here on.
+    auto storeUsed = [&](const CmsVerifyResult& result, const char* what) {
+        check(result.initRv, CKR_OK, what);
+        if (result.rv == CKR_CERT_CHAIN_NOT_VERIFIED)
+        {
+            expectRejected(result, CKR_CERT_CHAIN_NOT_VERIFIED, what);
+            return false;
+        }
+        check(result.rv, CKR_OK, what);
+        if (!result.hasData || result.data != content || result.signers.size() != 1 ||
+            result.signers[0] != leafDer)
+            fail(std::string(what) + ": verified without the data and its signer");
+        return true;
+    };
+    session = parityOpen(t, CKU_USER);
+    const bool storeUsedNow = storeUsed(cmsVerify(t.ex, session, envelope, nullptr, nullptr, false,
+                                                  CKF_VENDOR_USE_TRUSTED_CERTS_FROM_TOKEN, nullptr,
+                                                  "USE_TRUSTED_CERTS_FROM_TOKEN, CA trusted"),
+                                        "USE_TRUSTED_CERTS_FROM_TOKEN, CA trusted");
+    trace("PARITY", storeUsedNow
+        ? "USE_TRUSTED_CERTS_FROM_TOKEN with the CA trusted: verified, as this module (deliberate divergence)"
+        : "USE_TRUSTED_CERTS_FROM_TOKEN with the CA trusted: CKR_CERT_CHAIN_NOT_VERIFIED, as on the device");
+    parityClose(t, session, "CKU_USER");
+
+    parityCloseAll(t);
+    callOk("C_Finalize", "reopen the library", [&] { return t.module->C_Finalize(nullptr); });
+    callOk("C_Initialize", "reopen the library", [&] { return t.module->C_Initialize(nullptr); });
+    session = parityOpen(t, CKU_USER);
+    caCert = parityCertificate(t, session, caId);
+    const CK_BBOOL trustedAfterReopen = booleanAttribute(t.module, session, caCert, CKA_TRUSTED);
+    const bool storeUsedAfterReopen = storeUsed(cmsVerify(t.ex, session, envelope, nullptr, nullptr, false,
+                                                          CKF_VENDOR_USE_TRUSTED_CERTS_FROM_TOKEN, nullptr,
+                                                          "USE_TRUSTED_CERTS_FROM_TOKEN after reopen"),
+                                                "USE_TRUSTED_CERTS_FROM_TOKEN after reopen");
+    if (storeUsedNow != storeUsedAfterReopen || (trustedAfterReopen == CK_TRUE) != storeUsedNow)
+        fail("after reopen CKA_TRUSTED reads " + std::string(trustedAfterReopen ? "TRUE" : "FALSE") +
+             " and the trusted store is " + (storeUsedAfterReopen ? "" : "not ") +
+             "used: a mix of the device's behaviour and this module's");
+    trace("PARITY", storeUsedNow
+        ? "after reopen: CKA_TRUSTED TRUE and the trusted store used, as this module (deliberate divergence)"
+        : "after reopen: CKA_TRUSTED FALSE and the trusted store unused, as on the device");
+    parityClose(t, session, "CKU_USER");
+
+    session = parityOpen(t, CKU_SO);
+    caCert = parityCertificate(t, session, caId);
+    check(invoke("C_SetAttributeValue", "SO: CKA_TRUSTED true again after reopen",
+                 [&] { return t.module->C_SetAttributeValue(session, caCert, &trust, 1); }),
+          CKR_ATTRIBUTE_READ_ONLY, "C_SetAttributeValue(CKA_TRUSTED a second time)");
+    trace("PARITY", "SO: CKA_TRUSTED a second time: CKR_ATTRIBUTE_READ_ONLY, as on the device");
+    parityClose(t, session, "CKU_SO");
+
+    session = parityOpen(t, CKU_USER);
+    for (const Bytes* id : {&caId, &leafId})
+        removePriorTestObjects(t.module, session, *id);
+    parityClose(t, session, "CKU_USER");
+    trace("PARITY", "case trusted passed");
+}
+
+static CK_ULONG countObjects(Module& module, CK_SESSION_HANDLE session,
+                             CK_ATTRIBUTE_PTR query, CK_ULONG count, const char* what)
+{
+    callOk("C_FindObjectsInit", what,
+           [&] { return module->C_FindObjectsInit(session, query, count); });
+    CK_ULONG total = 0;
+    for (;;)
+    {
+        CK_OBJECT_HANDLE objects[16];
+        CK_ULONG found = 0;
+        callOk("C_FindObjects", what, [&] { return module->C_FindObjects(session, objects, 16, &found); });
+        if (found == 0) break;
+        total += found;
+    }
+    callOk("C_FindObjectsFinal", what, [&] { return module->C_FindObjectsFinal(session); });
+    trace("OBJECT", std::string(what) + ": " + std::to_string(total) + " object(s)");
+    return total;
+}
+
+// The rtadmin-equivalent format the device accepts: the given PINs as the new
+// ones, minima 6/6, ten attempts each, the user changes the user PIN, no
+// label.
+static CK_RUTOKEN_INIT_PARAM parityFormat(const ParityToken& t, CK_FLAGS policy)
+{
+    CK_RUTOKEN_INIT_PARAM init{};
+    init.ulSizeofThisStructure = sizeof(init);
+    init.pNewAdminPin = reinterpret_cast<CK_BYTE_PTR>(const_cast<char*>(t.soPin.data()));
+    init.ulNewAdminPinLen = static_cast<CK_ULONG>(t.soPin.size());
+    init.pNewUserPin = reinterpret_cast<CK_BYTE_PTR>(const_cast<char*>(t.userPin.data()));
+    init.ulNewUserPinLen = static_cast<CK_ULONG>(t.userPin.size());
+    init.ChangeUserPINPolicy = policy;
+    init.ulMinAdminPinLen = 6;
+    init.ulMinUserPinLen = 6;
+    init.ulMaxAdminRetryCount = 10;
+    init.ulMaxUserRetryCount = 10;
+    init.pTokenLabel = nullptr;
+    init.ulLabelLen = 0;
+    return init;
+}
+
+static CK_RV parityInitToken(const ParityToken& t, CK_RUTOKEN_INIT_PARAM& init, const char* what)
+{
+    return invoke("C_EX_InitToken", std::string(what) + ", PINs <redacted>", [&] {
+        return t.ex->C_EX_InitToken(t.slot,
+            reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(t.soPin.data())),
+            static_cast<CK_ULONG>(t.soPin.size()), &init);
+    });
+}
+
+// Back to factory state: restore-factory-defaults when an emitent key is
+// given, otherwise the format rtadmin performs. Then the factory state the
+// device shows: no PIN due, no local PIN, no objects, the given PINs in force
+// with every attempt.
+static void verifyFactoryParity(const ParityToken& t, const Bytes& emitentKey)
+{
+    parityCloseAll(t);
+    CK_RUTOKEN_INIT_PARAM init = parityFormat(t, 0);
+    check(parityInitToken(t, init, "ChangeUserPINPolicy=0"), CKR_ARGUMENTS_BAD,
+          "C_EX_InitToken(ChangeUserPINPolicy=0)");
+    init = parityFormat(t, TOKEN_FLAGS_USER_CHANGE_USER_PIN);
+    {
+        const CK_SESSION_HANDLE held = openSession(t.module, t.slot);
+        check(parityInitToken(t, init, "with a session open"), CKR_SESSION_EXISTS,
+              "C_EX_InitToken(session open)");
+        closeSession(t.module, held);
+    }
+    trace("PARITY", "C_EX_InitToken refusals: CKR_ARGUMENTS_BAD and CKR_SESSION_EXISTS, as on the device");
+
+    CK_RV restoreRv = CKR_OK;
+    if (!emitentKey.empty())
+    {
+        Bytes key = emitentKey;
+        CK_VENDOR_RESTORE_FACTORY_DEFAULTS_PARAMS params{};
+        params.ulSizeofThisStructure = sizeof(params);
+        params.pAdminPin = reinterpret_cast<CK_BYTE_PTR>(const_cast<char*>(t.soPin.data()));
+        params.ulAdminPinLen = static_cast<CK_ULONG>(t.soPin.size());
+        params.pInitParam = &init;
+        params.pNewEmitentKey = key.data();
+        params.ulNewEmitentKeyLen = static_cast<CK_ULONG>(key.size());
+        params.ulNewEmitentKeyRetryCount = 10;
+        params.newEmitentKeyType = CKK_KUZNECHIK;
+        restoreRv = invoke("C_EX_SlotManage",
+                           "MODE_RESTORE_FACTORY_DEFAULTS, Kuznyechik emitent key from "
+                           "P11_TEST_EMITENT_KEY <redacted>, 10 attempts, PINs <redacted>",
+                           [&] { return t.ex->C_EX_SlotManage(t.slot, MODE_RESTORE_FACTORY_DEFAULTS, &params); });
+        std::fill(key.begin(), key.end(), 0);
+        if (restoreRv != CKR_OK)
+            trace("WARNING", std::string("restore-factory-defaults answered ") + rvName(restoreRv) +
+                             "; formatting with C_EX_InitToken so the token still ends in factory state");
+    }
+    if (emitentKey.empty() || restoreRv != CKR_OK)
+        check(parityInitToken(t, init, "rtadmin-equivalent format"), CKR_OK,
+              "C_EX_InitToken(rtadmin-equivalent format)");
+
+    check(pinToBeChanged(t, CKU_USER), CKR_OK, "MODE_GET_PIN_SET_TO_BE_CHANGED(CKU_USER) after the format");
+    check(pinToBeChanged(t, CKU_SO), CKR_OK, "MODE_GET_PIN_SET_TO_BE_CHANGED(CKU_SO) after the format");
+    CK_LOCAL_PIN_INFO local{};
+    check(parityLocalPinInfo(t, 3, local), CKR_DEVICE_ERROR, "MODE_GET_LOCAL_PIN_INFO(3) after the format");
+    const CK_TOKEN_INFO_EXTENDED info = parityExtendedInfo(t, "after the format");
+    if (info.ulAdminRetryCountLeft != 10 || info.ulMaxAdminRetryCount != 10 ||
+        info.ulUserRetryCountLeft != 10 || info.ulMaxUserRetryCount != 10)
+        fail("after the format the SO and the user do not each have 10 of 10 attempts");
+    {
+        parityCloseAll(t);
+        CK_SESSION_HANDLE session = CK_INVALID_HANDLE;
+        callOk("C_OpenSession", "public, after the format", [&] {
+            return t.module->C_OpenSession(t.slot, CKF_SERIAL_SESSION, nullptr, nullptr, &session);
+        });
+        CK_OBJECT_CLASS featureClass = CKO_HW_FEATURE;
+        CK_ATTRIBUTE byClass{CKA_CLASS, &featureClass, sizeof(featureClass)};
+        if (countObjects(t.module, session, nullptr, 0, "empty template, public, after the format") != 0)
+            fail("objects are left after the format");
+        if (countObjects(t.module, session, &byClass, 1, "CKO_HW_FEATURE, after the format") == 0)
+            fail("no hardware feature is found by its class");
+        login(t.module, session, CKU_USER, t.userPin);
+        if (countObjects(t.module, session, nullptr, 0, "empty template, as the user, after the format") != 0)
+            fail("objects are left for the user after the format");
+        logout(t.module, session, "CKU_USER");
+        closeSession(t.module, session);
+        session = parityOpen(t, CKU_SO);
+        parityClose(t, session, "CKU_SO");
+    }
+    trace("PARITY", "factory state: no PIN due, no local PIN, no objects (hardware features only by class), "
+                    "the given PINs with 10 of 10 attempts, as on the device");
+    if (restoreRv != CKR_OK)
+        fail(std::string("C_EX_SlotManage(MODE_RESTORE_FACTORY_DEFAULTS) answered ") + rvName(restoreRv) +
+             "; the token was formatted with C_EX_InitToken instead");
+    trace("PARITY", emitentKey.empty()
+        ? "case factory passed (C_EX_InitToken; restore-factory-defaults needs P11_TEST_EMITENT_KEY)"
+        : "case factory passed (restore-factory-defaults with a Kuznyechik emitent key)");
+}
+
+// Runs against a token in factory state with P11_TEST_USER_PIN and
+// P11_TEST_SO_PIN, and leaves it in factory state with the same PINs:
+// restore-factory-defaults when P11_TEST_EMITENT_KEY holds a new 32-byte
+// emitent key in hex, the rtadmin-equivalent C_EX_InitToken otherwise.
+static void verifyDeviceParityWrite(const fs::path& modulePath)
+{
+    const std::string userPin = environment("P11_TEST_USER_PIN", true);
+    const std::string soPin = environment("P11_TEST_SO_PIN", true);
+    Bytes emitentKey;
+    const std::string emitentHex = environment("P11_TEST_EMITENT_KEY");
+    if (!emitentHex.empty())
+    {
+        if (emitentHex.size() != 64 ||
+            emitentHex.find_first_not_of("0123456789abcdefABCDEF") != std::string::npos)
+            fail("P11_TEST_EMITENT_KEY must be 64 hexadecimal digits (a 32-byte key)");
+        emitentKey = bytesFromHex(emitentHex);
+    }
+    Module module(modulePath);
+    const CK_SLOT_ID slot = selectSlot(module, true);
+    auto getList = reinterpret_cast<CK_C_EX_GetFunctionListExtended>(
+        module.symbol("C_EX_GetFunctionListExtended"));
+    if (getList == nullptr) fail("C_EX_GetFunctionListExtended is not exported");
+    CK_FUNCTION_LIST_EXTENDED_PTR ex = nullptr;
+    callOk("C_EX_GetFunctionListExtended", "device-parity-write", [&] { return getList(&ex); });
+    if (ex == nullptr) fail("C_EX_GetFunctionListExtended returned no table");
+    const ParityToken t{module, ex, slot, userPin, soPin};
+
+    // Nothing is changed unless the token is where the cases start from.
+    CK_LOCAL_PIN_INFO local{};
+    if (parityLocalPinInfo(t, 3, local) != CKR_DEVICE_ERROR)
+        fail("local PIN 3 is already set: return the token to factory state first");
+    check(parityUserLogin(t, userPin, "P11_TEST_USER_PIN"), CKR_OK, "C_Login(P11_TEST_USER_PIN)");
+
+    trace("PARITY", "case token-manage");
+    verifyTokenManageParity(t);
+    trace("PARITY", "case local-pin");
+    verifyLocalPinParity(t);
+    trace("PARITY", "case trusted");
+    verifyTrustedParity(t);
+    trace("PARITY", "case factory");
+    verifyFactoryParity(t, emitentKey);
+    std::cout << "DEVICE-PARITY-WRITE: all cases passed\n";
 }
 
 // Run the whole e2e battery that the Linux CI drives with bash: every case,
@@ -8085,6 +8616,24 @@ static void runBattery(const fs::path& modulePath, fs::path workRoot)
         verifyDeviceParity(modulePath);
     }
 
+    // device-parity-write: the state-changing cases, ending in
+    // restore-factory-defaults. The emitent key is a fresh random one: this
+    // module checks its shape and keeps nothing.
+    {
+        trace("BATTERY", "case device-parity-write");
+        const fs::path dir = workRoot / "device-parity-write";
+        setEnvVar("SOFTHSM2_CONF", writeBatteryConfig(dir, true).generic_string());
+        setEnvVar("P11_TEST_SO_PIN", soPin);
+        setEnvVar("P11_TEST_USER_PIN", userPin);
+        batteryInitToken(modulePath, "Rutoken ECP", soPin, userPin);
+        std::random_device random;
+        Bytes key(32);
+        for (unsigned char& byte : key) byte = static_cast<unsigned char>(random() & 0xff);
+        setEnvVar("P11_TEST_EMITENT_KEY", hexBytes(key.data(), key.size()));
+        verifyDeviceParityWrite(modulePath);
+        clearEnvVar("P11_TEST_EMITENT_KEY");
+    }
+
     // core-behaviour: plain PKCS #11 under the Rutoken profile, with the store directory
     // exposed so the case can confirm private attributes are stored encrypted.
     {
@@ -8173,6 +8722,11 @@ int main(int argc, char** argv)
             verifyDeviceParity(fs::absolute(argv[2]));
             return 0;
         }
+        if (argc == 3 && std::string(argv[1]) == "device-parity-write")
+        {
+            verifyDeviceParityWrite(fs::absolute(argv[2]));
+            return 0;
+        }
         if (argc == 3 && std::string(argv[1]) == "certificate-trust")
         {
             const fs::path modulePath = fs::absolute(argv[2]);
@@ -8235,6 +8789,10 @@ int main(int argc, char** argv)
                   << "  portable-token-e2e device-parity <module> (this module or the\n"
                   << "                      reference Rutoken; initialized token, leaves\n"
                   << "                      no objects behind)\n"
+                  << "  portable-token-e2e device-parity-write <module> (the same, changing\n"
+                  << "                      PINs, a local PIN and CKA_TRUSTED; token in\n"
+                  << "                      factory state, left in factory state with the\n"
+                  << "                      given PINs; needs P11_TEST_SO_PIN)\n"
                   << "  portable-token-e2e certificate-trust <module> (fresh test token)\n"
                   << "  portable-token-e2e cms <module> (fresh test token)\n"
                   << "  portable-token-e2e cms-verify-external <module> <vector-directory>\n"
@@ -8245,7 +8803,11 @@ int main(int argc, char** argv)
                   << "environment:\n"
                   << "  P11_TEST_USER_PIN=<required secret>\n"
                   << "  P11_TEST_INITIALIZE_TOKEN=YES|NO (default NO)\n"
-                  << "  P11_TEST_SO_PIN=<required only when initialization is YES>\n"
+                  << "  P11_TEST_SO_PIN=<required only when initialization is YES,\n"
+                  << "                      and by device-parity-write>\n"
+                  << "  P11_TEST_EMITENT_KEY=<optional 64 hex digits: device-parity-write\n"
+                  << "                      ends with restore-factory-defaults and this\n"
+                  << "                      new Kuznyechik emitent key; never printed>\n"
                   << "  P11_TEST_EXCLUDE_FUNCTIONS=<optional comma-separated C_* names>\n"
                   << "  P11_TEST_SLOT_ID=<optional decimal or 0x-prefixed slot ID>\n"
                   << "  P11_TEST_TOKEN_LABEL=<optional exact token label>\n"

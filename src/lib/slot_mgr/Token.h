@@ -117,6 +117,13 @@ public:
 	CK_RV recordSignature(const ByteString& digest, const ByteString& signature,
 	                      CK_BYTE rsfType, bool hashedOnToken);
 	CK_RV setLocalPIN(CK_ULONG id, ByteString& currentPIN, ByteString& newPIN);
+	// What the Rutoken MODE_GET_LOCAL_PIN_INFO reports for a local PIN.
+	CK_RV getLocalPINInfo(CK_ULONG id, CK_ULONG& minLength, CK_ULONG& maxRetries,
+	                      CK_ULONG& retriesLeft);
+	// The Rutoken forced change of the user PIN: set by C_EX_TokenManage,
+	// cleared when the user changes the PIN or the token is formatted.
+	CK_RV forceUserPINChange();
+	bool getUserPINExpired(bool& expired);
 
 	// Create object
 	OSObject *createObject();

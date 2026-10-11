@@ -356,7 +356,10 @@ CK_RV Token::setUserPIN(ByteString& oldPIN, ByteString& newPIN)
 	ByteString soPINBlob, userPINBlob;
 	valid = token->getSOPIN(soPINBlob) && token->getUserPIN(userPINBlob);
 
-	return pinResult(false, true);
+	// Changing the PIN is what a forced change asks for.
+	const CK_RV result = pinResult(false, true);
+	if (result == CKR_OK && !token->setUserPinExpired(false)) return CKR_DEVICE_ERROR;
+	return result;
 }
 
 // Init the user PIN
@@ -746,6 +749,40 @@ CK_RV Token::setLocalPIN(CK_ULONG id, ByteString& currentPIN, ByteString& newPIN
 		if (changed) return CKR_OK;
 	}
 	return CKR_DEVICE_ERROR;
+}
+
+CK_RV Token::getLocalPINInfo(CK_ULONG id, CK_ULONG& minLength, CK_ULONG& maxRetries,
+                             CK_ULONG& retriesLeft)
+{
+	MutexLocker lock(tokenMutex);
+	if (token == NULL) return CKR_TOKEN_NOT_PRESENT;
+	PinPolicy policy;
+	if (!getPinPolicy(policy)) return CKR_DEVICE_ERROR;
+	ByteString record;
+	bool exists = false;
+	if (!token->getLocalPIN(id, record, exists)) return CKR_DEVICE_ERROR;
+	// The device answers a local PIN that was never set with this code.
+	if (!exists) return CKR_DEVICE_ERROR;
+	if (record.size() < 43 || record[0] != 1 || record[1] != 10 || record[2] > 10)
+		return CKR_DEVICE_ERROR;
+	minLength = policy.minLength;
+	maxRetries = record[1];
+	retriesLeft = record[2];
+	return CKR_OK;
+}
+
+CK_RV Token::forceUserPINChange()
+{
+	MutexLocker lock(tokenMutex);
+	if (token == NULL || sdm == NULL) return CKR_TOKEN_NOT_PRESENT;
+	if (!sdm->isSOLoggedIn()) return CKR_USER_NOT_LOGGED_IN;
+	return token->setUserPinExpired(true) ? CKR_OK : CKR_DEVICE_ERROR;
+}
+
+bool Token::getUserPINExpired(bool& expired)
+{
+	MutexLocker lock(tokenMutex);
+	return token != NULL && token->getUserPinExpired(expired);
 }
 
 // Retrieve token information for the token

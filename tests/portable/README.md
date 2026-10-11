@@ -181,8 +181,39 @@ P11_TEST_USER_PIN=12345678 ./bin/portable-token-e2e device-parity \
   /usr/lib/librtpkcs11ecp.so
 ```
 
-Success ends with `DEVICE-PARITY: all cases passed` and exit code 0. The
-`battery` command runs the same cases against the bundled module.
+Success ends with `DEVICE-PARITY: all cases passed` and exit code 0.
+
+`device-parity-write <module>` holds the cases that change the token: they
+need a token in factory state, `P11_TEST_USER_PIN` and `P11_TEST_SO_PIN`
+(used, never guessed), and leave it in factory state with the same PINs:
+
+- `token-manage`: one wrong user PIN and `C_EX_UnblockUserPIN` under SO;
+  `C_EX_TokenManage` force-user-pin-change (`MODE_GET_PIN_SET_TO_BE_CHANGED`
+  answers `CKR_PIN_EXPIRED` until the user changes the PIN; the PIN is then
+  changed and changed back) and standard-default-user-pin;
+- `local-pin`: local PIN 3 created with the user PIN, changed by its own
+  value, a refused user PIN and a wrong value each costing one of ten
+  attempts, IDs 4-31 unset (`CKR_DEVICE_ERROR`), no login as a local PIN;
+- `trusted`: the SO's `CKA_TRUSTED` on a CA and `USE_TRUSTED_CERTS_FROM_TOKEN`
+  before and after the library is reopened. The device forgets the trust on
+  reopen and never verifies through the token's store; this module keeps it
+  and does - either is accepted, one of them throughout. Setting the
+  attribute again is refused by both;
+- `factory`: the `C_EX_InitToken` refusals, then the return to factory
+  state: `C_EX_SlotManage` restore-factory-defaults when
+  `P11_TEST_EMITENT_KEY` holds a new 32-byte emitent key in hex (Kuznyechik,
+  never printed), the rtadmin-equivalent `C_EX_InitToken` otherwise; and the
+  state that leaves: no PIN due, no local PIN, no objects for an empty
+  template, the given PINs with 10 of 10 attempts.
+
+```sh
+P11_TEST_USER_PIN=12345678 P11_TEST_SO_PIN=87654321 \
+  ./bin/portable-token-e2e device-parity-write /usr/lib/librtpkcs11ecp.so
+```
+
+Success ends with `DEVICE-PARITY-WRITE: all cases passed` and exit code 0.
+The `battery` command runs both commands against the bundled module, the
+second with a random emitent key.
 
 The trace contains explicit `BEGIN GOST`/`END GOST`, `BEGIN RSA PREPARE`/
 `END RSA PREPARE`, and `BEGIN RSA FINISH`/`END RSA FINISH` boundaries. The

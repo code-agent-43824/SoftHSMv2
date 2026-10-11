@@ -59,6 +59,9 @@
 #define CKA_OS_TOKENCREATED	(CKA_VENDOR_SOFTHSM + 6)
 #define CKA_OS_PINPOLICY	(CKA_VENDOR_SOFTHSM + 7)
 #define CKA_OS_TOKENNAME	(CKA_VENDOR_SOFTHSM + 8)
+// The Rutoken "user must change the PIN" state set by C_EX_TokenManage; a
+// token without the attribute has never been forced.
+#define CKA_OS_USERPINEXPIRED	(CKA_VENDOR_SOFTHSM + 9)
 #define CKA_OS_LICENSE(id)	(CKA_VENDOR_SOFTHSM + 0x20 + (id))
 #define CKA_OS_JOURNAL	(CKA_VENDOR_SOFTHSM + 0x30)
 #define CKA_OS_LOCALPIN(id)	(CKA_VENDOR_SOFTHSM + 0x100 + (id))

@@ -15,6 +15,30 @@ probe 3 форка OpenSC (его `docs/RUTOKEN-FUNCTIONS.md`, `docs/RUTOKEN-APD
 структура журнала без точных длин. В конце — релиз, проверка, документы,
 `HANDOFF` без работы в полёте по этому заданию.
 
+**Сделано (этап 3).** Модуль: `C_EX_TokenManage` — режимы 6
+(force-user-pin-change) и 3 (standard-default-user-pin) в R/W SO-сессии;
+`C_EX_SlotManage` — `MODE_GET_PIN_SET_TO_BE_CHANGED`, `MODE_GET_LOCAL_PIN_INFO`
+и `MODE_RESTORE_FACTORY_DEFAULTS`; режимы 1, 2, 4, 5 и `MODE_GET_IMIT` — по-прежнему
+0x54. Признак «PIN просрочен» — атрибут токена `CKA_OS_USERPINEXPIRED` в обоих
+backend хранилища: снимается сменой PIN пользователем и форматом, переживает
+перезапуск процесса (проверено на file и db). По дороге два исправления:
+объект hardware feature находился пустым шаблоном — запись «как на устройстве»
+не была проверена, проба v2 показала обратное, теперь он находится только
+поиском по классу (`26396fb8`); в db-backend новый атрибут токена молча не
+сохранялся, пока его нет в таблице типов `DBObject` (нашлось прогоном на
+db-сборке). Клиент: команда `device-parity-write` — кейсы `token-manage`,
+`local-pin`, `trusted` (`CKA_TRUSTED` dual — часть этапа 4) и `factory`
+(restore-factory при `P11_TEST_EMITENT_KEY`, иначе формат как у rtadmin; ключ
+не печатается); `battery` гоняет её со случайным ключом, CI — без ключа.
+Проверено: `battery` EXIT=0 и шаги CI на состоянии этого коммита; разделы 7–9
+пробы v2 на сборке совпали с устройством по всем кодам возврата (флаги PIN и
+длины журнала расходятся, как и раньше); pkcs11-tool из кита `.71`:
+`--rutoken-pin-status`, `--rutoken-token-manage force-user-pin-change` и
+`standard-default-user-pin`, `--rutoken-restore-factory-defaults` проходят
+(`reset-user-pin` — 0x54: режим 4 не моделируется); юнит-тесты на сборке с db —
+7 из 7; `device-parity-write` под ASan+UBSan чист. На устройстве
+`device-parity-write` не запускался.
+
 ## 2026-10-10 — поправка CSR (`hPrivKey = 0`) и этап 2: ГОСТ-CMS parity
 
 **План.** Владелец прогнал `device-parity` `.70` на токене — EXIT=0, и прислал

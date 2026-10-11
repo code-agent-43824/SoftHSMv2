@@ -102,14 +102,30 @@ C_EX_CreateCSR (GOST-256 and RSA-2048 requests, their exact DER, the
 self-signature and the device's refusals) and GOST-256 CMS (C_EX_PKCS7Sign
 and C_EX_PKCS7Verify*: envelope structure, attached/detached/hardware hash,
 trusted root, tampering, unrelated CA, signature only, partial chain).
-Every expectation was read off the device. It needs an initialized token and its user PIN, logs out and back in
-once, does not format the token and removes every object it creates. The
-battery runs it against the bundled module. Against a token:
+Every expectation was read off the device. It needs an initialized token
+and its user PIN, logs out and back in once, does not format the token and
+removes every object it creates. Against a token:
 
   P11_TEST_USER_PIN=12345678 bin/portable-token-e2e device-parity \
     /usr/lib/librtpkcs11ecp.so
 
 Success ends with "DEVICE-PARITY: all cases passed" and exit code 0.
+
+The device-parity-write command holds the cases that change the token:
+unblock and C_EX_TokenManage (force-user-pin-change, standard-default-user-
+pin), local PIN 3, the SO's CKA_TRUSTED before and after the library is
+reopened (the device forgets it, this module keeps it; either is accepted),
+and the return to factory state. It needs a token in factory state, its user
+PIN and SO PIN, and leaves it in factory state with the same PINs:
+restore-factory-defaults when P11_TEST_EMITENT_KEY holds a new 32-byte
+emitent key in hex (Kuznyechik; the key is never printed), the
+rtadmin-equivalent C_EX_InitToken otherwise:
+
+  P11_TEST_USER_PIN=12345678 P11_TEST_SO_PIN=87654321 \
+    bin/portable-token-e2e device-parity-write /usr/lib/librtpkcs11ecp.so
+
+Success ends with "DEVICE-PARITY-WRITE: all cases passed" and exit code 0.
+The battery runs both commands against the bundled module.
 
 Linux or macOS:
   bash run-test.sh
