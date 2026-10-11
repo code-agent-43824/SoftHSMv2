@@ -3112,16 +3112,20 @@ namespace
 	}
 
 	// An object matches a search template when it has every attribute the
-	// template names, with the value the template gives. An empty template
-	// matches everything, so the object also turns up in a bare enumeration -
-	// as it does on the device.
+	// template names, with the value the template gives - and, as PKCS #11
+	// requires of hardware features, only when the template asks for
+	// CKA_CLASS = CKO_HW_FEATURE. The device keeps them out of a bare
+	// enumeration too: an empty template finds none of its six, a search by
+	// class finds all of them (probe v2, JOURNAL of 10 October 2026).
 	bool fakeRutokenFeatureMatches(CK_ATTRIBUTE_PTR pTemplate, CK_ULONG ulCount)
 	{
+		bool askedForClass = false;
 		for (CK_ULONG i = 0; i < ulCount; ++i)
 		{
 			const FakeRutokenFeatureAttribute* attr =
 				findFakeRutokenFeatureAttribute(pTemplate[i].type);
 			if (attr == NULL) return false;
+			if (pTemplate[i].type == CKA_CLASS) askedForClass = true;
 
 			const CK_BBOOL asBool = attr->value != 0 ? CK_TRUE : CK_FALSE;
 			const CK_ULONG asLong = attr->value;
@@ -3133,7 +3137,7 @@ namespace
 			    memcmp(pTemplate[i].pValue, mine, mineLen) != 0)
 				return false;
 		}
-		return true;
+		return askedForClass;
 	}
 
 	// Fill a template from the object, with the conventions C_GetAttributeValue
