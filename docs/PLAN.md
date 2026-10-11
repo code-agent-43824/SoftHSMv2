@@ -28,7 +28,8 @@
          явного ключа. Выпущено в `v2.7.0-portable.71`.
       2. [x] ГОСТ-CMS parity — выпущено в `v2.7.0-portable.71` (`bd2c9dbd`),
          проверено на шести платформах и по опубликованному архиву (WORKLOG
-         10.10); ждёт прогона владельцем `device-parity` на токене:
+         10.10); владелец прогнал `device-parity` `.71` на токене 11.10 —
+         EXIT=0:
          подпись указанным ключом без самопроверки,
          открытый ключ вместо закрытого → 0x63, signedAttrs и алгоритмы как у
          устройства, ни signers, ни данных при ошибке, signers=0 при
@@ -36,12 +37,26 @@
          `ALLOW_PARTIAL_CHAINS` с доверенным листом; кейс `cms`.
          `USE_TRUSTED_CERTS_FROM_TOKEN` не трогаем: это расхождение по
          `CKA_TRUSTED`, которое владелец велел оставить dual (этап 4).
-      3. [ ] token-manage (`force-user-pin-change`, `standard-default-user-pin`,
-         `MODE_GET_PIN_SET_TO_BE_CHANGED`, unblock, restore-factory-defaults) и
-         локальный PIN (`MODE_GET_LOCAL_PIN_INFO`) — в форке сейчас 0x54.
-      4. [ ] Расхождения dual: `CKA_TRUSTED` после переоткрытия,
-         `CKA_EXTRACTABLE`, приватный `CKA_VALUE`, RSA CMS.
-      5. [ ] Журнал: структура, длины 126/224, неизменность после RSA.
+      Владелец 11.10: «доделай то, что хотел, дальше не залезай, поставь
+      точку» — этапы 3–5 без промежуточных пауз, новых тем не открывать.
+      3. [~] token-manage и локальный PIN. Форк: `TokenManage` режимы 6
+         (`force-user-pin-change`) и 3 (`standard-default-user-pin`) под SO;
+         `SlotManage` — `MODE_GET_PIN_SET_TO_BE_CHANGED`,
+         `MODE_GET_LOCAL_PIN_INFO`, `MODE_RESTORE_FACTORY_DEFAULTS` (данные —
+         проба v2 и probe 3 форка OpenSC). Признак «PIN просрочен» —
+         необязательный атрибут токена в обоих backend; снимается сменой PIN
+         пользователем и форматом. Режимы 4 и 5 остаются 0x54. В клиенте —
+         команда `device-parity-write`: нужен SO PIN, меняет состояние PIN,
+         ставит локальный PIN 3 и в конце форматирует токен в заводские PIN
+         (restore-factory — только с ключом эмитента из окружения).
+      4. [~] Расхождения dual: `CKA_EXTRACTABLE` false→true (0x0 и TRUE либо
+         0x10 и FALSE), приватный `CKA_VALUE` (0x11 или 0x12), RSA CMS (0x63
+         либо проверяемый конверт), `CKA_TRUSTED` после переоткрытия (FALSE и
+         0x80000009 из хранилища токена либо TRUE и успех), повторная
+         установка → 0x10 у обоих.
+      5. [~] Журнал: после ГОСТ-256 запись меняется и `AA` — подписанный хеш,
+         после RSA — та же, у ГОСТ-512 длина иная, чем у 256. Точные длины
+         (126/224 у устройства, 116/214 у форка) не утверждаются.
 
 - [x] **ГОСТ SignedData в `C_EX_PKCS7Sign`/Verify (08.10).** По новому
       запросу владельца расширить выпущенный RSA CMS на ГОСТ 2012/256
