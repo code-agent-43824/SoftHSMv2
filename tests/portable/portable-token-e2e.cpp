@@ -7894,6 +7894,211 @@ static CK_BBOOL booleanAttribute(Module& module, CK_SESSION_HANDLE session,
     return value;
 }
 
+// The places where this module departs from the device on purpose (JOURNAL of
+// 9 and 10 October 2026, AGENTS.md "Settled decisions"): either answer passes,
+// each only together with what the same answer implies, and the trace names
+// the one that was given.
+static void verifyDivergenceParity(Module& module, CK_SESSION_HANDLE session,
+                                   CK_FUNCTION_LIST_EXTENDED_PTR ex)
+{
+    const Bytes keyId = asciiBytes("parity-div-gost");
+    const Bytes rsaId = asciiBytes("parity-div-rsa");
+    for (const Bytes* id : {&keyId, &rsaId})
+        removePriorTestObjects(module, session, *id);
+
+    // The key the probe used: GOST-256 CryptoPro-A, able to sign, not extractable.
+    CK_OBJECT_CLASS publicClass = CKO_PUBLIC_KEY, privateClass = CKO_PRIVATE_KEY;
+    CK_KEY_TYPE keyType = CKK_GOSTR3410;
+    CK_BBOOL yes = CK_TRUE, no = CK_FALSE;
+    Bytes curve = bytesFromHex("06072a850302022301");
+    Bytes hash = bytesFromHex("06082a85030701010202");
+    CK_ATTRIBUTE publicAttrs[] = {
+        {CKA_CLASS, &publicClass, sizeof(publicClass)},
+        {CKA_KEY_TYPE, &keyType, sizeof(keyType)},
+        {CKA_TOKEN, &yes, sizeof(yes)}, {CKA_VERIFY, &yes, sizeof(yes)},
+        {CKA_GOSTR3410_PARAMS, curve.data(), static_cast<CK_ULONG>(curve.size())},
+        {CKA_GOSTR3411_PARAMS, hash.data(), static_cast<CK_ULONG>(hash.size())},
+        {CKA_ID, const_cast<unsigned char*>(keyId.data()), static_cast<CK_ULONG>(keyId.size())}
+    };
+    CK_ATTRIBUTE privateAttrs[] = {
+        {CKA_CLASS, &privateClass, sizeof(privateClass)},
+        {CKA_KEY_TYPE, &keyType, sizeof(keyType)},
+        {CKA_TOKEN, &yes, sizeof(yes)}, {CKA_PRIVATE, &yes, sizeof(yes)},
+        {CKA_SIGN, &yes, sizeof(yes)}, {CKA_DERIVE, &no, sizeof(no)},
+        {CKA_EXTRACTABLE, &no, sizeof(no)},
+        {CKA_GOSTR3410_PARAMS, curve.data(), static_cast<CK_ULONG>(curve.size())},
+        {CKA_GOSTR3411_PARAMS, hash.data(), static_cast<CK_ULONG>(hash.size())},
+        {CKA_ID, const_cast<unsigned char*>(keyId.data()), static_cast<CK_ULONG>(keyId.size())}
+    };
+    CK_MECHANISM generation{CKM_GOSTR3410_KEY_PAIR_GEN, nullptr, 0};
+    CK_OBJECT_HANDLE publicKey = CK_INVALID_HANDLE, privateKey = CK_INVALID_HANDLE;
+    callOk("C_GenerateKeyPair", "device-parity non-extractable GOST-256 key", [&] {
+        return module->C_GenerateKeyPair(session, &generation,
+            publicAttrs, sizeof(publicAttrs) / sizeof(publicAttrs[0]),
+            privateAttrs, sizeof(privateAttrs) / sizeof(privateAttrs[0]),
+            &publicKey, &privateKey);
+    });
+
+    // CKA_EXTRACTABLE false -> true: the device allows it (0x0, reads TRUE);
+    // this module keeps the PKCS #11 rule (0x10, stays FALSE).
+    CK_ATTRIBUTE extractable{CKA_EXTRACTABLE, &yes, sizeof(yes)};
+    const CK_RV extractableRv = invoke("C_SetAttributeValue", "CKA_EXTRACTABLE false->true", [&] {
+        return module->C_SetAttributeValue(session, privateKey, &extractable, 1);
+    });
+    const CK_BBOOL nowExtractable = booleanAttribute(module, session, privateKey, CKA_EXTRACTABLE);
+    if (extractableRv == CKR_OK && nowExtractable == CK_TRUE)
+        trace("PARITY", "CKA_EXTRACTABLE false->true: CKR_OK and TRUE, as on the device");
+    else if (extractableRv == CKR_ATTRIBUTE_READ_ONLY && nowExtractable == CK_FALSE)
+        trace("PARITY", "CKA_EXTRACTABLE false->true: CKR_ATTRIBUTE_READ_ONLY and FALSE, "
+                        "as this module (deliberate divergence)");
+    else
+        fail(std::string("CKA_EXTRACTABLE false->true answered ") + rvName(extractableRv) +
+             " and reads " + (nowExtractable ? "TRUE" : "FALSE") +
+             ": neither the device's answer nor this module's");
+
+    // The private value: CKR_ATTRIBUTE_TYPE_INVALID on the device,
+    // CKR_ATTRIBUTE_SENSITIVE here; never the value.
+    CK_ATTRIBUTE value{CKA_VALUE, nullptr, 0};
+    const CK_RV valueRv = invoke("C_GetAttributeValue", "private CKA_VALUE", [&] {
+        return module->C_GetAttributeValue(session, privateKey, &value, 1);
+    });
+    if (valueRv == CKR_ATTRIBUTE_TYPE_INVALID)
+        trace("PARITY", "private CKA_VALUE: CKR_ATTRIBUTE_TYPE_INVALID, as on the device");
+    else if (valueRv == CKR_ATTRIBUTE_SENSITIVE)
+        trace("PARITY", "private CKA_VALUE: CKR_ATTRIBUTE_SENSITIVE, as this module "
+                        "(deliberate divergence)");
+    else
+        fail(std::string("private CKA_VALUE answered ") + rvName(valueRv) +
+             ": neither the device's answer nor this module's");
+
+    // RSA in C_EX_PKCS7Sign: refused by the device (0x63), signed here by the
+    // owner's decision of 10 October 2026 - and then the envelope must verify.
+    const CmsKeyPair rsa = cmsKeyPair(module, session, rsaId);
+    const Bytes rsaName = cmsName("CryptoMost Parity RSA");
+    const Bytes rsaDer = cmsCertificate(module, session, rsa.publicKey, rsa.privateKey,
+                                        rsaName, rsaName, 31, false);
+    const CK_OBJECT_HANDLE rsaCert = cmsTokenCertificate(module, session, rsaId, rsaDer, rsaName);
+    const Bytes content = asciiBytes("CryptoMost RSA CMS parity payload");
+    Bytes envelope;
+    const CK_RV rsaRv = cmsSign(ex, session, content, rsaCert, rsa.privateKey, {}, 0, &envelope,
+                                "RSA attached");
+    if (rsaRv == CKR_KEY_TYPE_INCONSISTENT)
+        trace("PARITY", "RSA C_EX_PKCS7Sign: CKR_KEY_TYPE_INCONSISTENT, as on the device");
+    else if (rsaRv == CKR_OK)
+    {
+        const CmsVerifyResult result = cmsVerify(ex, session, envelope, &rsaDer, nullptr, true, 0,
+                                                 nullptr, "verify the RSA envelope");
+        check(result.initRv, CKR_OK, "C_EX_PKCS7VerifyInit(RSA envelope)");
+        check(result.rv, CKR_OK, "C_EX_PKCS7Verify(RSA envelope)");
+        if (!result.hasData || result.data != content || result.signers.size() != 1 ||
+            result.signers[0] != rsaDer)
+            fail("the RSA envelope does not verify to the signed data and its signer");
+        trace("PARITY", "RSA C_EX_PKCS7Sign: a verifiable envelope, as this module "
+                        "(the owner's decision of 10 October 2026)");
+    }
+    else
+        fail(std::string("RSA C_EX_PKCS7Sign answered ") + rvName(rsaRv) +
+             ": neither the device's answer nor this module's");
+
+    for (const Bytes* id : {&keyId, &rsaId})
+        removePriorTestObjects(module, session, *id);
+    trace("PARITY", "case divergences passed");
+}
+
+static Bytes paritySign(Module& module, CK_SESSION_HANDLE session, CK_OBJECT_HANDLE key,
+                        CK_MECHANISM_TYPE mechanismType, const Bytes& data, const char* what)
+{
+    CK_MECHANISM mechanism{mechanismType, nullptr, 0};
+    callOk("C_SignInit", std::string(what) + ", " + mechanismName(mechanismType),
+           [&] { return module->C_SignInit(session, &mechanism, key); });
+    Bytes signature(512);
+    CK_ULONG length = static_cast<CK_ULONG>(signature.size());
+    callOk("C_Sign", what, [&] {
+        return module->C_Sign(session, const_cast<unsigned char*>(data.data()),
+                              static_cast<CK_ULONG>(data.size()), signature.data(), &length);
+    });
+    signature.resize(length);
+    return signature;
+}
+
+static Bytes readJournal(CK_FUNCTION_LIST_EXTENDED_PTR ex, CK_SLOT_ID slot, const char* when)
+{
+    CK_ULONG size = 0;
+    callOk("C_EX_GetJournal", std::string("size, ") + when,
+           [&] { return ex->C_EX_GetJournal(slot, nullptr, &size); });
+    Bytes journal(size);
+    if (size != 0)
+        callOk("C_EX_GetJournal", std::string("record, ") + when,
+               [&] { return ex->C_EX_GetJournal(slot, journal.data(), &size); });
+    journal.resize(size);
+    trace("OUTPUT", std::string("journal ") + when + ": " + std::to_string(journal.size()) +
+                    " bytes, hex=" + hexBytes(journal.data(), journal.size()));
+    return journal;
+}
+
+// The journal's one record, 80 { ... }, and its AA element: the hash that was
+// signed, as the caller handed it in.
+static Bytes journalSignedHash(const Bytes& journal, const char* when)
+{
+    if (journal.empty()) fail(std::string("the journal is empty ") + when);
+    const Tlv record = parseTlv(journal, 0);
+    if (record.tag != 0x80 || record.total() != journal.size())
+        fail(std::string("the journal ") + when + " is not one 80 record");
+    for (const Tlv& element : tlvChildren(journal, record))
+        if (element.tag == 0xAA)
+            return Bytes(journal.begin() + static_cast<std::ptrdiff_t>(element.content()),
+                         journal.begin() + static_cast<std::ptrdiff_t>(element.content() + element.length));
+    fail(std::string("the journal record ") + when + " has no AA (signed hash) element");
+}
+
+// The journal as the device keeps it (JOURNAL of 9 and 10 October 2026): one
+// record of the last GOST signature, replaced by each new one, carrying the
+// signed hash in AA; an RSA signature leaves it alone; a GOST-512 record is a
+// different size from a GOST-256 one. The lengths themselves differ between
+// the two (126 and 224 bytes on the device), so they are not compared.
+static void verifyJournalParity(Module& module, CK_SESSION_HANDLE session,
+                                CK_FUNCTION_LIST_EXTENDED_PTR ex, CK_SLOT_ID slot)
+{
+    const Bytes id256 = asciiBytes("parity-journal-256");
+    const Bytes id512 = asciiBytes("parity-journal-512");
+    const Bytes idRsa = asciiBytes("parity-journal-rsa");
+    for (const Bytes* id : {&id256, &id512, &idRsa})
+        removePriorTestObjects(module, session, *id);
+    const Bytes data = asciiBytes("journal");
+
+    const CmsKeyPair gost256 = cmsGostKeyPair(module, session, id256, 256);
+    const Bytes before = readJournal(ex, slot, "before the GOST-256 signature");
+    const Bytes hash256 = digest(module, session, CKM_GOSTR3411_12_256, data, 32);
+    (void)paritySign(module, session, gost256.privateKey, CKM_GOSTR3410, hash256,
+                     "journal GOST-256 signature");
+    const Bytes after256 = readJournal(ex, slot, "after the GOST-256 signature");
+    if (after256 == before) fail("the journal did not change after a GOST-256 signature");
+    expectBytes(journalSignedHash(after256, "after the GOST-256 signature"), hash256,
+                "journal after GOST-256: AA is the signed hash");
+
+    const CmsKeyPair rsa = cmsKeyPair(module, session, idRsa);
+    (void)paritySign(module, session, rsa.privateKey, CKM_SHA256_RSA_PKCS, data,
+                     "journal RSA signature");
+    if (readJournal(ex, slot, "after the RSA signature") != after256)
+        fail("an RSA signature changed the journal");
+    trace("PARITY", "journal after RSA: unchanged, as on the device");
+
+    const CmsKeyPair gost512 = cmsGostKeyPair(module, session, id512, 512);
+    const Bytes hash512 = digest(module, session, CKM_GOSTR3411_12_512, data, 64);
+    (void)paritySign(module, session, gost512.privateKey, CKM_GOSTR3410_512, hash512,
+                     "journal GOST-512 signature");
+    const Bytes after512 = readJournal(ex, slot, "after the GOST-512 signature");
+    expectBytes(journalSignedHash(after512, "after the GOST-512 signature"), hash512,
+                "journal after GOST-512: AA is the signed hash");
+    if (after512.size() == after256.size())
+        fail("a GOST-512 journal record is the size of a GOST-256 one");
+    trace("PARITY", "journal after GOST-512: a record of another size, as on the device");
+
+    for (const Bytes* id : {&id256, &id512, &idRsa})
+        removePriorTestObjects(module, session, *id);
+    trace("PARITY", "case journal passed");
+}
+
 // Runs against an initialized token with P11_TEST_USER_PIN and leaves it as it
 // found it: every object a case creates is removed.
 static void verifyDeviceParity(const fs::path& modulePath)
@@ -7913,6 +8118,10 @@ static void verifyDeviceParity(const fs::path& modulePath)
     verifyCsrParity(module, session, ex);
     trace("PARITY", "case cms");
     verifyGostCmsParity(module, session, ex);
+    trace("PARITY", "case divergences");
+    verifyDivergenceParity(module, session, ex);
+    trace("PARITY", "case journal");
+    verifyJournalParity(module, session, ex, slot);
 
     logout(module, session, "CKU_USER");
     closeSession(module, session);

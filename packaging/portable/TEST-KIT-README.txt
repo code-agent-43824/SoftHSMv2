@@ -101,10 +101,14 @@ this module and on a real Rutoken ECP through the vendor library:
 C_EX_CreateCSR (GOST-256 and RSA-2048 requests, their exact DER, the
 self-signature and the device's refusals) and GOST-256 CMS (C_EX_PKCS7Sign
 and C_EX_PKCS7Verify*: envelope structure, attached/detached/hardware hash,
-trusted root, tampering, unrelated CA, signature only, partial chain).
-Every expectation was read off the device. It needs an initialized token
-and its user PIN, logs out and back in once, does not format the token and
-removes every object it creates. Against a token:
+trusted root, tampering, unrelated CA, signature only, partial chain), the
+deliberate divergences - CKA_EXTRACTABLE false->true, a private CKA_VALUE,
+RSA CMS - with either answer accepted and named in the trace, and the
+journal: a new record holding the signed hash after a GOST-256 signature,
+none after RSA, another size after GOST-512. Every expectation was read off
+the device. It needs an initialized token and its user PIN, logs out and
+back in once, does not format the token and removes every object it
+creates. Against a token:
 
   P11_TEST_USER_PIN=12345678 bin/portable-token-e2e device-parity \
     /usr/lib/librtpkcs11ecp.so

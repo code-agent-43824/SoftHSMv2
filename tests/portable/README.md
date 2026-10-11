@@ -171,7 +171,18 @@ expectation in them was read off the device by
   of another pair, a public key as the private one; verification with a
   trusted root, a tampered signature, an unrelated CA, signature only, no
   store, a partial chain, and the envelope's certificates ignored. On every
-  failure neither data nor signers come back, as on the device.
+  failure neither data nor signers come back, as on the device;
+- `divergences`: the places where this module departs from the device on
+  purpose, either answer accepted together with what it implies -
+  `CKA_EXTRACTABLE` false->true (`CKR_OK` and TRUE on the device,
+  `CKR_ATTRIBUTE_READ_ONLY` and FALSE here), a private `CKA_VALUE`
+  (`CKR_ATTRIBUTE_TYPE_INVALID` or `CKR_ATTRIBUTE_SENSITIVE`), RSA in
+  `C_EX_PKCS7Sign` (`CKR_KEY_TYPE_INCONSISTENT`, or an envelope that
+  verifies); the trace names the answer given;
+- `journal`: `C_EX_GetJournal` after a GOST-256 signature holds a new record
+  whose `AA` element is the signed hash, an RSA signature leaves it alone,
+  and a GOST-512 record differs in size from a GOST-256 one. The lengths
+  themselves are not compared: the device's records are longer.
 
 It needs an initialized token and `P11_TEST_USER_PIN`, does not format it,
 logs the user out and back in once, and removes every object it creates:
