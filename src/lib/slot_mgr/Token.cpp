@@ -694,17 +694,16 @@ CK_RV Token::recordSignature(const ByteString& digest, const ByteString& signatu
 	if (signature.size() == 0 || signature.size() > 128) return CKR_DEVICE_ERROR;
 	// One Rutoken-style TLV record. The four-byte prefix is private storage for
 	// the counter; C_EX_GetJournal returns only the TLV bytes. Without a journal
-	// signing key, 0xB6 contains the operation's actual signature.
+	// signing key, 0xB6 contains the operation's actual signature, reversed.
+	// The eight-byte serial is appended by C_EX_GetJournal, which has the facade's
+	// C_EX_GetTokenInfoExtended serial available.
 	ByteString operation;
 	operation.resize(12);
 	operation[0] = 1;
 	operation[1] = rsfType;
 	operation[3] = hashedOnToken ? 1 : 0;
 	ByteString inner;
-	inner += static_cast<unsigned char>(0x85);
-	inner += static_cast<unsigned char>(12);
-	inner += operation;
-	if (!hashedOnToken && (digest.size() == 32 || digest.size() == 64))
+	if (digest.size() == 32 || digest.size() == 64)
 	{
 		inner += static_cast<unsigned char>(0xAA);
 		inner += static_cast<unsigned char>(digest.size());
@@ -713,13 +712,19 @@ CK_RV Token::recordSignature(const ByteString& digest, const ByteString& signatu
 	inner += static_cast<unsigned char>(0xB6);
 	if (signature.size() >= 128) inner += static_cast<unsigned char>(0x81);
 	inner += static_cast<unsigned char>(signature.size());
-	inner += signature;
+	for (size_t i = signature.size(); i != 0; --i)
+		inner += signature.const_byte_str()[i - 1];
+	inner += static_cast<unsigned char>(0x85);
+	inner += static_cast<unsigned char>(12);
+	// operation[4..7] is a placeholder. The device's per-key value is unknown.
+	const CK_ULONG countOffsetInInner = static_cast<CK_ULONG>(inner.size() + 8);
+	inner += operation;
 	ByteString stored;
 	stored.resize(4);
 	stored += static_cast<unsigned char>(0x80);
 	if (inner.size() >= 128) stored += static_cast<unsigned char>(0x81);
 	stored += static_cast<unsigned char>(inner.size());
-	const CK_ULONG countOffset = static_cast<CK_ULONG>(stored.size() + 2 + 8);
+	const CK_ULONG countOffset = static_cast<CK_ULONG>(stored.size() + countOffsetInInner);
 	stored += inner;
 	return token->advanceJournal(stored, countOffset) ? CKR_OK : CKR_DEVICE_ERROR;
 }

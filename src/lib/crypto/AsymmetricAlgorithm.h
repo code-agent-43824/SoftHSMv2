@@ -135,6 +135,8 @@ public:
 	virtual bool signInit(PrivateKey* privateKey, const AsymMech::Type mechanism, const MechanismParam* mechanismParam = NULL);
 	virtual bool signUpdate(const ByteString& dataToSign);
 	virtual bool signFinal(ByteString& signature);
+	// Available for mechanisms that hash data as part of signing.
+	virtual bool getSignedDigest(ByteString& /*digest*/) const { return false; }
 
 	// Verification functions
 	virtual bool verify(PublicKey* publicKey, const ByteString& originalData, const ByteString& signature, const AsymMech::Type mechanism, const MechanismParam* mechanismParam = NULL);

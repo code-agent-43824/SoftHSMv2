@@ -1457,6 +1457,30 @@ CK_RV SoftHSM::C_EX_GetJournal(CK_SLOT_ID slotID, CK_BYTE_PTR pJournal,
 	if (token == NULL) return CKR_TOKEN_NOT_PRESENT;
 	ByteString journal;
 	if (!token->getJournal(journal)) return CKR_DEVICE_ERROR;
+	// Older stored records begin with 85 and remain readable unchanged. New
+	// records start with AA (or B6 for a legacy hashed GOST mechanism); append
+	// the facade serial as the device does without changing the storage format.
+	if (journal.size() >= 3 && journal[0] == 0x80)
+	{
+		const size_t header = journal[1] == 0x81 ? 3 : 2;
+		if (journal.size() > header && journal[header] != 0x85)
+		{
+			CK_TOKEN_INFO_EXTENDED info;
+			memset(&info, 0, sizeof(info));
+			info.ulSizeofThisStructure = sizeof(info);
+			const CK_RV infoRv = C_EX_GetTokenInfoExtended(slotID, &info);
+			if (infoRv != CKR_OK) return infoRv;
+			ByteString inner = journal.substr(header);
+			inner += static_cast<unsigned char>(0x83);
+			inner += static_cast<unsigned char>(sizeof(info.serialNumber));
+			inner += ByteString(info.serialNumber, sizeof(info.serialNumber));
+			journal = ByteString();
+			journal += static_cast<unsigned char>(0x80);
+			if (inner.size() >= 128) journal += static_cast<unsigned char>(0x81);
+			journal += static_cast<unsigned char>(inner.size());
+			journal += inner;
+		}
+	}
 	if (pJournal == NULL_PTR) { *pulJournalSize = journal.size(); return CKR_OK; }
 	if (*pulJournalSize < journal.size())
 	{
@@ -6559,7 +6583,7 @@ static CK_RV MacSign(Session* session, CK_BYTE_PTR pData, CK_ULONG ulDataLen, CK
 }
 
 // AsymmetricAlgorithm version of C_Sign
-static CK_RV AsymSign(Session* session, CK_BYTE_PTR pData, CK_ULONG ulDataLen, CK_BYTE_PTR pSignature, CK_ULONG_PTR pulSignatureLen)
+static CK_RV AsymSign(Session* session, CK_BYTE_PTR pData, CK_ULONG ulDataLen, CK_BYTE_PTR pSignature, CK_ULONG_PTR pulSignatureLen, ByteString* signedDigest)
 {
 	AsymmetricAlgorithm* asymCrypto = session->getAsymmetricCryptoOp();
 	AsymMech::Type mechanism = session->getMechanism();
@@ -6640,6 +6664,7 @@ static CK_RV AsymSign(Session* session, CK_BYTE_PTR pData, CK_ULONG ulDataLen, C
 	}
 	memcpy(pSignature, signature.byte_str(), size);
 	*pulSignatureLen = size;
+	if (signedDigest != NULL) asymCrypto->getSignedDigest(*signedDigest);
 
 	session->resetOp();
 	return CKR_OK;
@@ -6670,11 +6695,14 @@ CK_RV SoftHSM::C_Sign(CK_SESSION_HANDLE hSession, CK_BYTE_PTR pData, CK_ULONG ul
 		const bool gost = mechanism == AsymMech::GOST ||
 			mechanism == AsymMech::GOST_GOST || mechanism == AsymMech::GOST_512 ||
 			mechanism == AsymMech::GOST_GOST_512;
-		const CK_RV rv = AsymSign(session, pData, ulDataLen, pSignature, pulSignatureLen);
+		ByteString signedDigest;
+		const CK_RV rv = AsymSign(session, pData, ulDataLen, pSignature, pulSignatureLen, &signedDigest);
 		if (rv != CKR_OK || pSignature == NULL_PTR || !fakeRutokenECP || !gost) return rv;
 		Token* token = session->getToken();
 		if (token == NULL) return CKR_TOKEN_NOT_PRESENT;
-		return token->recordSignature(ByteString(pData, ulDataLen),
+		return token->recordSignature(
+			(mechanism == AsymMech::GOST_GOST || mechanism == AsymMech::GOST_GOST_512)
+				? signedDigest : ByteString(pData, ulDataLen),
 			ByteString(pSignature, *pulSignatureLen),
 			(mechanism == AsymMech::GOST_512 || mechanism == AsymMech::GOST_GOST_512)
 				? 0x43 : 0x03,
@@ -6806,7 +6834,7 @@ static CK_RV MacSignFinal(Session* session, CK_BYTE_PTR pSignature, CK_ULONG_PTR
 }
 
 // AsymmetricAlgorithm version of C_SignFinal
-static CK_RV AsymSignFinal(Session* session, CK_BYTE_PTR pSignature, CK_ULONG_PTR pulSignatureLen)
+static CK_RV AsymSignFinal(Session* session, CK_BYTE_PTR pSignature, CK_ULONG_PTR pulSignatureLen, ByteString* signedDigest)
 {
 	AsymmetricAlgorithm* asymCrypto = session->getAsymmetricCryptoOp();
 	PrivateKey* privateKey = session->getPrivateKey();
@@ -6855,6 +6883,7 @@ static CK_RV AsymSignFinal(Session* session, CK_BYTE_PTR pSignature, CK_ULONG_PT
 	}
 	memcpy(pSignature, signature.byte_str(), size);
 	*pulSignatureLen = size;
+	if (signedDigest != NULL) asymCrypto->getSignedDigest(*signedDigest);
 
 	session->resetOp();
 	return CKR_OK;
@@ -6880,13 +6909,14 @@ CK_RV SoftHSM::C_SignFinal(CK_SESSION_HANDLE hSession, CK_BYTE_PTR pSignature, C
 	else
 	{
 		const AsymMech::Type mechanism = session->getMechanism();
-		const CK_RV rv = AsymSignFinal(session, pSignature, pulSignatureLen);
+		ByteString signedDigest;
+		const CK_RV rv = AsymSignFinal(session, pSignature, pulSignatureLen, &signedDigest);
 		if (rv != CKR_OK || pSignature == NULL_PTR || !fakeRutokenECP ||
 		    (mechanism != AsymMech::GOST_GOST && mechanism != AsymMech::GOST_GOST_512))
 			return rv;
 		Token* token = session->getToken();
 		if (token == NULL) return CKR_TOKEN_NOT_PRESENT;
-		return token->recordSignature(ByteString(), ByteString(pSignature, *pulSignatureLen),
+		return token->recordSignature(signedDigest, ByteString(pSignature, *pulSignatureLen),
 			mechanism == AsymMech::GOST_GOST_512 ? 0x43 : 0x03, true);
 	}
 }

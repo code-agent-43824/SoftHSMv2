@@ -343,6 +343,7 @@ bool BotanGOST2012Signer::signInit(PrivateKey* privateKey,
 	                               const AsymMech::Type mechanism,
 	                               const MechanismParam* mechanismParam)
 {
+	signedDigest.wipe();
 	if (mechanismParam != NULL ||
 	    mechanismCoordinateBytes(mechanism) == 0 ||
 	    privateKey == NULL || !privateKey->isOfType(BotanGOST2012PrivateKey::type) ||
@@ -416,11 +417,19 @@ bool BotanGOST2012Signer::signFinal(ByteString& signature)
 	const bool result = signDigest(privateKey,
 	                               mechanismCoordinateBytes(currentMechanism),
 	                               digest, signature);
+	if (result) signedDigest = digest;
 	ByteString dummy;
 	if (!AsymmetricAlgorithm::signFinal(dummy)) return false;
 	rawInput.wipe();
 	hash.reset();
 	return result;
+}
+
+bool BotanGOST2012Signer::getSignedDigest(ByteString& digest) const
+{
+	if (signedDigest.size() == 0) return false;
+	digest = signedDigest;
+	return true;
 }
 
 bool BotanGOST2012Signer::verifyInit(PublicKey* publicKey,

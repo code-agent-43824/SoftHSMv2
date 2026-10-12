@@ -6342,12 +6342,36 @@ static void verifyRutokenJournal(const fs::path& modulePath)
         const GOST2012KeyPair pair = verifyGOST2012KeyGeneration(
             module, session, bytesFromHex("4a4f55524e414c"));
         const Bytes digest(32, 0x5a);
-        for (unsigned run = 1; run <= 3; ++run)
+        CK_TOKEN_INFO_EXTENDED extended{};
+        extended.ulSizeofThisStructure = sizeof(extended);
+        callOk("C_EX_GetTokenInfoExtended", "journal serial", [&] {
+            return ex->C_EX_GetTokenInfoExtended(slot, &extended);
+        });
+        for (unsigned run = 1; run <= 4; ++run)
         {
-            const CK_MECHANISM_TYPE mechanism = run == 3
+            const CK_MECHANISM_TYPE mechanism = run >= 3
                 ? CKM_GOSTR3410_WITH_GOSTR3411_2012_256 : CKM_GOSTR3410;
-            const Bytes signature = gostSign(module, session, pair.privateKey,
-                                             mechanism, digest);
+            Bytes signature;
+            if (run == 4)
+            {
+                CK_MECHANISM signMechanism{mechanism, nullptr, 0};
+                callOk("C_SignInit", "journal multipart", [&] {
+                    return module->C_SignInit(session, &signMechanism, pair.privateKey);
+                });
+                callOk("C_SignUpdate", "journal first half", [&] {
+                    return module->C_SignUpdate(session, const_cast<CK_BYTE*>(digest.data()), 16);
+                });
+                callOk("C_SignUpdate", "journal second half", [&] {
+                    return module->C_SignUpdate(session, const_cast<CK_BYTE*>(digest.data() + 16), 16);
+                });
+                signature.resize(64);
+                CK_ULONG signatureLength = static_cast<CK_ULONG>(signature.size());
+                callOk("C_SignFinal", "journal multipart", [&] {
+                    return module->C_SignFinal(session, signature.data(), &signatureLength);
+                });
+                signature.resize(signatureLength);
+            }
+            else signature = gostSign(module, session, pair.privateKey, mechanism, digest);
             length = 0;
             callOk("C_EX_GetJournal", "journal size", [&] {
                 return ex->C_EX_GetJournal(slot, nullptr, &length);
@@ -6362,27 +6386,28 @@ static void verifyRutokenJournal(const fs::path& modulePath)
             callOk("C_EX_GetJournal", "journal content", [&] {
                 return ex->C_EX_GetJournal(slot, journal.data(), &length);
             });
-            if (length != journal.size() || journal[0] != 0x80)
+            if (length != 126 || journal[0] != 0x80 || journal[1] != 0x7c)
                 fail("journal outer TLV is invalid");
-            const size_t header = journal[1] == 0x81 ? 3 : 2;
-            if (journal[header] != 0x85 || journal[header + 1] != 12 ||
-                journal[header + 2] != 1 || journal[header + 3] != 3 ||
-                journal[header + 5] != (run == 3 ? 1 : 0))
+            const Bytes signedHash = run >= 3
+                ? ::digest(module, session, CKM_GOSTR3411_12_256, digest, 32) : digest;
+            if (journal[2] != 0xaa || journal[3] != 32 ||
+                !std::equal(signedHash.begin(), signedHash.end(), journal.begin() + 4) ||
+                journal[36] != 0xb6 || journal[37] != 64 ||
+                !std::equal(signature.rbegin(), signature.rend(), journal.begin() + 38) ||
+                journal[102] != 0x85 || journal[103] != 12 ||
+                journal[104] != 1 || journal[105] != 3 ||
+                journal[107] != (run >= 3 ? 1 : 0))
                 fail("journal operation metadata is invalid");
-            const size_t countAt = header + 10;
+            const size_t countAt = 112;
             const uint32_t count = (static_cast<uint32_t>(journal[countAt]) << 24) |
                 (static_cast<uint32_t>(journal[countAt + 1]) << 16) |
                 (static_cast<uint32_t>(journal[countAt + 2]) << 8) |
                 static_cast<uint32_t>(journal[countAt + 3]);
             if (count != run) fail("journal signature counter is incorrect");
-            const Bytes suffix = [&] {
-                Bytes expected{0xB6, static_cast<CK_BYTE>(signature.size())};
-                expected.insert(expected.end(), signature.begin(), signature.end());
-                return expected;
-            }();
-            if (journal.size() < suffix.size() ||
-                !std::equal(suffix.begin(), suffix.end(), journal.end() - suffix.size()))
-                fail("journal does not contain the completed signature");
+            if (journal[116] != 0x83 || journal[117] != 8 ||
+                !std::equal(extended.serialNumber, extended.serialNumber + 8,
+                            journal.begin() + 118))
+                fail("journal serial differs from C_EX_GetTokenInfoExtended");
             saved = journal;
         }
         logout(module, session, "CKU_USER");
@@ -8129,11 +8154,41 @@ static Bytes journalSignedHash(const Bytes& journal, const char* when)
     fail(std::string("the journal record ") + when + " has no AA (signed hash) element");
 }
 
-// The journal as the device keeps it (JOURNAL of 9 and 10 October 2026): one
-// record of the last GOST signature, replaced by each new one, carrying the
-// signed hash in AA; an RSA signature leaves it alone; a GOST-512 record is a
-// different size from a GOST-256 one. The lengths themselves differ between
-// the two (126 and 224 bytes on the device), so they are not compared.
+static void expectJournalRecord(CK_FUNCTION_LIST_EXTENDED_PTR ex, CK_SLOT_ID slot,
+                                const Bytes& journal, const Bytes& signedHash,
+                                const Bytes& signature, bool hashedOnToken,
+                                const char* when)
+{
+    if (journal.size() != (signedHash.size() == 32 ? 126U : 224U))
+        fail(std::string("journal record length differs from the device ") + when);
+    const Tlv record = parseTlv(journal, 0);
+    if (record.tag != 0x80 || record.total() != journal.size())
+        fail(std::string("invalid journal outer TLV ") + when);
+    const std::vector<Tlv> fields = tlvChildren(journal, record);
+    if (fields.size() != 4 || fields[0].tag != 0xaa || fields[1].tag != 0xb6 ||
+        fields[2].tag != 0x85 || fields[3].tag != 0x83 ||
+        fields[0].length != signedHash.size() || fields[1].length != signature.size() ||
+        fields[2].length != 12 || fields[3].length != 8)
+        fail(std::string("journal TLV order or lengths differ from the device ") + when);
+    if (!std::equal(signedHash.begin(), signedHash.end(),
+                    journal.begin() + static_cast<std::ptrdiff_t>(fields[0].content())) ||
+        !std::equal(signature.rbegin(), signature.rend(),
+                    journal.begin() + static_cast<std::ptrdiff_t>(fields[1].content())) ||
+        journal[fields[2].content()] != 1 ||
+        journal[fields[2].content() + 1] != (signedHash.size() == 32 ? 3 : 0x43) ||
+        journal[fields[2].content() + 3] != (hashedOnToken ? 1 : 0))
+        fail(std::string("journal hash, reversed signature or operation differ ") + when);
+    CK_TOKEN_INFO_EXTENDED info{};
+    info.ulSizeofThisStructure = sizeof(info);
+    callOk("C_EX_GetTokenInfoExtended", when,
+           [&] { return ex->C_EX_GetTokenInfoExtended(slot, &info); });
+    if (!std::equal(info.serialNumber, info.serialNumber + 8,
+                    journal.begin() + static_cast<std::ptrdiff_t>(fields[3].content())))
+        fail(std::string("journal serial differs from extended token info ") + when);
+}
+
+// The device replaces one record after each GOST signature and leaves it
+// unchanged after RSA. Compare the exact TLV shape, hash and signature bytes.
 static void verifyJournalParity(Module& module, CK_SESSION_HANDLE session,
                                 CK_FUNCTION_LIST_EXTENDED_PTR ex, CK_SLOT_ID slot)
 {
@@ -8147,12 +8202,13 @@ static void verifyJournalParity(Module& module, CK_SESSION_HANDLE session,
     const CmsKeyPair gost256 = cmsGostKeyPair(module, session, id256, 256);
     const Bytes before = readJournal(ex, slot, "before the GOST-256 signature");
     const Bytes hash256 = digest(module, session, CKM_GOSTR3411_12_256, data, 32);
-    (void)paritySign(module, session, gost256.privateKey, CKM_GOSTR3410, hash256,
-                     "journal GOST-256 signature");
+    const Bytes signature256 = paritySign(module, session, gost256.privateKey,
+        CKM_GOSTR3410, hash256, "journal GOST-256 signature");
     const Bytes after256 = readJournal(ex, slot, "after the GOST-256 signature");
     if (after256 == before) fail("the journal did not change after a GOST-256 signature");
     expectBytes(journalSignedHash(after256, "after the GOST-256 signature"), hash256,
                 "journal after GOST-256: AA is the signed hash");
+    expectJournalRecord(ex, slot, after256, hash256, signature256, false, "GOST-256 raw");
 
     const CmsKeyPair rsa = cmsKeyPair(module, session, idRsa);
     (void)paritySign(module, session, rsa.privateKey, CKM_SHA256_RSA_PKCS, data,
@@ -8163,14 +8219,37 @@ static void verifyJournalParity(Module& module, CK_SESSION_HANDLE session,
 
     const CmsKeyPair gost512 = cmsGostKeyPair(module, session, id512, 512);
     const Bytes hash512 = digest(module, session, CKM_GOSTR3411_12_512, data, 64);
-    (void)paritySign(module, session, gost512.privateKey, CKM_GOSTR3410_512, hash512,
-                     "journal GOST-512 signature");
+    const Bytes signature512 = paritySign(module, session, gost512.privateKey,
+        CKM_GOSTR3410_512, hash512, "journal GOST-512 signature");
     const Bytes after512 = readJournal(ex, slot, "after the GOST-512 signature");
     expectBytes(journalSignedHash(after512, "after the GOST-512 signature"), hash512,
                 "journal after GOST-512: AA is the signed hash");
-    if (after512.size() == after256.size())
-        fail("a GOST-512 journal record is the size of a GOST-256 one");
+    expectJournalRecord(ex, slot, after512, hash512, signature512, false, "GOST-512 raw");
     trace("PARITY", "journal after GOST-512: a record of another size, as on the device");
+
+    const Bytes onTokenSignature = paritySign(module, session, gost256.privateKey,
+        CKM_GOSTR3410_WITH_GOSTR3411_2012_256, data, "journal GOST-256 hash on token");
+    expectJournalRecord(ex, slot, readJournal(ex, slot, "after hash-on-token signature"),
+        hash256, onTokenSignature, true, "GOST-256 hash on token");
+    CK_MECHANISM multipartMechanism{CKM_GOSTR3410_WITH_GOSTR3411_2012_256, nullptr, 0};
+    callOk("C_SignInit", "journal multipart", [&] {
+        return module->C_SignInit(session, &multipartMechanism, gost256.privateKey);
+    });
+    const size_t split = data.size() / 2;
+    callOk("C_SignUpdate", "journal multipart first half", [&] {
+        return module->C_SignUpdate(session, const_cast<CK_BYTE*>(data.data()), split);
+    });
+    callOk("C_SignUpdate", "journal multipart second half", [&] {
+        return module->C_SignUpdate(session, const_cast<CK_BYTE*>(data.data() + split), data.size() - split);
+    });
+    Bytes multipartSignature(64);
+    CK_ULONG multipartLength = static_cast<CK_ULONG>(multipartSignature.size());
+    callOk("C_SignFinal", "journal multipart", [&] {
+        return module->C_SignFinal(session, multipartSignature.data(), &multipartLength);
+    });
+    multipartSignature.resize(multipartLength);
+    expectJournalRecord(ex, slot, readJournal(ex, slot, "after multipart signature"),
+        hash256, multipartSignature, true, "GOST-256 multipart");
 
     for (const Bytes* id : {&id256, &id512, &idRsa})
         removePriorTestObjects(module, session, *id);

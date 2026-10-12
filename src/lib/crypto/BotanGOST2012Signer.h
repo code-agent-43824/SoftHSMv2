@@ -57,6 +57,7 @@ public:
 	                     const MechanismParam* mechanismParam = NULL);
 	virtual bool signUpdate(const ByteString& dataToSign);
 	virtual bool signFinal(ByteString& signature);
+	virtual bool getSignedDigest(ByteString& digest) const;
 
 	virtual bool verifyInit(PublicKey* publicKey, const AsymMech::Type mechanism,
 	                       const MechanismParam* mechanismParam = NULL);
@@ -78,6 +79,7 @@ public:
 
 private:
 	ByteString rawInput;
+	ByteString signedDigest;
 	std::unique_ptr<Botan::HashFunction> hash;
 };
 
