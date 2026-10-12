@@ -182,7 +182,8 @@ expectation in them was read off the device by
 - `journal`: `C_EX_GetJournal` after a GOST-256 signature holds a new record
   whose `AA` element is the signed hash, an RSA signature leaves it alone,
   and a GOST-512 record differs in size from a GOST-256 one. The lengths
-  themselves are not compared: the device's records are longer.
+  themselves are not compared by this dual test; since portable release .73,
+  the fork also writes the observed 126/224-byte GOST-256/512 records.
 
 It needs an initialized token and `P11_TEST_USER_PIN`, does not format it,
 logs the user out and back in once, and removes every object it creates:
