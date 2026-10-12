@@ -31,7 +31,6 @@
 #include "OSAttribute.h"
 #include "ByteString.h"
 #include "SecureDataManager.h"
-#include "Configuration.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -40,6 +39,8 @@ namespace
 {
 	bool isFactoryPIN(const ByteString& pin, bool so)
 	{
+		// Persist this at every PIN write: the Rutoken profile may be enabled
+		// after a token was initialized with the ordinary presentation.
 		const char* value = so ? "87654321" : "12345678";
 		return pin.size() == 8 && memcmp(pin.const_byte_str(), value, 8) == 0;
 	}
@@ -59,7 +60,6 @@ Token::Token()
 	token = NULL;
 	sdm = NULL;
 	valid = false;
-	fakeRutokenECP = Configuration::i()->getBool("FAKE_RUTOKEN_ECP", false);
 }
 
 // Constructor
@@ -72,7 +72,6 @@ Token::Token(ObjectStoreToken* inToken)
 	ByteString soPINBlob, userPINBlob;
 
 	valid = token->getSOPIN(soPINBlob) && token->getUserPIN(userPINBlob);
-	fakeRutokenECP = Configuration::i()->getBool("FAKE_RUTOKEN_ECP", false);
 
 	sdm = new SecureDataManager(soPINBlob, userPINBlob);
 }
@@ -316,7 +315,7 @@ CK_RV Token::setSOPIN(ByteString& oldPIN, ByteString& newPIN)
 
 	// Save PIN to token file
 	if (token->setSOPIN(sdm->getSOPINBlob()) == false) return CKR_GENERAL_ERROR;
-	if (fakeRutokenECP && !token->setPinDefault(CKU_SO, isFactoryPIN(newPIN, true)))
+	if (!token->setPinDefault(CKU_SO, isFactoryPIN(newPIN, true)))
 		return CKR_DEVICE_ERROR;
 
 	ByteString soPINBlob, userPINBlob;
@@ -360,7 +359,7 @@ CK_RV Token::setUserPIN(ByteString& oldPIN, ByteString& newPIN)
 		delete newSdm;
 		return CKR_GENERAL_ERROR;
 	}
-	if (fakeRutokenECP && !token->setPinDefault(CKU_USER, isFactoryPIN(newPIN, false)))
+	if (!token->setPinDefault(CKU_USER, isFactoryPIN(newPIN, false)))
 	{
 		delete newSdm;
 		return CKR_DEVICE_ERROR;
@@ -394,7 +393,7 @@ CK_RV Token::initUserPIN(ByteString& pin)
 
 	// Save PIN to token file
 	if (token->setUserPIN(sdm->getUserPINBlob()) == false) return CKR_GENERAL_ERROR;
-	if (fakeRutokenECP && !token->setPinDefault(CKU_USER, isFactoryPIN(pin, false)))
+	if (!token->setPinDefault(CKU_USER, isFactoryPIN(pin, false)))
 		return CKR_DEVICE_ERROR;
 
 	ByteString soPINBlob, userPINBlob;
@@ -515,7 +514,7 @@ CK_RV Token::createToken(ObjectStore* objectStore, ByteString& soPIN, CK_UTF8CHA
 		token = newToken;
 	}
 	if (!setPinPolicy(newPolicy)) return CKR_DEVICE_ERROR;
-	if (fakeRutokenECP && !token->setPinDefault(CKU_SO, isFactoryPIN(soPIN, true)))
+	if (!token->setPinDefault(CKU_SO, isFactoryPIN(soPIN, true)))
 		return CKR_DEVICE_ERROR;
 
 	ByteString soPINBlob, userPINBlob;
@@ -778,8 +777,8 @@ CK_RV Token::setLocalPIN(CK_ULONG id, ByteString& currentPIN, ByteString& newPIN
 		next += replacement.getSOPINBlob();
 		bool changed = false;
 		const bool isDefault = isFactoryPIN(newPIN, false);
-		if (!token->updateLocalPIN(id, record, next, changed,
-		                           fakeRutokenECP ? &isDefault : NULL)) return CKR_DEVICE_ERROR;
+		if (!token->updateLocalPIN(id, record, next, changed, &isDefault))
+			return CKR_DEVICE_ERROR;
 		if (changed) return CKR_OK;
 	}
 	return CKR_DEVICE_ERROR;

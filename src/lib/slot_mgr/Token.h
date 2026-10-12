@@ -143,7 +143,6 @@ private:
 	bool pinLocked(bool so);
 	// Token validity
 	bool valid;
-	bool fakeRutokenECP;
 
 	// A reference to the object store token
 	ObjectStoreToken* token;
