@@ -62,6 +62,9 @@
 // The Rutoken "user must change the PIN" state set by C_EX_TokenManage; a
 // token without the attribute has never been forced.
 #define CKA_OS_USERPINEXPIRED	(CKA_VENDOR_SOFTHSM + 9)
+// Factory PIN state in the Rutoken profile: CKU_SO (0), CKU_USER (1), and
+// local PIN IDs 3..31. Absence means non-factory for tokens predating it.
+#define CKA_OS_PINDEFAULT(id)	(CKA_VENDOR_SOFTHSM + 0x200 + (id))
 #define CKA_OS_LICENSE(id)	(CKA_VENDOR_SOFTHSM + 0x20 + (id))
 #define CKA_OS_JOURNAL	(CKA_VENDOR_SOFTHSM + 0x30)
 #define CKA_OS_LOCALPIN(id)	(CKA_VENDOR_SOFTHSM + 0x100 + (id))

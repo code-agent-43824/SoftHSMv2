@@ -95,9 +95,12 @@ public:
 	virtual bool advanceJournal(ByteString& journal, CK_ULONG countOffset);
 	virtual bool getLocalPIN(CK_ULONG id, ByteString& record, bool& exists);
 	virtual bool updateLocalPIN(CK_ULONG id, const ByteString& expected,
-	                            const ByteString& replacement, bool& changed);
+	                            const ByteString& replacement, bool& changed,
+	                            const bool* isDefault = NULL);
 	virtual bool getUserPinExpired(bool& expired);
 	virtual bool setUserPinExpired(bool expired);
+	virtual bool getPinDefault(CK_ULONG id, bool& isDefault);
+	virtual bool setPinDefault(CK_ULONG id, bool isDefault);
 
 	// Retrieve the token serial
 	virtual bool getTokenSerial(ByteString& serial);

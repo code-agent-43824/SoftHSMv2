@@ -86,9 +86,14 @@ public:
 	virtual bool advanceJournal(ByteString& journal, CK_ULONG countOffset) = 0;
 	virtual bool getLocalPIN(CK_ULONG id, ByteString& record, bool& exists) = 0;
 	virtual bool updateLocalPIN(CK_ULONG id, const ByteString& expected,
-	                            const ByteString& replacement, bool& changed) = 0;
+	                            const ByteString& replacement, bool& changed,
+	                            const bool* isDefault = NULL) = 0;
 	virtual bool getUserPinExpired(bool& expired) = 0;
 	virtual bool setUserPinExpired(bool expired) = 0;
+	// Rutoken factory PIN state. ID is CKU_SO, CKU_USER, or local 3..31;
+	// a missing attribute is reported as false for an older token.
+	virtual bool getPinDefault(CK_ULONG id, bool& isDefault) = 0;
+	virtual bool setPinDefault(CK_ULONG id, bool isDefault) = 0;
 
 	// Retrieve the token serial
 	virtual bool getTokenSerial(ByteString& serial) = 0;

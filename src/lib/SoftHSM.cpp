@@ -1063,13 +1063,18 @@ CK_RV SoftHSM::C_GetTokenInfo(CK_SLOT_ID slotID, CK_TOKEN_INFO_PTR pInfo)
 	// set CKF_CLOCK_ON_TOKEN (measured on the device 2026-10-03). Upstream
 	// fills utcTime with the current time; blank it under the profile only.
 	memset(pInfo->utcTime, 0, sizeof(pInfo->utcTime));
-	// A real Rutoken ECP reports "rng, login required, PIN initialized, token
-	// initialized" and nothing more. The two "PIN to be changed" flags were
-	// asserted here unconditionally, which tells an application the token is
-	// not ready for use until its PINs are replaced - a plausible reason for
-	// compatibility complaints. The remaining state flags still come from the
-	// backing token, so a genuinely fresh PIN state is still reported.
+	// Factory PINs are identified when set and recorded on the token. A token
+	// written before that attribute existed is treated as non-factory.
 	pInfo->flags = CKF_RNG | CKF_LOGIN_REQUIRED | stateFlags;
+	if ((stateFlags & CKF_TOKEN_INITIALIZED) != 0)
+	{
+		bool defaultSO = false, defaultUser = false;
+		if (!token->getPinDefault(CKU_SO, defaultSO) ||
+		    !token->getPinDefault(CKU_USER, defaultUser)) return CKR_DEVICE_ERROR;
+		if (defaultSO) pInfo->flags |= CKF_SO_PIN_TO_BE_CHANGED;
+		if (defaultUser && (stateFlags & CKF_USER_PIN_INITIALIZED))
+			pInfo->flags |= CKF_USER_PIN_TO_BE_CHANGED;
+	}
 	pInfo->hardwareVersion.major = 60;
 	pInfo->hardwareVersion.minor = 1;
 	pInfo->firmwareVersion.major = 30;
@@ -1149,9 +1154,11 @@ CK_RV SoftHSM::C_EX_GetTokenInfoExtended(CK_SLOT_ID slotID, CK_TOKEN_INFO_EXTEND
 	pInfo->ulOrderNumber = FAKE_RUTOKEN_ORDER_NUMBER;
 
 	pInfo->flags = FAKE_RUTOKEN_EXTENDED_FLAGS | policy.changeUserPINPolicy;
-	if ((tokenInfo.flags & CKF_TOKEN_INITIALIZED) != 0)
+	if ((tokenInfo.flags & CKF_TOKEN_INITIALIZED) != 0 &&
+	    (tokenInfo.flags & CKF_SO_PIN_TO_BE_CHANGED) == 0)
 		pInfo->flags |= TOKEN_FLAGS_ADMIN_PIN_NOT_DEFAULT;
-	if ((tokenInfo.flags & CKF_USER_PIN_INITIALIZED) != 0)
+	if ((tokenInfo.flags & CKF_USER_PIN_INITIALIZED) != 0 &&
+	    (tokenInfo.flags & CKF_USER_PIN_TO_BE_CHANGED) == 0)
 		pInfo->flags |= TOKEN_FLAGS_USER_PIN_NOT_DEFAULT;
 
 	pInfo->ulMaxAdminPinLen = policy.maxLength;
@@ -1533,14 +1540,17 @@ CK_RV SoftHSM::C_EX_SlotManage(CK_SLOT_ID slotID, CK_ULONG ulMode, CK_VOID_PTR p
 			CK_LOCAL_PIN_INFO_PTR info = static_cast<CK_LOCAL_PIN_INFO_PTR>(pValue);
 			if (info->ulPinID < 3 || info->ulPinID > 31) return CKR_ARGUMENTS_BAD;
 			CK_ULONG minLength = 0, maxRetries = 0, retriesLeft = 0;
-			const CK_RV rv = token->getLocalPINInfo(info->ulPinID, minLength, maxRetries, retriesLeft);
+			bool isDefault = false;
+			const CK_RV rv = token->getLocalPINInfo(info->ulPinID, minLength, maxRetries,
+			                                        retriesLeft, isDefault);
 			if (rv != CKR_OK) return rv;
 			// The values the device reports for a local PIN it holds.
 			info->ulMinSize = minLength;
 			info->ulMaxSize = 249;
 			info->ulMaxRetryCount = maxRetries;
 			info->ulCurrentRetryCount = retriesLeft;
-			info->flags = LOCAL_PIN_FLAGS_NOT_DEFAULT | LOCAL_PIN_FLAGS_IS_UTF8;
+			info->flags = LOCAL_PIN_FLAGS_IS_UTF8;
+			if (!isDefault) info->flags |= LOCAL_PIN_FLAGS_NOT_DEFAULT;
 			return CKR_OK;
 		}
 		case MODE_RESTORE_FACTORY_DEFAULTS:

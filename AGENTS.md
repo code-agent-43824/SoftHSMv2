@@ -302,6 +302,13 @@ name.
 
 ## Settled decisions
 
+- **Factory PIN state in the Rutoken profile follows the current PIN value.**
+  SO `87654321` and User/local `12345678` are factory values; changing a PIN
+  back to its factory value restores the factory flags. *Reason:* these are
+  Rutoken's public factory PINs, confirmed by the owner's decision of 11
+  October 2026. They resemble credentials in code, so record explicitly that
+  they are compatibility constants rather than secrets. Tokens predating the
+  optional state attribute are treated as having nonfactory PINs.
 - **Upstream's CI matrix was deleted deliberately.** `ci.yml` no longer builds
   Botan-backend, OpenSSL 1.1.1, OpenSSL 3.0, OpenSSL 4.0, macOS or Windows unit
   test configurations. *Reason:* the fork is terminal — nothing is contributed

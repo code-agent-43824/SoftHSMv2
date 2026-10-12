@@ -540,6 +540,26 @@ static CK_TOKEN_INFO tokenInfo(Module& module, CK_SLOT_ID slot)
     return info;
 }
 
+static void expectFactoryPinFlags(Module& module, CK_FUNCTION_LIST_EXTENDED_PTR ex,
+                                  CK_SLOT_ID slot, const std::string& soPin,
+                                  const std::string& userPin, const char* when)
+{
+    const CK_TOKEN_INFO standard = tokenInfo(module, slot);
+    CK_TOKEN_INFO_EXTENDED extended{};
+    extended.ulSizeofThisStructure = sizeof(extended);
+    callOk("C_EX_GetTokenInfoExtended", when,
+           [&] { return ex->C_EX_GetTokenInfoExtended(slot, &extended); });
+    const CK_FLAGS expectedStandard = (soPin == "87654321" ? CKF_SO_PIN_TO_BE_CHANGED : 0) |
+        (userPin == "12345678" ? CKF_USER_PIN_TO_BE_CHANGED : 0);
+    const CK_FLAGS expectedExtended = (soPin != "87654321" ? TOKEN_FLAGS_ADMIN_PIN_NOT_DEFAULT : 0) |
+        (userPin != "12345678" ? TOKEN_FLAGS_USER_PIN_NOT_DEFAULT : 0);
+    if ((standard.flags & (CKF_SO_PIN_TO_BE_CHANGED | CKF_USER_PIN_TO_BE_CHANGED)) !=
+            expectedStandard ||
+        (extended.flags & (TOKEN_FLAGS_ADMIN_PIN_NOT_DEFAULT |
+                           TOKEN_FLAGS_USER_PIN_NOT_DEFAULT)) != expectedExtended)
+        fail(std::string("factory PIN flags disagree with PIN values ") + when);
+}
+
 // C_GetTokenInfo on a slot that may hold nothing. Used to find the spare
 // uninitialized token, which the Rutoken profile deliberately keeps out of
 // C_GetSlotList(tokenPresent = TRUE) while still answering about it: that is
@@ -4140,6 +4160,7 @@ static void verifyExtendedInitToken(const fs::path& modulePath)
         good.ulMinAdminPinLen = 8;
         good.ChangeUserPINPolicy = TOKEN_FLAGS_USER_CHANGE_USER_PIN;
         exInit("C_EX_InitToken(format with the SO PIN)", soPin, &good, CKR_OK);
+        expectFactoryPinFlags(module, ex, slot, newAdmin, newUser, "after extended format");
 
         readLicense(1, licenseOne);
         readLicense(2, licenseTwo);
@@ -4162,6 +4183,19 @@ static void verifyExtendedInitToken(const fs::path& modulePath)
             fail("C_EX_InitToken lost separate PIN minima or change policy");
         CK_SESSION_HANDLE adminSession = openSession(module, slot);
         login(module, adminSession, CKU_SO, newAdmin);
+        const std::string temporaryAdmin = "87436521";
+        callOk("C_SetPIN", "SO factory -> changed", [&] {
+            return module->C_SetPIN(adminSession,
+                reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(newAdmin.data())), newAdmin.size(),
+                reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(temporaryAdmin.data())), temporaryAdmin.size());
+        });
+        expectFactoryPinFlags(module, ex, slot, temporaryAdmin, newUser, "after SO PIN change");
+        callOk("C_SetPIN", "SO changed -> factory", [&] {
+            return module->C_SetPIN(adminSession,
+                reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(temporaryAdmin.data())), temporaryAdmin.size(),
+                reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(newAdmin.data())), newAdmin.size());
+        });
+        expectFactoryPinFlags(module, ex, slot, newAdmin, newUser, "after SO factory restoration");
         const std::string sixDigitPin = "654321";
         check(invoke("C_SetPIN", "SO PIN below configured minimum", [&] {
             return module->C_SetPIN(adminSession,
@@ -4174,6 +4208,23 @@ static void verifyExtendedInitToken(const fs::path& modulePath)
         }), CKR_USER_NOT_LOGGED_IN, "user-only PIN change policy");
         logout(module, adminSession, "CKU_SO");
         closeSession(module, adminSession);
+        CK_SESSION_HANDLE userSession = openSession(module, slot);
+        login(module, userSession, CKU_USER, newUser);
+        const std::string factoryUser = "12345678";
+        callOk("C_SetPIN", "User changed -> factory", [&] {
+            return module->C_SetPIN(userSession,
+                reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(newUser.data())), newUser.size(),
+                reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(factoryUser.data())), factoryUser.size());
+        });
+        expectFactoryPinFlags(module, ex, slot, newAdmin, factoryUser, "after User factory restoration");
+        callOk("C_SetPIN", "User factory -> changed", [&] {
+            return module->C_SetPIN(userSession,
+                reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(factoryUser.data())), factoryUser.size(),
+                reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(newUser.data())), newUser.size());
+        });
+        expectFactoryPinFlags(module, ex, slot, newAdmin, newUser, "after User PIN change");
+        logout(module, userSession, "CKU_USER");
+        closeSession(module, userSession);
         if (countByLabel(newUser, victimLabel) != 0)
             fail("C_EX_InitToken did not wipe the token's objects");
         if (loginResult(CKU_SO, newAdmin) != CKR_OK)
@@ -4229,7 +4280,7 @@ static void verifyExtendedInitToken(const fs::path& modulePath)
         logout(module, s, "CKU_USER");
         closeSession(module, s);
 
-        const std::string localA = "local444", localB = "local555";
+        const std::string localA = "12345678", localB = "local555";
         check(invoke("C_EX_SetLocalPIN", "invalid local ID", [&] {
             return ex->C_EX_SetLocalPIN(slot,
                 reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(newUser.data())), newUser.size(),
@@ -4240,6 +4291,13 @@ static void verifyExtendedInitToken(const fs::path& modulePath)
                 reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(newUser.data())), newUser.size(),
                 reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(localA.data())), localA.size(), 4);
         });
+        CK_LOCAL_PIN_INFO localInfo{};
+        localInfo.ulPinID = 4;
+        callOk("C_EX_SlotManage", "factory local PIN info", [&] {
+            return ex->C_EX_SlotManage(slot, MODE_GET_LOCAL_PIN_INFO, &localInfo);
+        });
+        if (localInfo.flags != LOCAL_PIN_FLAGS_IS_UTF8)
+            fail("factory local PIN must not have LOCAL_PIN_FLAGS_NOT_DEFAULT");
         check(invoke("C_EX_SetLocalPIN", "wrong existing local PIN", [&] {
             return ex->C_EX_SetLocalPIN(slot,
                 reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(newUser.data())), newUser.size(),
@@ -4272,6 +4330,13 @@ static void verifyExtendedInitToken(const fs::path& modulePath)
                 reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(localA.data())), localA.size(),
                 reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(localB.data())), localB.size(), 4);
         });
+        localInfo = CK_LOCAL_PIN_INFO{};
+        localInfo.ulPinID = 4;
+        callOk("C_EX_SlotManage", "changed local PIN info", [&] {
+            return ex->C_EX_SlotManage(slot, MODE_GET_LOCAL_PIN_INFO, &localInfo);
+        });
+        if (localInfo.flags != (LOCAL_PIN_FLAGS_IS_UTF8 | LOCAL_PIN_FLAGS_NOT_DEFAULT))
+            fail("changed local PIN lost LOCAL_PIN_FLAGS_NOT_DEFAULT");
         const std::string wrongLocal = "wrong444";
         for (int attempt = 0; attempt < 10; ++attempt)
             check(invoke("C_EX_SetLocalPIN", "consume local PIN 4 attempt", [&] {
@@ -5493,9 +5558,18 @@ static void verifyRutokenProfile(const fs::path& modulePath)
         token.hardwareVersion.major != 60 || token.hardwareVersion.minor != 1 ||
         token.firmwareVersion.major != 30 || token.firmwareVersion.minor != 2)
         fail("token information does not match the Rutoken ECP reference profile");
-    if ((token.flags & (CKF_RNG | CKF_LOGIN_REQUIRED)) != (CKF_RNG | CKF_LOGIN_REQUIRED) ||
-        (token.flags & (CKF_SO_PIN_TO_BE_CHANGED | CKF_USER_PIN_TO_BE_CHANGED)) != 0)
+    if ((token.flags & (CKF_RNG | CKF_LOGIN_REQUIRED)) != (CKF_RNG | CKF_LOGIN_REQUIRED))
         fail("Rutoken token flags differ from the reference device");
+    const std::string knownSoPin = environment("P11_TEST_SO_PIN");
+    const std::string knownUserPin = environment("P11_TEST_USER_PIN");
+    if (!knownSoPin.empty() && !knownUserPin.empty())
+    {
+        auto getList = reinterpret_cast<CK_C_EX_GetFunctionListExtended>(
+            module.symbol("C_EX_GetFunctionListExtended"));
+        CK_FUNCTION_LIST_EXTENDED_PTR ex = nullptr;
+        callOk("C_EX_GetFunctionListExtended", "profile PIN flags", [&] { return getList(&ex); });
+        expectFactoryPinFlags(module, ex, 0, knownSoPin, knownUserPin, "in the profile gate");
+    }
 
     // The first reader with nothing behind it at all sits one past the spare:
     // the listed tokens, then the spare that is no longer listed, then empty
@@ -6205,9 +6279,13 @@ static fs::path writeBatteryConfig(const fs::path& dir, bool fakeRutoken,
     const fs::path tokens = fs::absolute(dir / "tokens");
     fs::create_directories(tokens);
     const fs::path config = fs::absolute(dir / "softhsm.conf");
+    const std::string requestedBackend = environment("P11_TEST_OBJECTSTORE_BACKEND");
+    const std::string backend = requestedBackend.empty() ? "file" : requestedBackend;
+    if (backend != "file" && backend != "db")
+        fail("P11_TEST_OBJECTSTORE_BACKEND must be file or db");
     std::ofstream out(config, std::ios::binary | std::ios::trunc);
     out << "directories.tokendir = " << tokens.generic_string() << "\n"
-        << "objectstore.backend = file\n"
+        << "objectstore.backend = " << backend << "\n"
         << "log.level = ERROR\n"
         << "FAKE_RUTOKEN_ECP = " << (fakeRutoken ? "true" : "false") << "\n";
     if (!extraLine.empty()) out << extraLine << "\n";
@@ -8235,8 +8313,7 @@ static bool userPinCountLow(const ParityToken& t)
 }
 
 // Unblock and token-manage as the device answered them (probe v2, JOURNAL of
-// 10 October 2026). The token's PIN flags are not compared: the factory
-// state differs between the two, which is a separate item.
+// 10 October 2026).
 static void verifyTokenManageParity(const ParityToken& t)
 {
     check(pinToBeChanged(t, CKU_USER), CKR_OK, "MODE_GET_PIN_SET_TO_BE_CHANGED(CKU_USER), starting token");
@@ -8271,6 +8348,13 @@ static void verifyTokenManageParity(const ParityToken& t)
     const std::string temporaryPin = t.userPin == "13572468" ? "24681357" : "13572468";
     check(paritySetUserPin(t, t.userPin, temporaryPin, "current -> temporary"), CKR_OK,
           "C_SetPIN(user, current -> temporary)");
+    {
+        const CK_TOKEN_INFO standard = tokenInfo(t.module, t.slot);
+        const CK_TOKEN_INFO_EXTENDED changed = parityExtendedInfo(t, "after temporary user PIN");
+        if ((standard.flags & CKF_USER_PIN_TO_BE_CHANGED) != 0 ||
+            (changed.flags & TOKEN_FLAGS_USER_PIN_NOT_DEFAULT) == 0)
+            fail("temporary user PIN must be nonfactory");
+    }
     check(pinToBeChanged(t, CKU_USER), CKR_OK,
           "MODE_GET_PIN_SET_TO_BE_CHANGED(CKU_USER) after the user changed the PIN");
     check(paritySetUserPin(t, temporaryPin, t.userPin, "temporary -> original"), CKR_OK,
@@ -8569,6 +8653,7 @@ static void verifyFactoryParity(const ParityToken& t, const Bytes& emitentKey)
     CK_LOCAL_PIN_INFO local{};
     check(parityLocalPinInfo(t, 3, local), CKR_DEVICE_ERROR, "MODE_GET_LOCAL_PIN_INFO(3) after the format");
     const CK_TOKEN_INFO_EXTENDED info = parityExtendedInfo(t, "after the format");
+    expectFactoryPinFlags(t.module, t.ex, t.slot, t.soPin, t.userPin, "after factory format");
     if (info.ulAdminRetryCountLeft != 10 || info.ulMaxAdminRetryCount != 10 ||
         info.ulUserRetryCountLeft != 10 || info.ulMaxUserRetryCount != 10)
         fail("after the format the SO and the user do not each have 10 of 10 attempts");
@@ -8628,6 +8713,7 @@ static void verifyDeviceParityWrite(const fs::path& modulePath)
     callOk("C_EX_GetFunctionListExtended", "device-parity-write", [&] { return getList(&ex); });
     if (ex == nullptr) fail("C_EX_GetFunctionListExtended returned no table");
     const ParityToken t{module, ex, slot, userPin, soPin};
+    expectFactoryPinFlags(module, ex, slot, soPin, userPin, "before parity writes");
 
     // Nothing is changed unless the token is where the cases start from.
     CK_LOCAL_PIN_INFO local{};

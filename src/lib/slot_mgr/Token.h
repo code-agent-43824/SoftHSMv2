@@ -119,11 +119,12 @@ public:
 	CK_RV setLocalPIN(CK_ULONG id, ByteString& currentPIN, ByteString& newPIN);
 	// What the Rutoken MODE_GET_LOCAL_PIN_INFO reports for a local PIN.
 	CK_RV getLocalPINInfo(CK_ULONG id, CK_ULONG& minLength, CK_ULONG& maxRetries,
-	                      CK_ULONG& retriesLeft);
+	                      CK_ULONG& retriesLeft, bool& isDefault);
 	// The Rutoken forced change of the user PIN: set by C_EX_TokenManage,
 	// cleared when the user changes the PIN or the token is formatted.
 	CK_RV forceUserPINChange();
 	bool getUserPINExpired(bool& expired);
+	bool getPinDefault(CK_ULONG id, bool& isDefault);
 
 	// Create object
 	OSObject *createObject();
@@ -142,6 +143,7 @@ private:
 	bool pinLocked(bool so);
 	// Token validity
 	bool valid;
+	bool fakeRutokenECP;
 
 	// A reference to the object store token
 	ObjectStoreToken* token;

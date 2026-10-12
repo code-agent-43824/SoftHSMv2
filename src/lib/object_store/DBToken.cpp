@@ -675,7 +675,8 @@ bool DBToken::getLocalPIN(CK_ULONG id, ByteString& record, bool& exists)
 }
 
 bool DBToken::updateLocalPIN(CK_ULONG id, const ByteString& expected,
-                             const ByteString& replacement, bool& changed)
+                             const ByteString& replacement, bool& changed,
+                             const bool* isDefault)
 {
 	changed = false;
 	if (_connection == NULL) return false;
@@ -694,7 +695,12 @@ bool DBToken::updateLocalPIN(CK_ULONG id, const ByteString& expected,
 		object.abortTransaction();
 		return true;
 	}
-	if (!object.setAttribute(CKA_OS_LOCALPIN(id), OSAttribute(replacement)) ||
+	const CK_ATTRIBUTE_TYPE defaultType = CKA_OS_PINDEFAULT(id);
+	const bool storedDefault = isDefault == NULL || (*isDefault
+		? object.setAttribute(defaultType, OSAttribute(true))
+		: !object.attributeExists(defaultType) || object.deleteAttribute(defaultType));
+	if (!storedDefault ||
+	    !object.setAttribute(CKA_OS_LOCALPIN(id), OSAttribute(replacement)) ||
 	    !object.commitTransaction())
 	{
 		object.abortTransaction();
@@ -733,6 +739,43 @@ bool DBToken::setUserPinExpired(bool expired)
 		? object.setAttribute(CKA_OS_USERPINEXPIRED, OSAttribute(true))
 		: !object.attributeExists(CKA_OS_USERPINEXPIRED) ||
 		  object.deleteAttribute(CKA_OS_USERPINEXPIRED);
+	if (!stored || !object.commitTransaction())
+	{
+		object.abortTransaction();
+		return false;
+	}
+	return true;
+}
+
+bool DBToken::getPinDefault(CK_ULONG id, bool& isDefault)
+{
+	if (_connection == NULL) return false;
+	DBObject object(_connection);
+	if (!object.startTransaction(DBObject::ReadOnly)) return false;
+	if (!object.find(DBTOKEN_OBJECT_TOKENINFO))
+	{
+		object.abortTransaction();
+		return false;
+	}
+	const CK_ATTRIBUTE_TYPE type = CKA_OS_PINDEFAULT(id);
+	isDefault = object.attributeExists(type) && object.getAttribute(type).getBooleanValue();
+	return object.commitTransaction();
+}
+
+bool DBToken::setPinDefault(CK_ULONG id, bool isDefault)
+{
+	if (_connection == NULL) return false;
+	DBObject object(_connection);
+	if (!object.startTransaction(DBObject::ReadWrite)) return false;
+	if (!object.find(DBTOKEN_OBJECT_TOKENINFO))
+	{
+		object.abortTransaction();
+		return false;
+	}
+	const CK_ATTRIBUTE_TYPE type = CKA_OS_PINDEFAULT(id);
+	const bool stored = isDefault
+		? object.setAttribute(type, OSAttribute(true))
+		: !object.attributeExists(type) || object.deleteAttribute(type);
 	if (!stored || !object.commitTransaction())
 	{
 		object.abortTransaction();
@@ -1199,6 +1242,20 @@ bool DBToken::resetToken(const ByteString& label)
 			tokenObject.abortTransaction();
 			return false;
 		}
+		if (tokenObject.attributeExists(CKA_OS_PINDEFAULT(id)) &&
+		    !tokenObject.deleteAttribute(CKA_OS_PINDEFAULT(id)))
+		{
+			tokenObject.abortTransaction();
+			return false;
+		}
+	}
+	if ((tokenObject.attributeExists(CKA_OS_PINDEFAULT(CKU_SO)) &&
+	     !tokenObject.deleteAttribute(CKA_OS_PINDEFAULT(CKU_SO))) ||
+	    (tokenObject.attributeExists(CKA_OS_PINDEFAULT(CKU_USER)) &&
+	     !tokenObject.deleteAttribute(CKA_OS_PINDEFAULT(CKU_USER))))
+	{
+		tokenObject.abortTransaction();
+		return false;
 	}
 	if (tokenObject.attributeExists(CKA_OS_USERPINEXPIRED) &&
 	    !tokenObject.deleteAttribute(CKA_OS_USERPINEXPIRED))

@@ -389,7 +389,8 @@ bool OSToken::getLocalPIN(CK_ULONG id, ByteString& record, bool& exists)
 }
 
 bool OSToken::updateLocalPIN(CK_ULONG id, const ByteString& expected,
-                             const ByteString& replacement, bool& changed)
+                             const ByteString& replacement, bool& changed,
+                             const bool* isDefault)
 {
 	changed = false;
 	if (!valid || !tokenObject->startTransaction(OSObject::ReadWrite)) return false;
@@ -401,7 +402,12 @@ bool OSToken::updateLocalPIN(CK_ULONG id, const ByteString& expected,
 		tokenObject->abortTransaction();
 		return true;
 	}
-	if (!tokenObject->setAttribute(CKA_OS_LOCALPIN(id), OSAttribute(replacement)) ||
+	const CK_ATTRIBUTE_TYPE defaultType = CKA_OS_PINDEFAULT(id);
+	const bool storedDefault = isDefault == NULL || (*isDefault
+		? tokenObject->setAttribute(defaultType, OSAttribute(true))
+		: !tokenObject->attributeExists(defaultType) || tokenObject->deleteAttribute(defaultType));
+	if (!storedDefault ||
+	    !tokenObject->setAttribute(CKA_OS_LOCALPIN(id), OSAttribute(replacement)) ||
 	    !tokenObject->commitTransaction())
 	{
 		tokenObject->abortTransaction();
@@ -426,6 +432,30 @@ bool OSToken::setUserPinExpired(bool expired)
 		? tokenObject->setAttribute(CKA_OS_USERPINEXPIRED, OSAttribute(true))
 		: !tokenObject->attributeExists(CKA_OS_USERPINEXPIRED) ||
 		  tokenObject->deleteAttribute(CKA_OS_USERPINEXPIRED);
+	if (!stored || !tokenObject->commitTransaction())
+	{
+		tokenObject->abortTransaction();
+		return false;
+	}
+	return true;
+}
+
+bool OSToken::getPinDefault(CK_ULONG id, bool& isDefault)
+{
+	if (!valid || !tokenObject->isValid()) return false;
+	const CK_ATTRIBUTE_TYPE type = CKA_OS_PINDEFAULT(id);
+	isDefault = tokenObject->attributeExists(type) &&
+	            tokenObject->getAttribute(type).getBooleanValue();
+	return true;
+}
+
+bool OSToken::setPinDefault(CK_ULONG id, bool isDefault)
+{
+	if (!valid || !tokenObject->startTransaction(OSObject::ReadWrite)) return false;
+	const CK_ATTRIBUTE_TYPE type = CKA_OS_PINDEFAULT(id);
+	const bool stored = isDefault
+		? tokenObject->setAttribute(type, OSAttribute(true))
+		: !tokenObject->attributeExists(type) || tokenObject->deleteAttribute(type);
 	if (!stored || !tokenObject->commitTransaction())
 	{
 		tokenObject->abortTransaction();
@@ -818,8 +848,16 @@ bool OSToken::resetToken(const ByteString& label)
 	if (tokenObject->attributeExists(CKA_OS_TOKENNAME) &&
 	    !tokenObject->deleteAttribute(CKA_OS_TOKENNAME)) return false;
 	for (CK_ULONG id = 3; id <= 31; ++id)
+	{
 		if (tokenObject->attributeExists(CKA_OS_LOCALPIN(id)) &&
 		    !tokenObject->deleteAttribute(CKA_OS_LOCALPIN(id))) return false;
+		if (tokenObject->attributeExists(CKA_OS_PINDEFAULT(id)) &&
+		    !tokenObject->deleteAttribute(CKA_OS_PINDEFAULT(id))) return false;
+	}
+	if (tokenObject->attributeExists(CKA_OS_PINDEFAULT(CKU_SO)) &&
+	    !tokenObject->deleteAttribute(CKA_OS_PINDEFAULT(CKU_SO))) return false;
+	if (tokenObject->attributeExists(CKA_OS_PINDEFAULT(CKU_USER)) &&
+	    !tokenObject->deleteAttribute(CKA_OS_PINDEFAULT(CKU_USER))) return false;
 	if (tokenObject->attributeExists(CKA_OS_USERPINEXPIRED) &&
 	    !tokenObject->deleteAttribute(CKA_OS_USERPINEXPIRED)) return false;
 

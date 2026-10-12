@@ -31,8 +31,19 @@
 #include "OSAttribute.h"
 #include "ByteString.h"
 #include "SecureDataManager.h"
+#include "Configuration.h"
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+
+namespace
+{
+	bool isFactoryPIN(const ByteString& pin, bool so)
+	{
+		const char* value = so ? "87654321" : "12345678";
+		return pin.size() == 8 && memcmp(pin.const_byte_str(), value, 8) == 0;
+	}
+}
 
 #ifndef _WIN32
 #include <sys/time.h>
@@ -48,6 +59,7 @@ Token::Token()
 	token = NULL;
 	sdm = NULL;
 	valid = false;
+	fakeRutokenECP = Configuration::i()->getBool("FAKE_RUTOKEN_ECP", false);
 }
 
 // Constructor
@@ -60,6 +72,7 @@ Token::Token(ObjectStoreToken* inToken)
 	ByteString soPINBlob, userPINBlob;
 
 	valid = token->getSOPIN(soPINBlob) && token->getUserPIN(userPINBlob);
+	fakeRutokenECP = Configuration::i()->getBool("FAKE_RUTOKEN_ECP", false);
 
 	sdm = new SecureDataManager(soPINBlob, userPINBlob);
 }
@@ -303,6 +316,8 @@ CK_RV Token::setSOPIN(ByteString& oldPIN, ByteString& newPIN)
 
 	// Save PIN to token file
 	if (token->setSOPIN(sdm->getSOPINBlob()) == false) return CKR_GENERAL_ERROR;
+	if (fakeRutokenECP && !token->setPinDefault(CKU_SO, isFactoryPIN(newPIN, true)))
+		return CKR_DEVICE_ERROR;
 
 	ByteString soPINBlob, userPINBlob;
 	valid = token->getSOPIN(soPINBlob) && token->getUserPIN(userPINBlob);
@@ -345,6 +360,11 @@ CK_RV Token::setUserPIN(ByteString& oldPIN, ByteString& newPIN)
 		delete newSdm;
 		return CKR_GENERAL_ERROR;
 	}
+	if (fakeRutokenECP && !token->setPinDefault(CKU_USER, isFactoryPIN(newPIN, false)))
+	{
+		delete newSdm;
+		return CKR_DEVICE_ERROR;
+	}
 
 	// Restore previous login state
 	if (!stayLoggedIn) newSdm->logout();
@@ -374,6 +394,8 @@ CK_RV Token::initUserPIN(ByteString& pin)
 
 	// Save PIN to token file
 	if (token->setUserPIN(sdm->getUserPINBlob()) == false) return CKR_GENERAL_ERROR;
+	if (fakeRutokenECP && !token->setPinDefault(CKU_USER, isFactoryPIN(pin, false)))
+		return CKR_DEVICE_ERROR;
 
 	ByteString soPINBlob, userPINBlob;
 	valid = token->getSOPIN(soPINBlob) && token->getUserPIN(userPINBlob);
@@ -493,6 +515,8 @@ CK_RV Token::createToken(ObjectStore* objectStore, ByteString& soPIN, CK_UTF8CHA
 		token = newToken;
 	}
 	if (!setPinPolicy(newPolicy)) return CKR_DEVICE_ERROR;
+	if (fakeRutokenECP && !token->setPinDefault(CKU_SO, isFactoryPIN(soPIN, true)))
+		return CKR_DEVICE_ERROR;
 
 	ByteString soPINBlob, userPINBlob;
 
@@ -588,6 +612,9 @@ CK_RV Token::initTokenExtended(ObjectStore* objectStore, bool repairMode,
 
 	// Record the requested security parameters, both counters full.
 	if (!setPinPolicy(policy)) return CKR_DEVICE_ERROR;
+	if (!token->setPinDefault(CKU_SO, isFactoryPIN(newSOPIN, true)) ||
+	    !token->setPinDefault(CKU_USER, isFactoryPIN(newUserPIN, false)))
+		return CKR_DEVICE_ERROR;
 
 	// Rebuild the live manager from the stored blobs.
 	ByteString soPINBlob, userPINBlob;
@@ -745,14 +772,16 @@ CK_RV Token::setLocalPIN(CK_ULONG id, ByteString& currentPIN, ByteString& newPIN
 		next[0] = 1; next[1] = 10; next[2] = 10;
 		next += replacement.getSOPINBlob();
 		bool changed = false;
-		if (!token->updateLocalPIN(id, record, next, changed)) return CKR_DEVICE_ERROR;
+		const bool isDefault = isFactoryPIN(newPIN, false);
+		if (!token->updateLocalPIN(id, record, next, changed,
+		                           fakeRutokenECP ? &isDefault : NULL)) return CKR_DEVICE_ERROR;
 		if (changed) return CKR_OK;
 	}
 	return CKR_DEVICE_ERROR;
 }
 
 CK_RV Token::getLocalPINInfo(CK_ULONG id, CK_ULONG& minLength, CK_ULONG& maxRetries,
-                             CK_ULONG& retriesLeft)
+                             CK_ULONG& retriesLeft, bool& isDefault)
 {
 	MutexLocker lock(tokenMutex);
 	if (token == NULL) return CKR_TOKEN_NOT_PRESENT;
@@ -768,6 +797,7 @@ CK_RV Token::getLocalPINInfo(CK_ULONG id, CK_ULONG& minLength, CK_ULONG& maxRetr
 	minLength = policy.minLength;
 	maxRetries = record[1];
 	retriesLeft = record[2];
+	if (!token->getPinDefault(id, isDefault)) return CKR_DEVICE_ERROR;
 	return CKR_OK;
 }
 
@@ -783,6 +813,12 @@ bool Token::getUserPINExpired(bool& expired)
 {
 	MutexLocker lock(tokenMutex);
 	return token != NULL && token->getUserPinExpired(expired);
+}
+
+bool Token::getPinDefault(CK_ULONG id, bool& isDefault)
+{
+	MutexLocker lock(tokenMutex);
+	return token != NULL && token->getPinDefault(id, isDefault);
 }
 
 // Retrieve token information for the token
