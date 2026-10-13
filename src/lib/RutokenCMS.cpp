@@ -376,14 +376,20 @@ CK_RV gostPublicObject(CK_SESSION_HANDLE session, X509* cert,
     const unsigned char* end = cursor + ASN1_STRING_length(parameters);
     STACK_OF(ASN1_TYPE)* values = d2i_ASN1_SEQUENCE_ANY(nullptr, &cursor,
                                                         end - cursor);
-    if (!values || cursor != end || sk_ASN1_TYPE_num(values) < 2 ||
+    const int parameterCount = values ? sk_ASN1_TYPE_num(values) : 0;
+    if (!values || cursor != end || parameterCount < 1 ||
         sk_ASN1_TYPE_value(values, 0)->type != V_ASN1_OBJECT ||
-        sk_ASN1_TYPE_value(values, 1)->type != V_ASN1_OBJECT) {
+        (parameterCount > 1 && sk_ASN1_TYPE_value(values, 1)->type != V_ASN1_OBJECT)) {
         sk_ASN1_TYPE_pop_free(values, ASN1_TYPE_free);
         return CKR_DATA_INVALID;
     }
     Bytes curve = oidFromObject(sk_ASN1_TYPE_value(values, 0)->value.object);
-    Bytes hash = oidFromObject(sk_ASN1_TYPE_value(values, 1)->value.object);
+    // OpenSSL's GOST engine writes only the curve OID in a 2012 SubjectPublicKeyInfo.
+    // The digest parameter is optional there; the key algorithm's size fixes
+    // Streebog-256 or Streebog-512 when it is omitted.
+    Bytes hash = parameterCount > 1
+        ? oidFromObject(sk_ASN1_TYPE_value(values, 1)->value.object)
+        : oid(bits == 256 ? "1.2.643.7.1.1.2.2" : "1.2.643.7.1.1.2.3");
     sk_ASN1_TYPE_pop_free(values, ASN1_TYPE_free);
     if (curve.empty() || hash.empty()) return CKR_DATA_INVALID;
     CK_OBJECT_CLASS objectClass = CKO_PUBLIC_KEY;

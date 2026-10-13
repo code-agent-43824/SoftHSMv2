@@ -895,7 +895,7 @@ CK_RV SoftHSM::C_GetInfo(CK_INFO_PTR pInfo)
 		memset(pInfo->libraryDescription, ' ', sizeof(pInfo->libraryDescription));
 		memcpy(pInfo->libraryDescription, "Rutoken ECP PKCS #11 library", 28);
 		pInfo->libraryVersion.major = 2;
-		pInfo->libraryVersion.minor = 19;
+		pInfo->libraryVersion.minor = 21;
 	}
 
 	return CKR_OK;
@@ -970,9 +970,9 @@ CK_RV SoftHSM::C_GetSlotInfo(CK_SLOT_ID slotID, CK_SLOT_INFO_PTR pInfo)
 		}
 		pInfo->flags = CKF_HW_SLOT | CKF_REMOVABLE_DEVICE;
 		if (occupied) pInfo->flags |= CKF_TOKEN_PRESENT;
-		pInfo->hardwareVersion.major = 60;
-		pInfo->hardwareVersion.minor = 1;
-		pInfo->firmwareVersion.major = 30;
+		pInfo->hardwareVersion.major = 67;
+		pInfo->hardwareVersion.minor = 4;
+		pInfo->firmwareVersion.major = 34;
 		pInfo->firmwareVersion.minor = 2;
 		return CKR_OK;
 	}
@@ -999,6 +999,11 @@ CK_RV SoftHSM::C_GetSlotInfo(CK_SLOT_ID slotID, CK_SLOT_INFO_PTR pInfo)
 CK_RV SoftHSM::C_GetTokenInfo(CK_SLOT_ID slotID, CK_TOKEN_INFO_PTR pInfo)
 {
 	if (!isInitialised) return CKR_CRYPTOKI_NOT_INITIALIZED;
+	// The spare token is an internal allocation target, not a plugged-in
+	// Rutoken. Keep C_GetTokenInfo consistent with C_GetSlotInfo and the
+	// token-present slot list, including the reader immediately after a token.
+	if (fakeRutokenECP && slotID >= fakeRutokenPresentCount())
+		return slotID < FAKE_RUTOKEN_SLOT_COUNT ? CKR_TOKEN_NOT_PRESENT : CKR_SLOT_ID_INVALID;
 	if (fakeRutokenECP && slotID >= fakeRutokenLayout().size())
 	{
 		return slotID < FAKE_RUTOKEN_SLOT_COUNT ? CKR_TOKEN_NOT_PRESENT : CKR_SLOT_ID_INVALID;
@@ -1075,9 +1080,9 @@ CK_RV SoftHSM::C_GetTokenInfo(CK_SLOT_ID slotID, CK_TOKEN_INFO_PTR pInfo)
 		if (defaultUser && (stateFlags & CKF_USER_PIN_INITIALIZED))
 			pInfo->flags |= CKF_USER_PIN_TO_BE_CHANGED;
 	}
-	pInfo->hardwareVersion.major = 60;
-	pInfo->hardwareVersion.minor = 1;
-	pInfo->firmwareVersion.major = 30;
+	pInfo->hardwareVersion.major = 67;
+	pInfo->hardwareVersion.minor = 4;
+	pInfo->firmwareVersion.major = 34;
 	pInfo->firmwareVersion.minor = 2;
 	return CKR_OK;
 }
@@ -2684,6 +2689,17 @@ CK_RV SoftHSM::C_InitToken(CK_SLOT_ID slotID, CK_UTF8CHAR_PTR pPin, CK_ULONG ulP
 	{
 		return CKR_SESSION_EXISTS;
 	}
+	Token* slotToken = slot->getToken();
+	if (fakeRutokenECP && slotToken != NULL && slotToken->isInitialized())
+	{
+		Token::PinPolicy policy;
+		if (!slotToken->getPinPolicy(policy)) return CKR_DEVICE_ERROR;
+		// The device checks whether the SO may change the user PIN before
+		// authenticating the SO. A user-only policy therefore rejects either
+		// PIN without consuming a retry or reformatting the live token.
+		if (!(policy.changeUserPINPolicy & TOKEN_FLAGS_ADMIN_CHANGE_USER_PIN))
+			return CKR_FUNCTION_REJECTED;
+	}
 
 	// Check the PIN
 	if (pPin == NULL_PTR) return CKR_ARGUMENTS_BAD;
@@ -2704,7 +2720,6 @@ CK_RV SoftHSM::C_InitToken(CK_SLOT_ID slotID, CK_UTF8CHAR_PTR pPin, CK_ULONG ulP
 	// withheld from it until now, and a fresh spare takes its place behind.
 	// Re-initialising a token that already existed wipes it but inserts
 	// nothing, so it is not reported.
-	Token* slotToken = slot->getToken();
 	const bool wasInitialised = slotToken != NULL && slotToken->isInitialized();
 
 	const CK_RV rv = slot->initToken(soPIN, pLabel);
@@ -14622,6 +14637,8 @@ CK_RV SoftHSM::generateGOST2012
 	const ByteString tc26CurveA("06092a8503070102010101");
 	const ByteString tc26CurveB("06092a8503070102010102");
 	const ByteString cryptoProCurveA("06072a850302022301");
+	const ByteString cryptoProCurveB("06072a850302022302");
+	const ByteString cryptoProCurveC("06072a850302022303");
 	const ByteString cryptoProExchangeA("06072a850302022400");
 	const ByteString streebog256("06082a85030701010202");
 
@@ -14657,7 +14674,8 @@ CK_RV SoftHSM::generateGOST2012
 	else
 	{
 		if (param3410 != tc26CurveA && param3410 != tc26CurveB &&
-		    param3410 != cryptoProCurveA && param3410 != cryptoProExchangeA)
+		    param3410 != cryptoProCurveA && param3410 != cryptoProCurveB &&
+		    param3410 != cryptoProCurveC && param3410 != cryptoProExchangeA)
 			return CKR_ATTRIBUTE_VALUE_INVALID;
 		if (param3411 != streebog256)
 			return CKR_ATTRIBUTE_VALUE_INVALID;

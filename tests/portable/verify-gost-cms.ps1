@@ -50,7 +50,39 @@ try {
     if (-not (Select-String -LiteralPath (Join-Path $Out 'openssl-smime-asn1.txt') -SimpleMatch $GostAlgorithm)) {
         throw 'S/MIME envelope lacks the GOST signature algorithm'
     }
-    Write-Host '[GOST-CMS] PASS: ENGINE, S/MIME and CMS signing and verification'
+    $Tc26 = Join-Path $Out 'tc26'
+    New-Item -ItemType Directory -Force -Path $Tc26 | Out-Null
+    [IO.File]::WriteAllText((Join-Path $Tc26 'message.txt'), "External TC26-A GOST CMS cross-check`n",
+        [Text.Encoding]::ASCII)
+    Invoke-OpenSSL -Arguments @('genpkey', '-engine', 'gost', '-algorithm', 'gost2012_256',
+        '-pkeyopt', 'paramset:TCA', '-out', (Join-Path $Tc26 'key.pem'))
+    Invoke-OpenSSL -Arguments @('req', '-engine', 'gost', '-new', '-x509',
+        '-key', (Join-Path $Tc26 'key.pem'), '-out', (Join-Path $Tc26 'ca.pem'),
+        '-subj', '/CN=Portable TC26 GOST CMS CA', '-days', '1',
+        '-addext', 'basicConstraints=critical,CA:TRUE')
+    Invoke-OpenSSL -Arguments @('x509', '-in', (Join-Path $Tc26 'ca.pem'), '-outform', 'DER',
+        '-out', (Join-Path $Tc26 'ca.der'))
+    Invoke-OpenSSL -Arguments @('asn1parse', '-inform', 'DER',
+        '-in', (Join-Path $Tc26 'ca.der')) |
+        Set-Content -LiteralPath (Join-Path $Tc26 'ca-asn1.txt')
+    if (-not (Select-String -LiteralPath (Join-Path $Tc26 'ca-asn1.txt') -SimpleMatch
+        'GOST R 34.10-2012 (256 bit) ParamSet A')) {
+        throw 'external certificate does not use TC26-A'
+    }
+    foreach ($Mode in @('smime', 'cms')) {
+        $Envelope = Join-Path $Tc26 "openssl-$Mode.der"
+        $Verified = Join-Path $Tc26 "openssl-$Mode-message.txt"
+        Invoke-OpenSSL -Arguments @($Mode, '-sign', '-md', 'streebog256', '-binary', '-nodetach',
+            '-in', (Join-Path $Tc26 'message.txt'), '-signer', (Join-Path $Tc26 'ca.pem'),
+            '-inkey', (Join-Path $Tc26 'key.pem'), '-outform', 'DER', '-out', $Envelope)
+        Invoke-OpenSSL -Arguments @($Mode, '-verify', '-binary', '-inform', 'DER', '-in', $Envelope,
+            '-CAfile', (Join-Path $Tc26 'ca.pem'), '-out', $Verified)
+        if ((Get-FileHash -Algorithm SHA256 (Join-Path $Tc26 'message.txt')).Hash -ne
+            (Get-FileHash -Algorithm SHA256 $Verified).Hash) {
+            throw "$Mode verified different TC26 CMS content"
+        }
+    }
+    Write-Host '[GOST-CMS] PASS: ENGINE, S/MIME and CMS on CryptoPro-A and TC26-A'
 }
 finally {
     $env:OPENSSL_CONF = $OldConfig

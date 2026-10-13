@@ -275,6 +275,8 @@ if ($BundledMode -eq "YES") {
         $env:P11_TEST_EXCLUDE_FUNCTIONS = ''
         & $Client cms-gost-verify-external $Module (Join-Path $OutputDir 'gost-cms')
         if ($LASTEXITCODE -ne 0) { throw 'OpenSSL GOST CMS envelope failed PKCS #11 verification' }
+        & $Client cms-gost-verify-external $Module (Join-Path $OutputDir 'gost-cms/tc26')
+        if ($LASTEXITCODE -ne 0) { throw 'OpenSSL TC26-A CMS envelope failed PKCS #11 verification' }
     }
     finally {
         if ($null -eq $OldSoftHsmConfig) { Remove-Item Env:SOFTHSM2_CONF -ErrorAction SilentlyContinue }
@@ -282,7 +284,7 @@ if ($BundledMode -eq "YES") {
         if ($null -eq $OldExcludedFunctions) { Remove-Item Env:P11_TEST_EXCLUDE_FUNCTIONS -ErrorAction SilentlyContinue }
         else { $env:P11_TEST_EXCLUDE_FUNCTIONS = $OldExcludedFunctions }
     }
-    Write-Host '[GOST-CMS] PASS: OpenSSL envelope verified by PKCS #11 module'
+    Write-Host '[GOST-CMS] PASS: external CryptoPro-A and TC26-A envelopes verified by PKCS #11 module'
     & (Join-Path $KitDir 'scripts/verify-rutoken-opensc.ps1') `
         -Module $Module -Cli $Pkcs11Tool `
         -Spy (Join-Path $KitDir 'lib/pkcs11-spy.dll') `

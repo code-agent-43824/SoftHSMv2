@@ -55,6 +55,26 @@ struct Domain
 			Botan::BigInt("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF6C611070995AD10045841B09B761B893"),
 			Botan::BigInt(1)
 	};
+	// id-GostR3410-2001-CryptoPro-B-ParamSet, RFC 4357 11.4
+	static const Domain cryptoPro_B = {
+		Botan::BigInt("0x8000000000000000000000000000000000000000000000000000000000000C99"),
+		Botan::BigInt("0x8000000000000000000000000000000000000000000000000000000000000C96"),
+		Botan::BigInt("0x3E1AF419A269A5F866A7D3C25C3DF80AE979259373FF2B182F49D4CE7E1BBC8B"),
+		Botan::BigInt(1),
+		Botan::BigInt("0x3FA8124359F96680B83D1C3EB2C070E5C545C9858D03ECFB744BF8D717717EFC"),
+		Botan::BigInt("0x800000000000000000000000000000015F700CFFF1A624E5E497161BCC8A198F"),
+		Botan::BigInt(1)
+	};
+	// id-GostR3410-2001-CryptoPro-C-ParamSet, RFC 4357 11.4
+	static const Domain cryptoPro_C = {
+		Botan::BigInt("0x9B9F605F5A858107AB1EC85E6B41C8AACF846E86789051D37998F7B9022D759B"),
+		Botan::BigInt("0x9B9F605F5A858107AB1EC85E6B41C8AACF846E86789051D37998F7B9022D7598"),
+		Botan::BigInt("0x805A"),
+		Botan::BigInt(0),
+		Botan::BigInt("0x41ECE55743711A8C3CBF3783CD08C0EE4D4DC440D4641A8F366E550DFDB3BB67"),
+		Botan::BigInt("0x9B9F605F5A858107AB1EC85E6B41C8AA582CA3511EDDFB74F02F3A6598980BB9"),
+		Botan::BigInt(1)
+	};
 	// id-tc26-gost-3410-12-512-paramSetA, RFC 7836 A.1
 	static const Domain tc26_512_A = {
 			Botan::BigInt("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
@@ -116,6 +136,8 @@ struct Entry
 const uint8_t oidTC26_256_A[] = {0x06,0x09,0x2a,0x85,0x03,0x07,0x01,0x02,0x01,0x01,0x01};
 const uint8_t oidTC26_256_B[] = {0x06,0x09,0x2a,0x85,0x03,0x07,0x01,0x02,0x01,0x01,0x02};
 const uint8_t oidCryptoProA[] = {0x06,0x07,0x2a,0x85,0x03,0x02,0x02,0x23,0x01};
+const uint8_t oidCryptoProB[] = {0x06,0x07,0x2a,0x85,0x03,0x02,0x02,0x23,0x02};
+const uint8_t oidCryptoProC[] = {0x06,0x07,0x2a,0x85,0x03,0x02,0x02,0x23,0x03};
 const uint8_t oidCryptoProXchA[] = {0x06,0x07,0x2a,0x85,0x03,0x02,0x02,0x24,0x00};
 const uint8_t oidTC26_512_A[] = {0x06,0x09,0x2a,0x85,0x03,0x07,0x01,0x02,0x01,0x02,0x01};
 const uint8_t oidTC26_512_B[] = {0x06,0x09,0x2a,0x85,0x03,0x07,0x01,0x02,0x01,0x02,0x02};
@@ -131,6 +153,8 @@ const Entry table[] = {
 	{oidTC26_256_A,    sizeof(oidTC26_256_A),    &tc26_256_A},
 	{oidTC26_256_B,    sizeof(oidTC26_256_B),    &cryptoPro_A},
 	{oidCryptoProA,    sizeof(oidCryptoProA),    &cryptoPro_A},
+	{oidCryptoProB,    sizeof(oidCryptoProB),    &cryptoPro_B},
+	{oidCryptoProC,    sizeof(oidCryptoProC),    &cryptoPro_C},
 	{oidCryptoProXchA, sizeof(oidCryptoProXchA), &cryptoPro_A},
 	{oidTC26_512_A,    sizeof(oidTC26_512_A),    &tc26_512_A},
 	{oidTC26_512_B,    sizeof(oidTC26_512_B),    &tc26_512_B},

@@ -254,7 +254,10 @@ if [[ "$bundled_mode" == YES ]]; then
   SOFTHSM2_CONF="$gost_verify_store/softhsm.conf" P11_TEST_EXCLUDE_FUNCTIONS= \
     "$kit_dir/bin/portable-token-e2e" cms-gost-verify-external "$module" \
       "$kit_dir/test-output/gost-cms"
-  printf '[GOST-CMS] PASS: OpenSSL envelope verified by PKCS #11 module\n'
+  SOFTHSM2_CONF="$gost_verify_store/softhsm.conf" P11_TEST_EXCLUDE_FUNCTIONS= \
+    "$kit_dir/bin/portable-token-e2e" cms-gost-verify-external "$module" \
+      "$kit_dir/test-output/gost-cms/tc26"
+  printf '[GOST-CMS] PASS: external CryptoPro-A and TC26-A envelopes verified by PKCS #11 module\n'
   spy_name=pkcs11-spy.so
   [[ $(uname -s) == Darwin ]] && spy_name=pkcs11-spy.dylib
   bash "$kit_dir/scripts/verify-rutoken-opensc.sh" \

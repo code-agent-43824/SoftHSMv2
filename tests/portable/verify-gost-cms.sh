@@ -35,4 +35,27 @@ cmp "$out/message.txt" "$out/openssl-cms-message.txt"
   > "$out/openssl-smime-asn1.txt"
 grep -F 'GOST R 34.10-2012 with GOST R 34.11-2012 (256 bit)' \
   "$out/openssl-smime-asn1.txt" >/dev/null
-echo '[GOST-CMS] PASS: ENGINE, S/MIME and CMS signing and verification'
+
+# OpenSSL encodes TC26-A's SubjectPublicKeyInfo with only the curve OID.
+# A PKCS #11 verifier must infer the 2012/256 digest parameter from the key
+# algorithm, including for envelopes produced outside the module.
+tc26="$out/tc26"
+mkdir -p "$tc26"
+printf 'External TC26-A GOST CMS cross-check\n' > "$tc26/message.txt"
+"$openssl" genpkey -engine gost -algorithm gost2012_256 -pkeyopt paramset:TCA \
+  -out "$tc26/key.pem"
+"$openssl" req -engine gost -new -x509 -key "$tc26/key.pem" \
+  -out "$tc26/ca.pem" -subj '/CN=Portable TC26 GOST CMS CA' -days 1 \
+  -addext 'basicConstraints=critical,CA:TRUE'
+"$openssl" x509 -in "$tc26/ca.pem" -outform DER -out "$tc26/ca.der"
+"$openssl" asn1parse -inform DER -in "$tc26/ca.der" > "$tc26/ca-asn1.txt"
+grep -F 'GOST R 34.10-2012 (256 bit) ParamSet A' "$tc26/ca-asn1.txt" >/dev/null
+for mode in smime cms; do
+  "$openssl" "$mode" -sign -md streebog256 -binary -nodetach \
+    -in "$tc26/message.txt" -signer "$tc26/ca.pem" -inkey "$tc26/key.pem" \
+    -outform DER -out "$tc26/openssl-$mode.der"
+  "$openssl" "$mode" -verify -binary -inform DER -in "$tc26/openssl-$mode.der" \
+    -CAfile "$tc26/ca.pem" -out "$tc26/openssl-$mode-message.txt"
+  cmp "$tc26/message.txt" "$tc26/openssl-$mode-message.txt"
+done
+echo '[GOST-CMS] PASS: ENGINE, S/MIME and CMS on CryptoPro-A and TC26-A'

@@ -26,6 +26,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -75,6 +76,7 @@ static const char* rvName(CK_RV rv)
         case CKR_SLOT_ID_INVALID: return "CKR_SLOT_ID_INVALID";
         case CKR_GENERAL_ERROR: return "CKR_GENERAL_ERROR";
         case CKR_FUNCTION_FAILED: return "CKR_FUNCTION_FAILED";
+        case CKR_FUNCTION_REJECTED: return "CKR_FUNCTION_REJECTED";
         case CKR_ARGUMENTS_BAD: return "CKR_ARGUMENTS_BAD";
         case CKR_ATTRIBUTE_READ_ONLY: return "CKR_ATTRIBUTE_READ_ONLY";
         case CKR_ATTRIBUTE_SENSITIVE: return "CKR_ATTRIBUTE_SENSITIVE";
@@ -560,10 +562,7 @@ static void expectFactoryPinFlags(Module& module, CK_FUNCTION_LIST_EXTENDED_PTR 
         fail(std::string("factory PIN flags disagree with PIN values ") + when);
 }
 
-// C_GetTokenInfo on a slot that may hold nothing. Used to find the spare
-// uninitialized token, which the Rutoken profile deliberately keeps out of
-// C_GetSlotList(tokenPresent = TRUE) while still answering about it: that is
-// the slot a new token is created on.
+// C_GetTokenInfo on a slot that may hold nothing.
 static bool tokenInfoIfAny(Module& module, CK_SLOT_ID slot, CK_TOKEN_INFO& info)
 {
     const CK_RV rv = invoke("C_GetTokenInfo", "slotID=" + std::to_string(slot) +
@@ -602,19 +601,16 @@ static CK_SLOT_ID selectSlotForInitialization(Module& module, const std::string&
     const std::optional<CK_SLOT_ID> requestedSlot = configuredSlot();
     std::vector<CK_SLOT_ID> existingTarget;
     std::vector<CK_SLOT_ID> uninitialized;
+    std::vector<CK_SLOT_ID> empty;
     const std::vector<CK_SLOT_ID> present = slots(module, CK_TRUE, true);
     // Every reader, not only the ones reporting a token. Under the Rutoken
-    // profile the spare uninitialized token is deliberately absent from the
-    // token-present list - software written for a real Rutoken discards the
-    // whole list when it meets one - but it still answers C_GetTokenInfo, and
-    // it is where a new token goes. On an empty store it is the only token
-    // there is, so looking only at the present list would find nothing to
-    // initialize.
+    // profile the first empty reader is backed by SoftHSM's spare token, but
+    // its public token-info answer is CKR_TOKEN_NOT_PRESENT as on the device.
     for (CK_SLOT_ID slot : slots(module, CK_FALSE, true))
     {
         if (requestedSlot && slot != *requestedSlot) continue;
         CK_TOKEN_INFO info{};
-        if (!tokenInfoIfAny(module, slot, info)) continue;
+        if (!tokenInfoIfAny(module, slot, info)) { empty.push_back(slot); continue; }
         if ((info.flags & CKF_TOKEN_INITIALIZED) != 0)
         {
             if (paddedText(info.label, sizeof(info.label)) == targetLabel)
@@ -634,6 +630,11 @@ static CK_SLOT_ID selectSlotForInitialization(Module& module, const std::string&
     {
         trace("TOKEN", "selected the sole uninitialized slot for first-time initialization");
         return uninitialized.front();
+    }
+    if (existingTarget.empty() && uninitialized.empty() && !empty.empty() && present.empty())
+    {
+        trace("TOKEN", "selected the first empty reader backed by the internal spare");
+        return empty.front();
     }
     if (!requestedSlot && existingTarget.empty() && uninitialized.empty() && present.size() == 1)
     {
@@ -2231,7 +2232,7 @@ static bool pointSatisfiesCurve(const Bytes& point, const std::string& pHex,
 // ever objected.
 //
 // The parameters below are the published ones, from RFC 7836 for the TC26
-// curves and RFC 4357 for CryptoPro-A. RFC 9215 Appendix C is why the 256-bit
+// curves and RFC 4357 for CryptoPro-A/B/C. RFC 9215 Appendix C is why the 256-bit
 // paramSetB shares CryptoPro-A's domain, and RFC 4357 is why the exchange set
 // 1.2.643.2.2.36.0 does too. They are written out here rather than fetched
 // from the module, because the module's own answer is the thing under test.
@@ -2263,6 +2264,14 @@ static void verifyGOSTCurveIdentity(Module& module, CK_SESSION_HANDLE session)
          "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFD97",
          "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFD94",
          "A6", false},
+        {"id-GostR3410-2001-CryptoPro-B-ParamSet", "06072a850302022302",
+         "8000000000000000000000000000000000000000000000000000000000000C99",
+         "8000000000000000000000000000000000000000000000000000000000000C96",
+         "3E1AF419A269A5F866A7D3C25C3DF80AE979259373FF2B182F49D4CE7E1BBC8B", false},
+        {"id-GostR3410-2001-CryptoPro-C-ParamSet", "06072a850302022303",
+         "9B9F605F5A858107AB1EC85E6B41C8AACF846E86789051D37998F7B9022D759B",
+         "9B9F605F5A858107AB1EC85E6B41C8AACF846E86789051D37998F7B9022D7598",
+         "805A", false},
         {"id-tc26-gost-3410-12-512-paramSetA", "06092a8503070102010201",
          "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
          "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFDC7",
@@ -4181,6 +4190,20 @@ static void verifyExtendedInitToken(const fs::path& modulePath)
             (extended.flags & (TOKEN_FLAGS_ADMIN_CHANGE_USER_PIN |
                                TOKEN_FLAGS_USER_CHANGE_USER_PIN)) != TOKEN_FLAGS_USER_CHANGE_USER_PIN)
             fail("C_EX_InitToken lost separate PIN minima or change policy");
+        std::array<CK_UTF8CHAR, 32> refusedLabel{};
+        refusedLabel.fill(' ');
+        std::copy_n("Rejected format", 15, refusedLabel.begin());
+        for (const std::string* candidate : {&newAdmin, &wrongPin})
+            check(invoke("C_InitToken", "user-only policy before SO PIN check", [&] {
+                return module->C_InitToken(slot,
+                    reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(candidate->data())),
+                    static_cast<CK_ULONG>(candidate->size()), refusedLabel.data());
+            }), CKR_FUNCTION_REJECTED, "C_InitToken with user-only PIN change policy");
+        if (paddedText(tokenInfo(module, slot).label, 32) != labelA)
+            fail("rejected C_InitToken changed the token label");
+        extendedRetries(maxAdmin, leftAdmin, maxUser, leftUser);
+        if (leftAdmin != maxAdmin || leftUser != maxUser)
+            fail("rejected C_InitToken consumed PIN retries");
         CK_SESSION_HANDLE adminSession = openSession(module, slot);
         login(module, adminSession, CKU_SO, newAdmin);
         const std::string temporaryAdmin = "87436521";
@@ -4419,6 +4442,19 @@ static void verifyExtendedInitToken(const fs::path& modulePath)
         exInit("C_EX_InitToken(session open)", std::string("99887766"), &good, CKR_SESSION_EXISTS);
         closeSession(module, held);
     }
+
+    // Both an admin-only and a both-sides policy permit a standard format.
+    // Phase F left the repaired token with the admin-only policy.
+    std::array<CK_UTF8CHAR, 32> standardLabel{};
+    standardLabel.fill(' ');
+    std::copy_n("Standard format", 15, standardLabel.begin());
+    const std::string repairedAdmin = "99887766";
+    for (int attempt = 0; attempt < 2; ++attempt)
+        callOk("C_InitToken", attempt == 0 ? "admin-only policy" : "both-sides policy", [&] {
+            return module->C_InitToken(slot,
+                reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(repairedAdmin.data())),
+                repairedAdmin.size(), standardLabel.data());
+        });
 
     std::cout << "C_EX_InitToken behaviour verified\n";
 }
@@ -5465,8 +5501,8 @@ static void verifyRutokenProfile(const fs::path& modulePath)
         paddedText(library.manufacturerID, sizeof(library.manufacturerID)) != "Aktiv Co." ||
         paddedText(library.libraryDescription, sizeof(library.libraryDescription)) !=
             "Rutoken ECP PKCS #11 library" ||
-        library.libraryVersion.major != 2 || library.libraryVersion.minor != 19)
-        fail("C_GetInfo does not match the Rutoken ECP 2.19 reference profile");
+        library.libraryVersion.major != 2 || library.libraryVersion.minor != 21)
+        fail("C_GetInfo does not match the Rutoken ECP 3.0 reference profile");
 
     const std::vector<CK_SLOT_ID> allSlots = slots(module, CK_FALSE);
     const std::vector<CK_SLOT_ID> presentSlots = slots(module, CK_TRUE);
@@ -5510,18 +5546,17 @@ static void verifyRutokenProfile(const fs::path& modulePath)
                [&] { return module->C_CloseSession(session); });
     }
 
-    // The spare has to stay reachable by slot ID even though it is no longer
-    // advertised, or there would be no way to make a new token through the
-    // profile. It sits immediately past the listed run: C_GetTokenInfo still
-    // answers for it, and reports it uninitialized, which is what
-    // softhsm2-util --init-token --free looks for.
+    // The first empty reader sits immediately after the listed run. Its
+    // internal spare accepts C_InitToken, but public token queries must agree
+    // that no token is present; softhsm2-util --free uses C_GetSlotInfo.
     const CK_SLOT_ID spareSlot = static_cast<CK_SLOT_ID>(presentSlots.size());
     if (spareSlot < 15)
     {
-        const CK_TOKEN_INFO reserve = tokenInfo(module, spareSlot);
-        if ((reserve.flags & CKF_TOKEN_INITIALIZED) != 0)
-            fail("slot " + std::to_string(spareSlot) +
-                 " should hold the spare uninitialized token, ready to be initialized");
+        CK_TOKEN_INFO reserve{};
+        check(invoke("C_GetTokenInfo", "slotID=" + std::to_string(spareSlot) +
+                         " (first empty reader)",
+                     [&] { return module->C_GetTokenInfo(spareSlot, &reserve); }),
+              CKR_TOKEN_NOT_PRESENT, "C_GetTokenInfo(first empty Rutoken reader)");
         CK_SLOT_INFO hidden{};
         callOk("C_GetSlotInfo", "slotID=" + std::to_string(spareSlot) + " (the spare)",
                [&] { return module->C_GetSlotInfo(spareSlot, &hidden); });
@@ -5537,8 +5572,8 @@ static void verifyRutokenProfile(const fs::path& modulePath)
         paddedText(slot.manufacturerID, sizeof(slot.manufacturerID)) != "Aktiv Co." ||
         (slot.flags & (CKF_HW_SLOT | CKF_REMOVABLE_DEVICE | CKF_TOKEN_PRESENT)) !=
             (CKF_HW_SLOT | CKF_REMOVABLE_DEVICE | CKF_TOKEN_PRESENT) ||
-        slot.hardwareVersion.major != 60 || slot.hardwareVersion.minor != 1 ||
-        slot.firmwareVersion.major != 30 || slot.firmwareVersion.minor != 2)
+        slot.hardwareVersion.major != 67 || slot.hardwareVersion.minor != 4 ||
+        slot.firmwareVersion.major != 34 || slot.firmwareVersion.minor != 2)
         fail("slot 0 information does not match the Rutoken ECP reference profile");
 
     const CK_TOKEN_INFO token = tokenInfo(module, 0);
@@ -5555,8 +5590,8 @@ static void verifyRutokenProfile(const fs::path& modulePath)
         serial.size() != 8 || !std::all_of(serial.begin(), serial.end(), [](char c) {
             return c >= '0' && c <= '9';
         }) || token.ulMinPinLen != 6 || token.ulMaxPinLen != 32 ||
-        token.hardwareVersion.major != 60 || token.hardwareVersion.minor != 1 ||
-        token.firmwareVersion.major != 30 || token.firmwareVersion.minor != 2)
+        token.hardwareVersion.major != 67 || token.hardwareVersion.minor != 4 ||
+        token.firmwareVersion.major != 34 || token.firmwareVersion.minor != 2)
         fail("token information does not match the Rutoken ECP reference profile");
     if ((token.flags & (CKF_RNG | CKF_LOGIN_REQUIRED)) != (CKF_RNG | CKF_LOGIN_REQUIRED))
         fail("Rutoken token flags differ from the reference device");
@@ -5571,14 +5606,13 @@ static void verifyRutokenProfile(const fs::path& modulePath)
         expectFactoryPinFlags(module, ex, 0, knownSoPin, knownUserPin, "in the profile gate");
     }
 
-    // The first reader with nothing behind it at all sits one past the spare:
-    // the listed tokens, then the spare that is no longer listed, then empty
-    // readers to the end of the fifteen.
-    const CK_SLOT_ID firstEmpty = static_cast<CK_SLOT_ID>(presentSlots.size() + 1);
-    CK_TOKEN_INFO absent{};
-    check(invoke("C_GetTokenInfo", "slotID=" + std::to_string(firstEmpty) + ", pInfo=&absent",
-                 [&] { return module->C_GetTokenInfo(firstEmpty, &absent); }),
-          CKR_TOKEN_NOT_PRESENT, "C_GetTokenInfo(empty Rutoken slot)");
+    for (CK_SLOT_ID emptySlot = spareSlot; emptySlot < 15; ++emptySlot)
+    {
+        CK_TOKEN_INFO absent{};
+        check(invoke("C_GetTokenInfo", "slotID=" + std::to_string(emptySlot) + ", pInfo=&absent",
+                     [&] { return module->C_GetTokenInfo(emptySlot, &absent); }),
+              CKR_TOKEN_NOT_PRESENT, "C_GetTokenInfo(empty Rutoken slot)");
+    }
 
     CK_ULONG mechanismCount = 0;
     callOk("C_GetMechanismList", "slotID=0, pMechanismList=NULL_PTR, pulCount=&count",
@@ -5855,12 +5889,12 @@ static void verifyRutokenProfile(const fs::path& modulePath)
 }
 
 // One reading of the profile's slot layout: which facade slot carries which
-// token label, and where the spare uninitialized token sits.
+// token label, and which first empty reader can initialize the internal spare.
 struct SlotLayout
 {
     std::vector<std::string> labels;   // one per listed slot, in slot order
     std::vector<CK_SLOT_ID> present;   // what C_GetSlotList(tokenPresent) returned
-    CK_SLOT_ID spare;                  // the unlisted slot holding the spare
+    CK_SLOT_ID spare;                  // first empty reader, backed internally
     bool haveSpare;                    // false when all fifteen are taken
 };
 
@@ -5891,35 +5925,20 @@ static SlotLayout readSlotLayout(Module& module)
                  (listed ? "listed" : "did not list") + " it");
         if (!occupied)
         {
-            // Two kinds of slot are not listed. The spare, which still answers
-            // C_GetTokenInfo and reports itself uninitialized - that is how a
-            // new token is made, and what --init-token --free looks for - and
-            // the genuinely empty readers past it, which answer about no token
-            // at all. The spare comes first, directly after the listed run.
+            // Every empty reader answers CKR_TOKEN_NOT_PRESENT. The first
+            // one is backed internally by SoftHSM's spare for C_InitToken.
             CK_TOKEN_INFO reserve{};
             const CK_RV rv = invoke("C_GetTokenInfo", "slotID=" + std::to_string(all[i]) +
                                         " (not listed)",
                                     [&] { return module->C_GetTokenInfo(all[i], &reserve); });
-            if (rv == CKR_OK)
+            check(rv, CKR_TOKEN_NOT_PRESENT, "C_GetTokenInfo(empty reader)");
+            if (!layout.haveSpare)
             {
-                if (layout.haveSpare)
-                    fail("slot " + std::to_string(all[i]) + " holds a second unlisted token; "
-                         "SoftHSM keeps exactly one spare");
-                if ((reserve.flags & CKF_TOKEN_INITIALIZED) != 0)
-                    fail("slot " + std::to_string(all[i]) + " holds an initialized token but is "
-                         "absent from C_GetSlotList(tokenPresent=TRUE)");
                 if (all[i] != static_cast<CK_SLOT_ID>(layout.labels.size()))
-                    fail("the spare sits on slot " + std::to_string(all[i]) + " but the listed "
-                         "tokens end at slot " + std::to_string(layout.labels.size()) +
-                         "; the spare belongs directly after them");
+                    fail("the first empty reader does not follow the occupied slots");
                 layout.spare = all[i];
                 layout.haveSpare = true;
-                continue;
             }
-            check(rv, CKR_TOKEN_NOT_PRESENT, "C_GetTokenInfo(empty reader)");
-            if (!layout.haveSpare && layout.labels.size() < 15)
-                fail("slot " + std::to_string(all[i]) + " is empty and no spare was found before "
-                     "it; there would be no way to create a new token");
             continue;
         }
         if (layout.labels.size() != i)
@@ -6015,16 +6034,16 @@ static void verifyMultipleTokens(const fs::path& modulePath)
                      " where \"" + placed[k] + "\" stood before");
         trace("LAYOUT", "a fresh library load reproduced the same layout");
 
-        // The spare is reachable but unlisted: C_GetTokenInfo answers for it
-        // and reports it uninitialized, which is the slot --init-token --free
-        // takes, while no application enumerating devices ever sees it.
+        // The spare is reachable for C_InitToken, but publicly this is an
+        // empty reader; even its C_GetTokenInfo must match the device.
         const CK_SLOT_ID spare = static_cast<CK_SLOT_ID>(placed.size());
         if (!layout.haveSpare || layout.spare != spare)
-            fail("the spare should sit unlisted on slot " + std::to_string(spare));
-        const CK_TOKEN_INFO spareToken = tokenInfo(module, spare);
-        if ((spareToken.flags & CKF_TOKEN_INITIALIZED) != 0)
-            fail("the slot after the last token should hold the uninitialized spare");
-        trace("LAYOUT", "the spare uninitialized token is reachable, unlisted, on slot " +
+            fail("the first empty reader should be on slot " + std::to_string(spare));
+        CK_TOKEN_INFO spareToken{};
+        check(invoke("C_GetTokenInfo", "first empty reader", [&] {
+            return module->C_GetTokenInfo(spare, &spareToken);
+        }), CKR_TOKEN_NOT_PRESENT, "internal spare must not appear as a token");
+        trace("LAYOUT", "the internal spare is reachable for initialization on empty slot " +
                         std::to_string(spare));
 
         // Every operation has to answer about the token behind the slot it was
@@ -6726,13 +6745,14 @@ static CmsKeyPair cmsKeyPair(Module& module, CK_SESSION_HANDLE session,
 }
 
 static CmsKeyPair cmsGostKeyPair(Module& module, CK_SESSION_HANDLE session,
-                                 const Bytes& id, int bits)
+                                 const Bytes& id, int bits, const char* curveHex = nullptr)
 {
     CK_OBJECT_CLASS publicClass = CKO_PUBLIC_KEY, privateClass = CKO_PRIVATE_KEY;
     CK_KEY_TYPE keyType = bits == 256 ? CKK_GOSTR3410 : CKK_GOSTR3410_512;
     CK_BBOOL yes = CK_TRUE, no = CK_FALSE;
-    Bytes curve = bytesFromHex(bits == 256 ? "06072a850302022301"
-                                       : "06092a8503070102010201");
+    Bytes curve = bytesFromHex(curveHex ? curveHex :
+                               bits == 256 ? "06072a850302022301"
+                                           : "06092a8503070102010201");
     Bytes hash = bytesFromHex(bits == 256 ? "06082a85030701010202"
                                       : "06082a85030701010203");
     CK_ATTRIBUTE publicAttrs[] = {
@@ -7015,7 +7035,8 @@ static void verifyCmsBattery(const fs::path& modulePath,
 }
 
 static void verifyGostCmsBattery(const fs::path& modulePath,
-                                 const fs::path& vectorDirectory, int bits = 256)
+                                 const fs::path& vectorDirectory, int bits = 256,
+                                 const char* curveHex = nullptr)
 {
     Module module(modulePath);
     CK_SESSION_HANDLE session = openSession(module, selectSlot(module, true));
@@ -7024,11 +7045,17 @@ static void verifyGostCmsBattery(const fs::path& modulePath,
         module.symbol("C_EX_GetFunctionListExtended"));
     CK_FUNCTION_LIST_EXTENDED_PTR ex = nullptr;
     callOk("C_EX_GetFunctionListExtended", "GOST CMS", [&] { return getList(&ex); });
-    const Bytes rootId = {'G','C','A'}, leafId = {'G','C','M','S'},
-                otherId = {'G','B','A','D'};
-    CmsKeyPair root = cmsGostKeyPair(module, session, rootId, bits);
-    CmsKeyPair leaf = cmsGostKeyPair(module, session, leafId, bits);
-    CmsKeyPair other = cmsGostKeyPair(module, session, otherId, bits);
+    Bytes rootId = {'G','C','A'}, leafId = {'G','C','M','S'},
+          otherId = {'G','B','A','D'};
+    if (curveHex) {
+        const Bytes suffix = bytesFromHex(curveHex);
+        rootId.insert(rootId.end(), suffix.begin(), suffix.end());
+        leafId.insert(leafId.end(), suffix.begin(), suffix.end());
+        otherId.insert(otherId.end(), suffix.begin(), suffix.end());
+    }
+    CmsKeyPair root = cmsGostKeyPair(module, session, rootId, bits, curveHex);
+    CmsKeyPair leaf = cmsGostKeyPair(module, session, leafId, bits, curveHex);
+    CmsKeyPair other = cmsGostKeyPair(module, session, otherId, bits, curveHex);
     Bytes rootName = cmsName("GOST CMS CA");
     Bytes leafName = cmsName("GOST CMS Signer");
     Bytes rootDer = cmsGostCertificate(module, session, root.publicKey,
@@ -7146,7 +7173,7 @@ static void verifyGostCmsBattery(const fs::path& modulePath,
     *found ^= 1;
     verify(tampered, CKR_SIGNATURE_INVALID, false);
     const Bytes intermediateId = {'G','I','N','T'}, secondLeafId = {'G','L','2'};
-    CmsKeyPair intermediate = cmsGostKeyPair(module, session, intermediateId, bits);
+    CmsKeyPair intermediate = cmsGostKeyPair(module, session, intermediateId, bits, curveHex);
     Bytes intermediateName = cmsName("GOST CMS Intermediate");
     Bytes intermediateDer = cmsGostCertificate(module, session, intermediate.publicKey,
         root.privateKey, rootName, intermediateName, 13, true, bits);
@@ -7336,6 +7363,33 @@ static void verifyGostCmsExternal(const fs::path& modulePath,
         return ex->C_EX_FreeBuffer(recovered);
     });
     cmsFreeSigners(ex, signers, count);
+    if (!tokenVectors) {
+        const Bytes cmsEnvelope = readFile(vectorDirectory / "openssl-cms.der");
+        for (const auto& item : {std::pair<const Bytes*, CK_FLAGS>{&envelope,
+                                   CKF_VENDOR_CHECK_SIGNATURE_ONLY},
+                                 std::pair<const Bytes*, CK_FLAGS>{&cmsEnvelope, 0}}) {
+            callOk("C_EX_PKCS7VerifyInit", "external GOST CMS variant", [&] {
+                return ex->C_EX_PKCS7VerifyInit(session,
+                    const_cast<unsigned char*>(item.first->data()), item.first->size(),
+                    &store, OPTIONAL_CRL_CHECK, item.second);
+            });
+            recovered = nullptr; recoveredSize = 0; signers = nullptr; count = 0;
+            callOk("C_EX_PKCS7Verify", "external GOST CMS variant", [&] {
+                return ex->C_EX_PKCS7Verify(session, &recovered, &recoveredSize,
+                                              &signers, &count);
+            });
+            if (!recovered || Bytes(recovered, recovered + recoveredSize) != content ||
+                (item.second ? (signers != nullptr || count != 0)
+                             : (!signers || count != 1 ||
+                                Bytes(signers[0].pData,
+                                      signers[0].pData + signers[0].ulSize) != ca)))
+                fail("external GOST CMS variant returned incorrect content or signer");
+            callOk("C_EX_FreeBuffer", "external GOST CMS variant content", [&] {
+                return ex->C_EX_FreeBuffer(recovered);
+            });
+            if (signers) cmsFreeSigners(ex, signers, count);
+        }
+    }
     Bytes tampered = envelope;
     auto where = std::search(tampered.begin(), tampered.end(), content.begin(), content.end());
     if (where == tampered.end()) fail("external GOST content was not embedded");
@@ -7987,6 +8041,67 @@ static void verifyGostCmsParity(Module& module, CK_SESSION_HANDLE session,
     trace("PARITY", "case cms passed");
 }
 
+// The detailed CMS parity case above uses CryptoPro-A. A short roundtrip on
+// every other device-supported 256-bit curve catches verification paths that
+// accidentally depend on that one parameter set.
+static void verifyGostCmsCurveParity(Module& module, CK_SESSION_HANDLE session,
+                                     CK_FUNCTION_LIST_EXTENDED_PTR ex)
+{
+    const struct { const char* name; const char* oid; } curves[] = {
+        {"TC26-A", "06092a8503070102010101"},
+        {"CryptoPro-B", "06072a850302022302"},
+        {"CryptoPro-C", "06072a850302022303"}
+    };
+    const Bytes content = asciiBytes("CryptoMost CMS curve parity payload");
+    const Bytes rootName = cmsName("CryptoMost Curve CA");
+    const Bytes leafName = cmsName("CryptoMost Curve Signer");
+    for (const auto& curve : curves) {
+        Bytes rootId = asciiBytes("parity-cms-root-");
+        Bytes leafId = asciiBytes("parity-cms-leaf-");
+        const Bytes curveName = asciiBytes(curve.name);
+        rootId.insert(rootId.end(), curveName.begin(), curveName.end());
+        leafId.insert(leafId.end(), curveName.begin(), curveName.end());
+        auto cleanup = [&] {
+            removePriorTestObjects(module, session, leafId);
+            removePriorTestObjects(module, session, rootId);
+        };
+        cleanup();
+        try {
+            const CmsKeyPair root = cmsGostKeyPair(module, session, rootId, 256, curve.oid);
+            const CmsKeyPair leaf = cmsGostKeyPair(module, session, leafId, 256, curve.oid);
+            const Bytes rootDer = cmsGostCertificate(module, session, root.publicKey,
+                root.privateKey, rootName, rootName, 31, true, 256);
+            const Bytes leafDer = cmsGostCertificate(module, session, leaf.publicKey,
+                root.privateKey, rootName, leafName, 32, false, 256);
+            const CK_OBJECT_HANDLE rootCert = cmsTokenCertificate(module, session,
+                rootId, rootDer, rootName);
+            const CK_OBJECT_HANDLE leafCert = cmsTokenCertificate(module, session,
+                leafId, leafDer, leafName);
+            Bytes attached, detached;
+            check(cmsSign(ex, session, content, leafCert, leaf.privateKey,
+                          {rootCert}, 0, &attached, curve.name), CKR_OK,
+                  "CMS sign on another GOST curve");
+            expectVerified(cmsVerify(ex, session, attached, &rootDer, nullptr, true,
+                                     0, nullptr, curve.name), &content, &leafDer,
+                           "CMS roundtrip on another GOST curve");
+            expectVerified(cmsVerify(ex, session, attached, nullptr, nullptr, false,
+                                     CKF_VENDOR_CHECK_SIGNATURE_ONLY, nullptr, curve.name),
+                           &content, nullptr, "CMS signature-only check on another GOST curve");
+            check(cmsSign(ex, session, content, leafCert, leaf.privateKey,
+                          {rootCert}, PKCS7_DETACHED_SIGNATURE, &detached, curve.name),
+                  CKR_OK, "detached CMS sign on another GOST curve");
+            expectVerified(cmsVerify(ex, session, detached, &rootDer, nullptr, true,
+                                     0, &content, curve.name), nullptr, &leafDer,
+                           "detached CMS roundtrip on another GOST curve");
+            cleanup();
+            trace("PARITY", std::string("CMS attached/detached on ") + curve.name + " passed");
+        } catch (...) {
+            try { cleanup(); } catch (...) { }
+            throw;
+        }
+    }
+}
+
 static CK_BBOOL booleanAttribute(Module& module, CK_SESSION_HANDLE session,
                                  CK_OBJECT_HANDLE object, CK_ATTRIBUTE_TYPE type)
 {
@@ -8275,6 +8390,7 @@ static void verifyDeviceParity(const fs::path& modulePath)
     verifyCsrParity(module, session, ex);
     trace("PARITY", "case cms");
     verifyGostCmsParity(module, session, ex);
+    verifyGostCmsCurveParity(module, session, ex);
     trace("PARITY", "case divergences");
     verifyDivergenceParity(module, session, ex);
     trace("PARITY", "case journal");
@@ -8955,6 +9071,13 @@ static void runBattery(const fs::path& modulePath, fs::path workRoot)
         batteryInitToken(modulePath, "Rutoken ECP", soPin, userPin);
         verifyCmsBattery(modulePath, dir);
         verifyGostCmsBattery(modulePath, dir);
+        for (const auto& variant : {std::pair<const char*, const char*>{"tc26", "06092a8503070102010101"},
+                                    {"cryptopro-b", "06072a850302022302"},
+                                    {"cryptopro-c", "06072a850302022303"}}) {
+            const fs::path vectors = dir / variant.first;
+            fs::create_directories(vectors);
+            verifyGostCmsBattery(modulePath, vectors, 256, variant.second);
+        }
     }
 
     // journal: successful GOST signatures update one persistent Rutoken record.
@@ -9120,6 +9243,9 @@ int main(int argc, char** argv)
             return 0;
         }
         if (argc == 4 && (std::string(argv[1]) == "cms-gost" ||
+                          std::string(argv[1]) == "cms-gost-tc26" ||
+                          std::string(argv[1]) == "cms-gost-cp-b" ||
+                          std::string(argv[1]) == "cms-gost-cp-c" ||
                           std::string(argv[1]) == "cms-gost-512"))
         {
             const fs::path modulePath = fs::absolute(argv[2]);
@@ -9129,7 +9255,13 @@ int main(int argc, char** argv)
                              environment("P11_TEST_SO_PIN", true),
                              environment("P11_TEST_USER_PIN", true));
             verifyGostCmsBattery(modulePath, vectors,
-                                 std::string(argv[1]) == "cms-gost" ? 256 : 512);
+                                 std::string(argv[1]) == "cms-gost-512" ? 512 : 256,
+                                 std::string(argv[1]) == "cms-gost-tc26"
+                                     ? "06092a8503070102010101"
+                                     : std::string(argv[1]) == "cms-gost-cp-b"
+                                           ? "06072a850302022302"
+                                           : std::string(argv[1]) == "cms-gost-cp-c"
+                                                 ? "06072a850302022303" : nullptr);
             return 0;
         }
         if (argc == 4 && std::string(argv[1]) == "cms-verify-external")
@@ -9171,6 +9303,9 @@ int main(int argc, char** argv)
                   << "  portable-token-e2e cms <module> (fresh test token)\n"
                   << "  portable-token-e2e cms-verify-external <module> <vector-directory>\n"
                   << "  portable-token-e2e cms-gost <module> <vector-directory> (256-bit)\n"
+                  << "  portable-token-e2e cms-gost-tc26 <module> <vector-directory> (TC26-A)\n"
+                  << "  portable-token-e2e cms-gost-cp-b <module> <vector-directory> (CryptoPro-B)\n"
+                  << "  portable-token-e2e cms-gost-cp-c <module> <vector-directory> (CryptoPro-C)\n"
                   << "  portable-token-e2e cms-gost-512 <module> <vector-directory>\n"
                   << "  portable-token-e2e cms-gost-verify-external <module> <vector-directory>\n"
                   << "  portable-token-e2e cms-gost-verify-vector <module> <vector-directory>\n"

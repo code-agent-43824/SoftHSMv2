@@ -119,6 +119,26 @@ int findSlot(char* slot, char* serial, char* token, bool freeToken, CK_SLOT_ID& 
 	for (CK_ULONG i = 0; i < ulSlotCount; i++)
 	{
 		CK_TOKEN_INFO tokenInfo;
+		if (freeToken)
+		{
+			CK_SLOT_INFO slotInfo;
+			rv = p11->C_GetSlotInfo(pSlotList[i], &slotInfo);
+			if (rv != CKR_OK)
+			{
+				fprintf(stderr, "ERROR: Could not get info about slot %lu.\n", pSlotList[i]);
+				free(pSlotList);
+				return 1;
+			}
+			// Under the Rutoken profile, an empty reader reports no token even
+			// when SoftHSM has an internal spare ready for C_InitToken there.
+			if ((slotInfo.flags & CKF_TOKEN_PRESENT) == 0)
+			{
+				printf("Slot %lu is free.\n", pSlotList[i]);
+				slotID = pSlotList[i];
+				free(pSlotList);
+				return 0;
+			}
+		}
 
 		rv = p11->C_GetTokenInfo(pSlotList[i], &tokenInfo);
 		if (rv != CKR_OK)
