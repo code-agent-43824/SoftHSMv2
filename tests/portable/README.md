@@ -154,10 +154,11 @@ Ordinary RSA/GOST generation, CSR/CMS, and signing checks remain mandatory.
 The client also provides `probe <module>`, a PIN-free initialization and slot
 enumeration check used by CI to verify first-use configuration selection.
 
-`device-parity <module>` runs the cases written to hold both on this module
-and on the reference Rutoken through the vendor's `librtpkcs11ecp`: every
-expectation in them was read off the device by
-`tests/portable/rutoken-ext-probe.c` (see `docs/JOURNAL.md`). Its cases:
+`device-parity <module>` runs cases intended to hold both on this module
+and on the reference Rutoken through the vendor's `librtpkcs11ecp`. The
+original expectations were read off the device by
+`tests/portable/rutoken-ext-probe.c` (see `docs/JOURNAL.md`); the additional
+curve CMS checks still need a device run. Its cases:
 
 - `csr`: `C_EX_CreateCSR` for GOST-256 and RSA-2048 key pairs, with and
   without a private key handle, the exact DER of the subject, public key,
@@ -171,7 +172,10 @@ expectation in them was read off the device by
   of another pair, a public key as the private one; verification with a
   trusted root, a tampered signature, an unrelated CA, signature only, no
   store, a partial chain, and the envelope's certificates ignored. On every
-  failure neither data nor signers come back, as on the device;
+  failure neither data nor signers come back, as on the device. It also checks
+  attached and detached round trips on TC26-A, CryptoPro-B and CryptoPro-C;
+  key generation on those curves was observed on the device, while these
+  additional CMS round trips still need a device run;
 - `divergences`: the places where this module departs from the device on
   purpose, either answer accepted together with what it implies -
   `CKA_EXTRACTABLE` false->true (`CKR_OK` and TRUE on the device,
