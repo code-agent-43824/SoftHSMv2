@@ -65,8 +65,7 @@ try {
     Invoke-OpenSSL -Arguments @('asn1parse', '-inform', 'DER',
         '-in', (Join-Path $Tc26 'ca.der')) |
         Set-Content -LiteralPath (Join-Path $Tc26 'ca-asn1.txt')
-    if (-not (Select-String -LiteralPath (Join-Path $Tc26 'ca-asn1.txt') -SimpleMatch
-        'GOST R 34.10-2012 (256 bit) ParamSet A')) {
+    if (-not (Select-String -LiteralPath (Join-Path $Tc26 'ca-asn1.txt') -SimpleMatch -Pattern 'GOST R 34.10-2012 (256 bit) ParamSet A')) {
         throw 'external certificate does not use TC26-A'
     }
     foreach ($Mode in @('smime', 'cms')) {
