@@ -35,8 +35,16 @@ ARM64, `ubuntu:26.04`) перед публикацией.
 логе `[LIFECYCLE] PASS`. На ARM64, macOS и Windows не запускалось; job в
 контейнере `ubuntu:26.04` локально не прогонялся — пакеты 26.04 проверены
 распакованными, через их загрузчик.
-**Дальше.** CI, автоматический релиз, скачать Linux x64 и повторить
-`lifecycle` и CSR smoke.
+**Сделано (релиз).** CI `38974109076` зелёный: шаги описи и `lifecycle`
+(оба `[LIFECYCLE] PASS` в логе), job `provider-csr` в `ubuntu:26.04` —
+OpenSSL 3.5.5, pkcs11-provider 1.2.0-1, четыре CSR exit 0. Релиз
+`38974462413` опубликовал `v2.7.0-portable.76` на `241009b`: шесть сборок,
+шесть verifier jobs, Windows CMS и оба новых job (x64, ARM64) прошли.
+Скачанный Linux x64: ZIP совпали с `SHA256SUMS`, CRC без ошибок, модуль
+одинаков в product и test-kit (SHA-256 `941cb1ff…`, BuildID `01956009…`);
+`lifecycle` в обоих профилях, CSR smoke на пакетах 24.04 и 26.04 и
+`run-test.sh` test-kit — exit 0.
+**Дальше.** macOS и Windows — позже, по решению владельца (PLAN).
 
 ## 2026-10-17 — план устранения падения при очистке OpenSSL
 
