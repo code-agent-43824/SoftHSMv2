@@ -27,6 +27,16 @@ public:
 	                   const ByteString& publicValue,
 	                   const ByteString& ukmSource,
 	                   ByteString& twinKey);
+
+	// VKO_GOSTR3410_2012_256 of RFC 7836, 4.3.1: Streebog-256 over the point
+	// (cofactor * UKM * d) * Q, with the UKM bytes read as a little-endian
+	// integer. This is the whole of CKM_GOSTR3410_12_DERIVE with CKD_NULL;
+	// a zero UKM is refused rather than replaced.
+	static bool vko256(const ByteString& encodedCurveOID,
+	                   const ByteString& privateValue,
+	                   const ByteString& publicValue,
+	                   const ByteString& ukm,
+	                   ByteString& key);
 };
 
 #endif // !_SOFTHSM_V2_BOTANGOST2012KEG_H

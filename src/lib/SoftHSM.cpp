@@ -1717,6 +1717,7 @@ void SoftHSM::prepareSupportedMechanisms(std::map<std::string, CK_MECHANISM_TYPE
 #endif
 #ifdef WITH_GOST_3410_2012_256
 	t["CKM_GOST_KEG"] = CKM_GOST_KEG;
+	t["CKM_GOSTR3410_12_DERIVE"] = CKM_GOSTR3410_12_DERIVE;
 #endif
 #ifdef WITH_GOST_3411_2012
 	t["CKM_GOSTR3411_2012_256"] = CKM_GOSTR3411_2012_256;
@@ -2583,6 +2584,11 @@ CK_RV SoftHSM::C_GetMechanismInfo(CK_SLOT_ID slotID, CK_MECHANISM_TYPE type, CK_
 #endif
 #ifdef WITH_GOST_3410_2012_256
 		case CKM_GOST_KEG:
+			pInfo->ulMinKeySize = 0;
+			pInfo->ulMaxKeySize = 0;
+			pInfo->flags = CKF_DERIVE;
+			break;
+		case CKM_GOSTR3410_12_DERIVE:
 			pInfo->ulMinKeySize = 0;
 			pInfo->ulMaxKeySize = 0;
 			pInfo->flags = CKF_DERIVE;
@@ -10322,6 +10328,7 @@ CK_RV SoftHSM::C_DeriveKey
 		case CKM_DH_PKCS_DERIVE:
 #ifdef WITH_GOST_3410_2012_256
 		case CKM_GOST_KEG:
+		case CKM_GOSTR3410_12_DERIVE:
 #endif
 #if defined(WITH_ECC) || defined(WITH_EDDSA)
 		case CKM_ECDH1_DERIVE:
@@ -10404,11 +10411,16 @@ CK_RV SoftHSM::C_DeriveKey
 	    keyType != CKK_AES
 #ifdef WITH_GOST_3410_2012_256
 	    && keyType != CKK_MAGMA_TWIN_KEY
+	    && keyType != CKK_GOST28147
 #endif
 	   )
 		return CKR_TEMPLATE_INCONSISTENT;
 #ifdef WITH_GOST_3410_2012_256
 	if (keyType == CKK_MAGMA_TWIN_KEY && pMechanism->mechanism != CKM_GOST_KEG)
+		return CKR_TEMPLATE_INCONSISTENT;
+	// The GOST 28147-89 key comes only out of the VKO derive, and the VKO
+	// derive gives only that key: the one result the plugin's trace shows.
+	if ((keyType == CKK_GOST28147) != (pMechanism->mechanism == CKM_GOSTR3410_12_DERIVE))
 		return CKR_TEMPLATE_INCONSISTENT;
 #endif
 
@@ -10455,6 +10467,16 @@ CK_RV SoftHSM::C_DeriveKey
 		    !baseIsGOST)
 			return CKR_KEY_TYPE_INCONSISTENT;
 		return this->deriveGOSTKEG(hSession, pMechanism, hBaseKey, pTemplate,
+		                           ulCount, phKey, isOnToken, isPrivate);
+	}
+	if (pMechanism->mechanism == CKM_GOSTR3410_12_DERIVE)
+	{
+		// Only the 256-bit key the plugin's trace shows; what the device does
+		// with a 512-bit one has not been read (docs/PLAN.md).
+		if (key->getUnsignedLongValue(CKA_CLASS, CKO_VENDOR_DEFINED) != CKO_PRIVATE_KEY ||
+		    key->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED) != CKK_GOSTR3410)
+			return CKR_KEY_TYPE_INCONSISTENT;
+		return this->deriveGOSTVKO(hSession, pMechanism, hBaseKey, pTemplate,
 		                           ulCount, phKey, isOnToken, isPrivate);
 	}
 #endif
@@ -14939,10 +14961,114 @@ CK_RV SoftHSM::deriveGOSTKEG
 	}
 	privateKey.setD(ByteString());
 
+	rv = storeDerivedGOSTSecret(hSession, pTemplate, ulCount, phKey, isOnToken, isPrivate,
+	                            CKK_MAGMA_TWIN_KEY, twinKey, true, baseKey, token);
+	twinKey.wipe();
+	return rv;
+}
+
+// VKO_GOSTR3410_2012_256 with CKD_NULL: the call Rutoken Plugin makes to
+// decrypt GOST 28147-89 (docs/JOURNAL.md, 16 October 2026). The parameter is
+// not a structure but a flat buffer of little-endian 32-bit lengths: KDF,
+// public-key length, the sender's public key (little-endian X || Y), UKM
+// length, UKM. Only what the trace shows is accepted - CKD_NULL, a 64-byte
+// point, an 8-byte UKM - until the device has been read for the rest.
+CK_RV SoftHSM::deriveGOSTVKO
+(CK_SESSION_HANDLE hSession,
+	CK_MECHANISM_PTR pMechanism,
+	CK_OBJECT_HANDLE hBaseKey,
+	CK_ATTRIBUTE_PTR pTemplate,
+	CK_ULONG ulCount,
+	CK_OBJECT_HANDLE_PTR phKey,
+	CK_BBOOL isOnToken,
+	CK_BBOOL isPrivate)
+{
+	*phKey = CK_INVALID_HANDLE;
+	if (pMechanism->pParameter == NULL_PTR || pMechanism->ulParameterLen < 12)
+		return CKR_MECHANISM_PARAM_INVALID;
+	const unsigned char* parameter = (const unsigned char*)pMechanism->pParameter;
+	const CK_ULONG parameterLen = pMechanism->ulParameterLen;
+	auto readLength = [&](CK_ULONG offset) {
+		return (CK_ULONG)parameter[offset] | ((CK_ULONG)parameter[offset + 1] << 8) |
+		       ((CK_ULONG)parameter[offset + 2] << 16) | ((CK_ULONG)parameter[offset + 3] << 24);
+	};
+	const CK_ULONG kdf = readLength(0);
+	const CK_ULONG publicLen = readLength(4);
+	if (publicLen != 64 || parameterLen < 12 + publicLen) return CKR_MECHANISM_PARAM_INVALID;
+	const CK_ULONG ukmLen = readLength(8 + publicLen);
+	if (kdf != CKD_NULL || ukmLen != 8 || parameterLen != 12 + publicLen + ukmLen)
+		return CKR_MECHANISM_PARAM_INVALID;
+
+	for (CK_ULONG i = 0; i < ulCount; ++i)
+	{
+		if (pTemplate[i].type == CKA_VALUE)
+			return CKR_ATTRIBUTE_READ_ONLY;
+		if (pTemplate[i].type == CKA_VALUE_LEN)
+		{
+			if (pTemplate[i].pValue == NULL_PTR ||
+			    pTemplate[i].ulValueLen != sizeof(CK_ULONG))
+				return CKR_ATTRIBUTE_VALUE_INVALID;
+			CK_ULONG requestedValueLen = 0;
+			std::memcpy(&requestedValueLen, pTemplate[i].pValue,
+			            sizeof(requestedValueLen));
+			if (requestedValueLen != 32)
+				return CKR_ATTRIBUTE_VALUE_INVALID;
+		}
+	}
+
+	Session* session = (Session*)handleManager->getSession(hSession);
+	if (session == NULL) return CKR_SESSION_HANDLE_INVALID;
+	Token* token = session->getToken();
+	if (token == NULL) return CKR_GENERAL_ERROR;
+	OSObject* baseKey = (OSObject*)handleManager->getObject(hBaseKey);
+	if (baseKey == NULL || !baseKey->isValid()) return CKR_KEY_HANDLE_INVALID;
+
+	BotanGOST2012PrivateKey privateKey;
+	CK_RV rv = getGOSTPrivateKey(&privateKey, token, baseKey);
+	if (rv != CKR_OK) return rv;
+	if (privateKey.getD().size() * 2 != publicLen)
+	{
+		privateKey.setD(ByteString());
+		return CKR_MECHANISM_PARAM_INVALID;
+	}
+	ByteString publicValue(parameter + 8, publicLen);
+	ByteString ukm(parameter + 12 + publicLen, ukmLen);
+	ByteString key;
+	if (!BotanGOST2012KEG::vko256(privateKey.getEC(), privateKey.getD(),
+	                              publicValue, ukm, key))
+	{
+		privateKey.setD(ByteString());
+		return CKR_MECHANISM_PARAM_INVALID;
+	}
+	privateKey.setD(ByteString());
+
+	// A GOST 28147-89 key object carries no CKA_VALUE_LEN.
+	rv = storeDerivedGOSTSecret(hSession, pTemplate, ulCount, phKey, isOnToken, isPrivate,
+	                            CKK_GOST28147, key, false, baseKey, token);
+	key.wipe();
+	return rv;
+}
+
+// Create the secret key a GOST derive produced, from the caller's template:
+// not local, sensitivity inherited as PKCS #11 asks, the value encrypted if
+// the key is private. A failure leaves no object behind.
+CK_RV SoftHSM::storeDerivedGOSTSecret
+(CK_SESSION_HANDLE hSession,
+	CK_ATTRIBUTE_PTR pTemplate,
+	CK_ULONG ulCount,
+	CK_OBJECT_HANDLE_PTR phKey,
+	CK_BBOOL isOnToken,
+	CK_BBOOL isPrivate,
+	CK_KEY_TYPE keyType,
+	ByteString& value,
+	bool hasValueLen,
+	OSObject* baseKey,
+	Token* token)
+{
+	CK_RV rv = CKR_OK;
 	const CK_ULONG maxAttribs = 32;
 	CK_OBJECT_CLASS objClass = CKO_SECRET_KEY;
-	CK_KEY_TYPE keyType = CKK_MAGMA_TWIN_KEY;
-	CK_ULONG valueLen = 64;
+	CK_ULONG valueLen = value.size();
 	CK_ATTRIBUTE secretAttribs[maxAttribs] = {
 		{ CKA_CLASS, &objClass, sizeof(objClass) },
 		{ CKA_TOKEN, &isOnToken, sizeof(isOnToken) },
@@ -14950,7 +15076,7 @@ CK_RV SoftHSM::deriveGOSTKEG
 		{ CKA_KEY_TYPE, &keyType, sizeof(keyType) },
 		{ CKA_VALUE_LEN, &valueLen, sizeof(valueLen) },
 	};
-	CK_ULONG secretAttribsCount = 5;
+	CK_ULONG secretAttribsCount = hasValueLen ? 5 : 4;
 	if (ulCount > maxAttribs - secretAttribsCount)
 		rv = CKR_TEMPLATE_INCONSISTENT;
 	for (CK_ULONG i = 0; i < ulCount && rv == CKR_OK; ++i)
@@ -14990,12 +15116,13 @@ CK_RV SoftHSM::deriveGOSTKEG
 
 			ByteString storedValue;
 			if (isPrivate)
-				ok = ok && token->encrypt(twinKey, storedValue);
+				ok = ok && token->encrypt(value, storedValue);
 			else
-				storedValue = twinKey;
+				storedValue = value;
 			ok = ok && object->setAttribute(CKA_VALUE, storedValue);
 			storedValue.wipe();
-			ok = ok && object->setAttribute(CKA_VALUE_LEN, valueLen);
+			if (hasValueLen)
+				ok = ok && object->setAttribute(CKA_VALUE_LEN, valueLen);
 			if (ok)
 				ok = object->commitTransaction();
 			else
@@ -15003,7 +15130,6 @@ CK_RV SoftHSM::deriveGOSTKEG
 			if (!ok) rv = CKR_FUNCTION_FAILED;
 		}
 	}
-	twinKey.wipe();
 
 	if (rv != CKR_OK && *phKey != CK_INVALID_HANDLE)
 	{

@@ -2619,6 +2619,181 @@ static void verifyGOSTKEG(Module& module, CK_SESSION_HANDLE session)
     trace("REFERENCE", "CKM_GOST_KEG matched the independent 64-byte Magma twin-key vector and plugin call shape");
 }
 
+// The flat parameter Rutoken Plugin hands CKM_GOSTR3410_12_DERIVE (JOURNAL of
+// 16 October 2026): little-endian 32-bit KDF, public-key length, the point,
+// UKM length, the UKM.
+static Bytes vkoDeriveParameter(CK_ULONG kdf, const Bytes& point, const Bytes& ukm)
+{
+    Bytes parameter;
+    auto length = [&](CK_ULONG value) {
+        for (int i = 0; i < 4; ++i) parameter.push_back(static_cast<unsigned char>(value >> (8 * i)));
+    };
+    length(kdf);
+    length(static_cast<CK_ULONG>(point.size()));
+    append(parameter, point);
+    length(static_cast<CK_ULONG>(ukm.size()));
+    append(parameter, ukm);
+    return parameter;
+}
+
+static CK_RV vkoDerive(Module& module, CK_SESSION_HANDLE session, CK_OBJECT_HANDLE baseKey,
+                       const Bytes& parameter, CK_ATTRIBUTE* attributes, CK_ULONG count,
+                       CK_OBJECT_HANDLE& key, const char* what)
+{
+    CK_MECHANISM mechanism{CKM_GOSTR3410_12_DERIVE, const_cast<unsigned char*>(parameter.data()),
+                           static_cast<CK_ULONG>(parameter.size())};
+    key = CK_INVALID_HANDLE;
+    return invoke("C_DeriveKey", std::string("CKM_GOSTR3410_12_DERIVE, ") + what, [&] {
+        return module->C_DeriveKey(session, &mechanism, baseKey, attributes, count, &key);
+    });
+}
+
+// CKM_GOSTR3410_12_DERIVE with CKD_NULL - VKO_GOSTR3410_2012_256 - exactly as
+// Rutoken Plugin calls it to decrypt GOST 28147-89. The known answer is not
+// computed here: gost-engine (`openssl pkeyutl -derive -pkeyopt ukmhex:`)
+// produced it for the published TC26 256-bit key that verifyGOSTKEG uses,
+// agreed with its own public point, under two UKM byte orders so that a
+// reversed UKM cannot pass. Everything the trace does not show is refused
+// until the device has been read for it (docs/PLAN.md).
+static void verifyGOSTVKODerive(Module& module, CK_SESSION_HANDLE session)
+{
+    const Bytes privateValue = bytesFromHex(
+        "0debb7875a83206ad1b4167c0a3e35c3c3a75b0aefebcc01d81a18ff9f8e7d9f");
+    const Bytes ownPoint = bytesFromHex(
+        "a53d0c904d0c13835c5ebd3e35414e5182f3a9320f91ccec177b284eb407af2c"
+        "6b819ec462ebf933dabba24fb3c741ebe498faf2b8f4eaa21b091d6ab52cd3c4");
+    const Bytes ukm = bytesFromHex("0102030405060708");
+    const Bytes reversedUkm = bytesFromHex("0807060504030201");
+    const Bytes expected = bytesFromHex(
+        "c493f2687ce15cad6802072bad8a9d550de3d065d54fccf997a2d3a67e239fae");
+    const Bytes expectedReversed = bytesFromHex(
+        "1de4b2bd179fc2d776e3a79668155c88d999e7d5c64bcb46f6912f325c01882a");
+    Bytes curve = bytesFromHex("06092a8503070102010101");
+    Bytes digestParam = bytesFromHex("06082a85030701010202");
+    CK_OBJECT_CLASS privateClass = CKO_PRIVATE_KEY, secretClass = CKO_SECRET_KEY;
+    CK_KEY_TYPE gostType = CKK_GOSTR3410, gost28147 = CKK_GOST28147, generic = CKK_GENERIC_SECRET;
+    CK_BBOOL yes = CK_TRUE, no = CK_FALSE;
+    Bytes privateCopy = privateValue;
+    CK_ATTRIBUTE privateTemplate[] = {
+        {CKA_CLASS, &privateClass, sizeof(privateClass)},
+        {CKA_KEY_TYPE, &gostType, sizeof(gostType)},
+        {CKA_TOKEN, &no, sizeof(no)},
+        {CKA_PRIVATE, &yes, sizeof(yes)},
+        {CKA_DERIVE, &yes, sizeof(yes)},
+        {CKA_VALUE, privateCopy.data(), static_cast<CK_ULONG>(privateCopy.size())},
+        {CKA_GOSTR3410_PARAMS, curve.data(), static_cast<CK_ULONG>(curve.size())},
+        {CKA_GOSTR3411_PARAMS, digestParam.data(), static_cast<CK_ULONG>(digestParam.size())}
+    };
+    const CK_OBJECT_HANDLE baseKey = createObject(
+        module, session, "GOST VKO private-key vector", privateTemplate,
+        sizeof(privateTemplate) / sizeof(privateTemplate[0]));
+
+    // The plugin's template: class, type and lifetime, nothing about
+    // sensitivity - the value must still read back, the plugin decrypts with it.
+    CK_ATTRIBUTE pluginTemplate[] = {
+        {CKA_CLASS, &secretClass, sizeof(secretClass)},
+        {CKA_KEY_TYPE, &gost28147, sizeof(gost28147)},
+        {CKA_TOKEN, &no, sizeof(no)}
+    };
+    const CK_ULONG pluginCount = sizeof(pluginTemplate) / sizeof(pluginTemplate[0]);
+    CK_OBJECT_HANDLE key = CK_INVALID_HANDLE;
+    check(vkoDerive(module, session, baseKey, vkoDeriveParameter(CKD_NULL, ownPoint, ukm),
+                    pluginTemplate, pluginCount, key, "plugin call"),
+          CKR_OK, "C_DeriveKey(CKM_GOSTR3410_12_DERIVE, plugin call)");
+    if (attribute(module, session, key, CKA_VALUE) != expected)
+        fail("CKM_GOSTR3410_12_DERIVE does not match the gost-engine VKO_GOSTR3410_2012_256 answer");
+    if (ulongAttribute(module, session, key, CKA_KEY_TYPE) != CKK_GOST28147)
+        fail("CKM_GOSTR3410_12_DERIVE did not create a GOST 28147-89 key");
+    requireBooleanAttribute(module, session, key, CKA_LOCAL, CK_FALSE);
+    destroyObject(module, session, key);
+    check(vkoDerive(module, session, baseKey, vkoDeriveParameter(CKD_NULL, ownPoint, reversedUkm),
+                    pluginTemplate, pluginCount, key, "the UKM bytes reversed"),
+          CKR_OK, "C_DeriveKey(CKM_GOSTR3410_12_DERIVE, reversed UKM)");
+    if (attribute(module, session, key, CKA_VALUE) != expectedReversed)
+        fail("CKM_GOSTR3410_12_DERIVE reads the UKM in the wrong byte order");
+    destroyObject(module, session, key);
+
+    // Two generated pairs agree on the same key from either side.
+    Bytes cryptoProA = bytesFromHex("06072a850302022301");
+    CK_OBJECT_CLASS publicClass = CKO_PUBLIC_KEY;
+    CK_ATTRIBUTE publicGen[] = {
+        {CKA_CLASS, &publicClass, sizeof(publicClass)},
+        {CKA_KEY_TYPE, &gostType, sizeof(gostType)},
+        {CKA_TOKEN, &no, sizeof(no)},
+        {CKA_GOSTR3410_PARAMS, cryptoProA.data(), static_cast<CK_ULONG>(cryptoProA.size())},
+        {CKA_GOSTR3411_PARAMS, digestParam.data(), static_cast<CK_ULONG>(digestParam.size())}
+    };
+    CK_ATTRIBUTE privateGen[] = {
+        {CKA_CLASS, &privateClass, sizeof(privateClass)},
+        {CKA_KEY_TYPE, &gostType, sizeof(gostType)},
+        {CKA_TOKEN, &no, sizeof(no)},
+        {CKA_PRIVATE, &yes, sizeof(yes)},
+        {CKA_DERIVE, &yes, sizeof(yes)},
+        {CKA_GOSTR3410_PARAMS, cryptoProA.data(), static_cast<CK_ULONG>(cryptoProA.size())},
+        {CKA_GOSTR3411_PARAMS, digestParam.data(), static_cast<CK_ULONG>(digestParam.size())}
+    };
+    CK_MECHANISM generation{CKM_GOSTR3410_KEY_PAIR_GEN, nullptr, 0};
+    CK_OBJECT_HANDLE publicA, privateA, publicB, privateB;
+    callOk("C_GenerateKeyPair", "VKO pair A", [&] {
+        return module->C_GenerateKeyPair(session, &generation, publicGen, 5, privateGen, 7,
+                                         &publicA, &privateA); });
+    callOk("C_GenerateKeyPair", "VKO pair B", [&] {
+        return module->C_GenerateKeyPair(session, &generation, publicGen, 5, privateGen, 7,
+                                         &publicB, &privateB); });
+    CK_OBJECT_HANDLE keyAB, keyBA;
+    check(vkoDerive(module, session, privateA,
+                    vkoDeriveParameter(CKD_NULL, attribute(module, session, publicB, CKA_VALUE), ukm),
+                    pluginTemplate, pluginCount, keyAB, "A with B's point"),
+          CKR_OK, "C_DeriveKey(A, B)");
+    check(vkoDerive(module, session, privateB,
+                    vkoDeriveParameter(CKD_NULL, attribute(module, session, publicA, CKA_VALUE), ukm),
+                    pluginTemplate, pluginCount, keyBA, "B with A's point"),
+          CKR_OK, "C_DeriveKey(B, A)");
+    if (attribute(module, session, keyAB, CKA_VALUE) != attribute(module, session, keyBA, CKA_VALUE))
+        fail("CKM_GOSTR3410_12_DERIVE gives the two parties different keys");
+    for (CK_OBJECT_HANDLE object : {keyAB, keyBA, publicA, privateA, publicB, privateB})
+        destroyObject(module, session, object);
+
+    // What the trace does not show is refused, not guessed.
+    const struct { CK_ULONG kdf; Bytes point; Bytes ukm; bool truncate; const char* what; } refusals[] = {
+        {CKD_SHA1_KDF, ownPoint, ukm, false, "another KDF"},
+        {CKD_NULL, ownPoint, bytesFromHex("000102030405060708090a0b0c0d0e0f"), false, "a 16-byte UKM"},
+        {CKD_NULL, ownPoint, bytesFromHex("0000000000000000"), false, "a zero UKM"},
+        {CKD_NULL, Bytes(ownPoint.begin(), ownPoint.begin() + 32), ukm, false, "a 32-byte point"},
+        {CKD_NULL, ownPoint, ukm, true, "a buffer one byte short"},
+    };
+    for (const auto& refusal : refusals)
+    {
+        Bytes parameter = vkoDeriveParameter(refusal.kdf, refusal.point, refusal.ukm);
+        if (refusal.truncate) parameter.pop_back();
+        check(vkoDerive(module, session, baseKey, parameter, pluginTemplate, pluginCount, key,
+                        refusal.what),
+              CKR_MECHANISM_PARAM_INVALID, "C_DeriveKey(CKM_GOSTR3410_12_DERIVE, refused parameter)");
+        if (key != CK_INVALID_HANDLE) fail("a refused CKM_GOSTR3410_12_DERIVE returned a key");
+    }
+    CK_ATTRIBUTE genericTemplate[] = {
+        {CKA_CLASS, &secretClass, sizeof(secretClass)},
+        {CKA_KEY_TYPE, &generic, sizeof(generic)},
+        {CKA_TOKEN, &no, sizeof(no)}
+    };
+    check(vkoDerive(module, session, baseKey, vkoDeriveParameter(CKD_NULL, ownPoint, ukm),
+                    genericTemplate, 3, key, "a generic-secret result"),
+          CKR_TEMPLATE_INCONSISTENT, "C_DeriveKey(CKM_GOSTR3410_12_DERIVE, generic secret)");
+    CK_ULONG wrongLength = 64;
+    CK_ATTRIBUTE longTemplate[] = {
+        {CKA_CLASS, &secretClass, sizeof(secretClass)},
+        {CKA_KEY_TYPE, &gost28147, sizeof(gost28147)},
+        {CKA_TOKEN, &no, sizeof(no)},
+        {CKA_VALUE_LEN, &wrongLength, sizeof(wrongLength)}
+    };
+    check(vkoDerive(module, session, baseKey, vkoDeriveParameter(CKD_NULL, ownPoint, ukm),
+                    longTemplate, 4, key, "CKA_VALUE_LEN 64"),
+          CKR_ATTRIBUTE_VALUE_INVALID, "C_DeriveKey(CKM_GOSTR3410_12_DERIVE, CKA_VALUE_LEN 64)");
+    destroyObject(module, session, baseKey);
+    trace("REFERENCE", "CKM_GOSTR3410_12_DERIVE matched the gost-engine VKO answer in both UKM orders, "
+                       "agreed from both sides and refused every untraced form");
+}
+
 // KEG on a 512-bit GOST R 34.10-2012 key, against the worked example published
 // with the TC26 PKCS #11 extension (sample_keg_512). That ETALON is the known
 // answer: it was computed by the standard's authors, not here.
@@ -3224,6 +3399,7 @@ static void prepare(const fs::path& modulePath, const fs::path& work)
         verifyGOSTCurveIdentity(module, session);
         verifyGOSTKEG(module, session);
         verifyGOSTKEG512(module, session);
+        verifyGOSTVKODerive(module, session);
         verifyGOST2012_512(module, session);
     }
     else

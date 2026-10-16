@@ -88,6 +88,92 @@ Botan::secure_vector<uint8_t> hmacStreebog256(
 	outer->update(innerDigest);
 	return outer->final();
 }
+
+// The point K(x, y, UKM) of RFC 7836, 4.3.1, as the little-endian X || Y that
+// VKO hashes: what KEG and the bare VKO derive share. The caller has already
+// checked the lengths; this checks the curve, the scalar and the peer point.
+bool agreementPoint(const ByteString& encodedCurveOID,
+                    const ByteString& privateValue,
+                    const ByteString& publicValue,
+                    const Botan::BigInt& ukm,
+                    Botan::secure_vector<uint8_t>& vkoInput)
+{
+	const size_t fieldBytes = privateValue.size();
+
+	// One source for the whole module - see BotanGOSTCurves.h. The
+	// explicit domains that used to live in this file are there now,
+	// which is what stopped generation and signing from meaning a
+	// different curve by the same OID.
+	if (!BotanGOSTCurves::supported(encodedCurveOID))
+	{
+		ERROR_MSG("GOST VKO was given a curve with no domain parameters");
+		return false;
+	}
+	Botan::EC_Group group = BotanGOSTCurves::group(encodedCurveOID);
+	if (group.get_p().bytes() != fieldBytes)
+	{
+		ERROR_MSG("GOST VKO curve size does not match the private key length");
+		return false;
+	}
+	if (group.get_cofactor() != Botan::BigInt(1) &&
+	    group.get_cofactor() != Botan::BigInt(4))
+	{
+		ERROR_MSG("GOST VKO requires a cofactor of 1 or 4");
+		return false;
+	}
+
+	const Botan::BigInt privateScalar(privateValue.const_byte_str(), privateValue.size());
+	if (privateScalar.is_zero() || privateScalar >= group.get_order())
+	{
+		ERROR_MSG("GOST VKO received an invalid private scalar");
+		return false;
+	}
+
+	// PKCS #11 carries GOST coordinates as little-endian X || Y, while
+	// Botan's uncompressed point encoding is 0x04 || X || Y, big-endian.
+	std::vector<uint8_t> encodedPoint(1 + 2 * fieldBytes);
+	encodedPoint[0] = 0x04;
+	const unsigned char* publicBytes = publicValue.const_byte_str();
+	for (size_t i = 0; i < fieldBytes; ++i)
+	{
+		encodedPoint[1 + i] = publicBytes[fieldBytes - 1 - i];
+		encodedPoint[1 + fieldBytes + i] = publicBytes[2 * fieldBytes - 1 - i];
+	}
+	const Botan::PointGFp peer = group.OS2ECP(encodedPoint);
+	if (!group.verify_public_element(peer))
+	{
+		ERROR_MSG("GOST VKO received an invalid peer public point");
+		return false;
+	}
+
+	const Botan::BigInt scalar =
+		group.multiply_mod_order(ukm, group.get_cofactor(), privateScalar);
+	if (scalar.is_zero())
+	{
+		ERROR_MSG("GOST VKO produced a zero scalar");
+		return false;
+	}
+
+	SoftHSMGOST2012KEGRNG rng(CryptoFactory::i()->getRNG());
+	std::vector<Botan::BigInt> workspace;
+	const Botan::PointGFp shared =
+		group.blinded_var_point_multiply(peer, scalar, rng, workspace);
+	const std::vector<uint8_t> sharedPoint =
+		shared.encode(Botan::PointGFp::UNCOMPRESSED);
+	if (sharedPoint.size() != 1 + 2 * fieldBytes || sharedPoint[0] != 0x04)
+	{
+		ERROR_MSG("GOST VKO produced an invalid shared point");
+		return false;
+	}
+
+	vkoInput.resize(2 * fieldBytes);
+	for (size_t i = 0; i < fieldBytes; ++i)
+	{
+		vkoInput[i] = sharedPoint[fieldBytes - i];
+		vkoInput[fieldBytes + i] = sharedPoint[2 * fieldBytes - i];
+	}
+	return true;
+}
 }
 
 bool BotanGOST2012KEG::derive(const ByteString& encodedCurveOID,
@@ -112,52 +198,6 @@ bool BotanGOST2012KEG::derive(const ByteString& encodedCurveOID,
 
 	try
 	{
-		// One source for the whole module - see BotanGOSTCurves.h. The
-		// explicit domains that used to live in this file are there now,
-		// which is what stopped generation and signing from meaning a
-		// different curve by the same OID.
-		if (!BotanGOSTCurves::supported(encodedCurveOID))
-		{
-			ERROR_MSG("GOST KEG was given a curve with no domain parameters");
-			return false;
-		}
-		Botan::EC_Group group = BotanGOSTCurves::group(encodedCurveOID);
-		if (group.get_p().bytes() != fieldBytes)
-		{
-			ERROR_MSG("GOST KEG curve size does not match the private key length");
-			return false;
-		}
-		if (group.get_cofactor() != Botan::BigInt(1) &&
-		    group.get_cofactor() != Botan::BigInt(4))
-		{
-			ERROR_MSG("GOST KEG requires a cofactor of 1 or 4");
-			return false;
-		}
-
-		const Botan::BigInt privateScalar(privateValue.const_byte_str(), privateValue.size());
-		if (privateScalar.is_zero() || privateScalar >= group.get_order())
-		{
-			ERROR_MSG("GOST KEG received an invalid private scalar");
-			return false;
-		}
-
-		// PKCS #11 carries GOST coordinates as little-endian X || Y, while
-		// Botan's uncompressed point encoding is 0x04 || X || Y, big-endian.
-		std::vector<uint8_t> encodedPoint(1 + 2 * fieldBytes);
-		encodedPoint[0] = 0x04;
-		const unsigned char* publicBytes = publicValue.const_byte_str();
-		for (size_t i = 0; i < fieldBytes; ++i)
-		{
-			encodedPoint[1 + i] = publicBytes[fieldBytes - 1 - i];
-			encodedPoint[1 + fieldBytes + i] = publicBytes[2 * fieldBytes - 1 - i];
-		}
-		const Botan::PointGFp peer = group.OS2ECP(encodedPoint);
-		if (!group.verify_public_element(peer))
-		{
-			ERROR_MSG("GOST KEG received an invalid peer public point");
-			return false;
-		}
-
 		// The Rutoken KEG construction derives the VKO UKM from the first
 		// half of the 32-byte source. It is interpreted as little-endian.
 		std::vector<uint8_t> ukmBigEndian(16);
@@ -171,32 +211,10 @@ bool BotanGOST2012KEG::derive(const ByteString& encodedCurveOID,
 			// as little-endian; the two reversals cancel for BigInt input.
 			for (size_t i = 0; i < 16; ++i) ukmBigEndian[i] = ukmBytes[i];
 		const Botan::BigInt ukm(ukmBigEndian.data(), ukmBigEndian.size());
-		const Botan::BigInt scalar =
-			group.multiply_mod_order(ukm, group.get_cofactor(), privateScalar);
-		if (scalar.is_zero())
-		{
-			ERROR_MSG("GOST KEG produced a zero VKO scalar");
-			return false;
-		}
 
-		SoftHSMGOST2012KEGRNG rng(CryptoFactory::i()->getRNG());
-		std::vector<Botan::BigInt> workspace;
-		const Botan::PointGFp shared =
-			group.blinded_var_point_multiply(peer, scalar, rng, workspace);
-		const std::vector<uint8_t> sharedPoint =
-			shared.encode(Botan::PointGFp::UNCOMPRESSED);
-		if (sharedPoint.size() != 1 + 2 * fieldBytes || sharedPoint[0] != 0x04)
-		{
-			ERROR_MSG("GOST KEG produced an invalid shared point");
+		Botan::secure_vector<uint8_t> vkoInput;
+		if (!agreementPoint(encodedCurveOID, privateValue, publicValue, ukm, vkoInput))
 			return false;
-		}
-
-		Botan::secure_vector<uint8_t> vkoInput(2 * fieldBytes);
-		for (size_t i = 0; i < fieldBytes; ++i)
-		{
-			vkoInput[i] = sharedPoint[fieldBytes - i];
-			vkoInput[fieldBytes + i] = sharedPoint[2 * fieldBytes - i];
-		}
 
 		// This is where the two sizes part company, and the difference is not
 		// an extrapolation from the 256-bit case: both were settled against the
@@ -253,5 +271,62 @@ bool BotanGOST2012KEG::derive(const ByteString& encodedCurveOID,
 	}
 
 	twinKey.wipe();
+	return false;
+}
+
+bool BotanGOST2012KEG::vko256(const ByteString& encodedCurveOID,
+	                          const ByteString& privateValue,
+	                          const ByteString& publicValue,
+	                          const ByteString& ukm,
+	                          ByteString& key)
+{
+	key.wipe();
+	const size_t fieldBytes = privateValue.size();
+	if ((fieldBytes != 32 && fieldBytes != 64) ||
+	    publicValue.size() != fieldBytes * 2 || ukm.size() == 0 || ukm.size() > fieldBytes)
+	{
+		ERROR_MSG("GOST VKO received invalid private key, public key, or UKM length");
+		return false;
+	}
+
+	try
+	{
+		// The UKM is an integer in little-endian byte order; BigInt reads
+		// big-endian, hence the reversal.
+		std::vector<uint8_t> ukmBigEndian(ukm.size());
+		const unsigned char* ukmBytes = ukm.const_byte_str();
+		for (size_t i = 0; i < ukm.size(); ++i)
+			ukmBigEndian[i] = ukmBytes[ukm.size() - 1 - i];
+		const Botan::BigInt ukmValue(ukmBigEndian.data(), ukmBigEndian.size());
+		if (ukmValue.is_zero())
+		{
+			ERROR_MSG("GOST VKO received a zero UKM");
+			return false;
+		}
+
+		Botan::secure_vector<uint8_t> vkoInput;
+		if (!agreementPoint(encodedCurveOID, privateValue, publicValue, ukmValue, vkoInput))
+			return false;
+		const Botan::secure_vector<uint8_t> digest =
+			streebog("Streebog-256", vkoInput.data(), vkoInput.size());
+		if (digest.size() != 32)
+		{
+			ERROR_MSG("GOST VKO produced an unexpected key length");
+			return false;
+		}
+		key.resize(32);
+		std::memcpy(key.byte_str(), digest.data(), 32);
+		return true;
+	}
+	catch (const std::exception& exception)
+	{
+		ERROR_MSG("GOST VKO failed: %s", exception.what());
+	}
+	catch (...)
+	{
+		ERROR_MSG("GOST VKO failed");
+	}
+
+	key.wipe();
 	return false;
 }
