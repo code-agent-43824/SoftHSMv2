@@ -13,6 +13,7 @@
 #include <array>
 #include <cctype>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -9323,10 +9324,176 @@ static void runBattery(const fs::path& modulePath, fs::path workRoot)
     std::cout << "BATTERY: all e2e cases passed\n";
 }
 
+// The lifecycle case: what a process does when its PKCS #11 calls outlive
+// main. OpenSSL registers its own clean-up the first time it starts - long
+// before pkcs11-provider loads a module - so that clean-up runs after
+// everything the module registered at load time, and the provider closes its
+// sessions and finalizes from there (docs/JOURNAL.md, 17 October 2026). The
+// handler below is registered before the module is loaded and plays that
+// part. It may use only plain data: everything with a destructor that was
+// created after it is gone by the time it runs.
+struct LifecycleLateCalls
+{
+    CK_FUNCTION_LIST_PTR p11;
+    CK_SESSION_HANDLE plain;
+    CK_SESSION_HANDLE digesting;
+    CK_SESSION_HANDLE signing;
+    bool armed;
+};
+static LifecycleLateCalls lifecycleLate = { nullptr, CK_INVALID_HANDLE, CK_INVALID_HANDLE,
+                                            CK_INVALID_HANDLE, false };
+
+static void lifecycleAtExit()
+{
+    if (!lifecycleLate.armed) return;
+    struct Step { const char* what; CK_RV expected; CK_RV got; };
+    CK_FUNCTION_LIST_PTR p11 = lifecycleLate.p11;
+    Step steps[4] = {
+        { "C_CloseSession, unfinished signature", CKR_OK, CKR_OK },
+        { "C_CloseSession, unfinished digest", CKR_OK, CKR_OK },
+        { "C_Finalize, a logged-in session still open", CKR_OK, CKR_OK },
+        { "C_CloseSession after C_Finalize", CKR_CRYPTOKI_NOT_INITIALIZED, CKR_OK },
+    };
+    std::printf("[LIFECYCLE] after main: closing the sessions as pkcs11-provider does\n");
+    std::fflush(stdout);
+    steps[0].got = p11->C_CloseSession(lifecycleLate.signing);
+    steps[1].got = p11->C_CloseSession(lifecycleLate.digesting);
+    steps[2].got = p11->C_Finalize(nullptr);
+    steps[3].got = p11->C_CloseSession(lifecycleLate.plain);
+    bool ok = true;
+    for (const Step& step : steps)
+    {
+        std::printf("[LIFECYCLE] %s = %s (0x%lx)\n", step.what, rvName(step.got),
+                    static_cast<unsigned long>(step.got));
+        if (step.got != step.expected)
+        {
+            std::printf("[LIFECYCLE] FAIL: expected %s\n", rvName(step.expected));
+            ok = false;
+        }
+    }
+    if (!ok)
+    {
+        std::fflush(stdout);
+        std::_Exit(1);
+    }
+    std::printf("[LIFECYCLE] PASS: late C_CloseSession and C_Finalize after main\n");
+    std::fflush(stdout);
+}
+
+static CK_SLOT_ID lifecycleTokenSlot(Module& module, const std::string& label)
+{
+    for (CK_SLOT_ID slot : slots(module, CK_TRUE, true))
+    {
+        CK_TOKEN_INFO info{};
+        if (!tokenInfoIfAny(module, slot, info)) continue;
+        if ((info.flags & CKF_TOKEN_INITIALIZED) != 0 &&
+            (info.flags & CKF_USER_PIN_INITIALIZED) != 0 &&
+            paddedText(info.label, sizeof(info.label)) == label)
+            return slot;
+    }
+    fail("the lifecycle token \"" + label + "\" was not found");
+}
+
+// Needs a fresh store in SOFTHSM2_CONF; lifecycleAtExit has to be registered
+// before this runs. The module is never unloaded and never finalized here:
+// the late calls do that.
+static void verifyLifecycle(const fs::path& modulePath)
+{
+    const std::string label = "lifecycle";
+    const std::string soPin = "87654321";
+    const std::string userPin = "12345678";
+    Module& module = *new Module(modulePath);
+
+    CK_SLOT_ID slot = selectSlotForInitialization(module, label);
+    std::array<CK_UTF8CHAR, 32> paddedLabel{};
+    paddedLabel.fill(' ');
+    std::copy(label.begin(), label.end(), paddedLabel.begin());
+    callOk("C_InitToken", "slotID=" + std::to_string(slot) + ", the lifecycle token",
+           [&] { return module->C_InitToken(slot,
+                             reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(soPin.data())),
+                             static_cast<CK_ULONG>(soPin.size()), paddedLabel.data()); });
+    CK_SESSION_HANDLE session = openSession(module, slot);
+    login(module, session, CKU_SO, soPin);
+    callOk("C_InitPIN", "hSession=" + std::to_string(session) + ", pPin=<redacted>",
+           [&] { return module->C_InitPIN(session,
+                             reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(userPin.data())),
+                             static_cast<CK_ULONG>(userPin.size())); });
+    logout(module, session, "CKU_SO");
+    slot = lifecycleTokenSlot(module, label);
+
+    // An ordinary close before anything ends.
+    closeSession(module, openSession(module, slot));
+
+    // An explicit C_Finalize closes what is open; the old handle and a second
+    // C_Finalize are then refused as PKCS #11 says.
+    session = openSession(module, slot);
+    callOk("C_Finalize", "pReserved=NULL_PTR, a session open",
+           [&] { return module->C_Finalize(nullptr); });
+    check(invoke("C_CloseSession", "a handle from before C_Finalize",
+                 [&] { return module->C_CloseSession(session); }),
+          CKR_CRYPTOKI_NOT_INITIALIZED, "C_CloseSession after C_Finalize");
+    check(invoke("C_Finalize", "a second time",
+                 [&] { return module->C_Finalize(nullptr); }),
+          CKR_CRYPTOKI_NOT_INITIALIZED, "C_Finalize after C_Finalize");
+
+    // Initialized again, the module finds the same token and its PIN.
+    callOk("C_Initialize", "pInitArgs=NULL_PTR, after C_Finalize",
+           [&] { return module->C_Initialize(nullptr); });
+    slot = lifecycleTokenSlot(module, label);
+    lifecycleLate.plain = openSession(module, slot);
+    login(module, lifecycleLate.plain, CKU_USER, userPin);
+
+    // Sessions left for the late calls: one in the middle of a digest, one
+    // in the middle of a signature with a session key.
+    lifecycleLate.digesting = openSession(module, slot);
+    CK_MECHANISM sha256{CKM_SHA256, nullptr, 0};
+    CK_BYTE part[] = { 'l', 'a', 't', 'e' };
+    callOk("C_DigestInit", "CKM_SHA256, left unfinished",
+           [&] { return module->C_DigestInit(lifecycleLate.digesting, &sha256); });
+    callOk("C_DigestUpdate", "4 bytes",
+           [&] { return module->C_DigestUpdate(lifecycleLate.digesting, part, sizeof(part)); });
+
+    lifecycleLate.signing = openSession(module, slot);
+    CK_MECHANISM generate{CKM_RSA_PKCS_KEY_PAIR_GEN, nullptr, 0};
+    CK_ULONG bits = 2048;
+    CK_BBOOL no = CK_FALSE, yes = CK_TRUE;
+    CK_ATTRIBUTE publicTemplate[] = {
+        { CKA_TOKEN, &no, sizeof(no) },
+        { CKA_MODULUS_BITS, &bits, sizeof(bits) },
+        { CKA_VERIFY, &yes, sizeof(yes) },
+    };
+    CK_ATTRIBUTE privateTemplate[] = {
+        { CKA_TOKEN, &no, sizeof(no) },
+        { CKA_PRIVATE, &yes, sizeof(yes) },
+        { CKA_SIGN, &yes, sizeof(yes) },
+    };
+    CK_OBJECT_HANDLE publicKey = CK_INVALID_HANDLE, privateKey = CK_INVALID_HANDLE;
+    callOk("C_GenerateKeyPair", "RSA-2048 session keys",
+           [&] { return module->C_GenerateKeyPair(lifecycleLate.signing, &generate,
+                             publicTemplate, 3, privateTemplate, 3, &publicKey, &privateKey); });
+    CK_MECHANISM sign{CKM_SHA256_RSA_PKCS, nullptr, 0};
+    callOk("C_SignInit", "CKM_SHA256_RSA_PKCS, left unfinished",
+           [&] { return module->C_SignInit(lifecycleLate.signing, &sign, privateKey); });
+    callOk("C_SignUpdate", "4 bytes",
+           [&] { return module->C_SignUpdate(lifecycleLate.signing, part, sizeof(part)); });
+
+    lifecycleLate.p11 = module.operator->();
+    lifecycleLate.armed = true;
+    trace("LIFECYCLE", "closed before exit, finalized, refused after C_Finalize and initialized again; "
+                       "three sessions left for the calls after main");
+}
+
 int main(int argc, char** argv)
 {
     try
     {
+        // Before anything can load the module: see lifecycleAtExit.
+        if (argc == 3 && std::string(argv[1]) == "lifecycle")
+        {
+            std::atexit(lifecycleAtExit);
+            verifyLifecycle(fs::absolute(argv[2]));
+            return 0;
+        }
         if (argc == 4 && std::string(argv[1]) == "battery")
         {
             runBattery(fs::absolute(argv[2]), fs::absolute(argv[3]));
@@ -9468,6 +9635,8 @@ int main(int argc, char** argv)
                   << "  portable-token-e2e core-behaviour <module>\n"
                   << "  portable-token-e2e ex-init-token <module>\n"
                   << "  portable-token-e2e journal <module> (fresh test token)\n"
+                  << "  portable-token-e2e lifecycle <module> (fresh store; ends with\n"
+                  << "                      PKCS #11 calls after main returns)\n"
                   << "  portable-token-e2e device-parity <module> (this module or the\n"
                   << "                      reference Rutoken; initialized token, leaves\n"
                   << "                      no objects behind)\n"

@@ -42,6 +42,30 @@ jobs:
             echo 'portable module unexpectedly depends on external crypto libraries' >&2
             exit 1
           fi
+      # A PKCS #11 call may arrive after main has returned: pkcs11-provider
+      # closes its sessions from OpenSSL's exit handler, which runs after
+      # everything the module registered when it was loaded. So no object of
+      # the module's own may have its destructor registered with atexit
+      # (src/lib/common/ImmortalPtr.h); third-party libraries are not covered.
+      - name: Verify the module registers no exit-time destructors of its own
+        run: |
+          build="$RUNNER_TEMP/linux-x64/softhsm-build/src/lib"
+          test -d "$build"
+          registered=$(find "$build" -name '*.o' ! -path '*/test/*' -print | sort | \
+            while read -r object; do
+              if nm "$object" | grep -q ' U __cxa_atexit$'; then echo "$object"; fi
+            done)
+          if [ -n "$registered" ]; then
+            printf 'objects registering destructors with __cxa_atexit:\n%s\n' "$registered" >&2
+            exit 1
+          fi
+          echo "$(find "$build" -name '*.o' ! -path '*/test/*' | wc -l) module objects, none registers a destructor"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ci-portable-product-linux-x64
+          path: portable-product/
+          if-no-files-found: error
+          retention-days: 7
       - name: Verify autonomous utilities and forced PKCS8 export
         shell: bash
         run: |
@@ -231,6 +255,26 @@ jobs:
           P11_TEST_USER_PIN=12345678 \
           P11_TEST_STORE_DIR="$HOME/softhsm/tokens" \
             ./portable-token-e2e core-behaviour "$module"
+      # The module outlives main: the handler the client registers before
+      # loading it closes sessions - one mid-digest, one mid-signature - and
+      # finalizes after main has returned, as pkcs11-provider does. Before
+      # that, in the same process: a close, an explicit C_Finalize, the
+      # refusals after it and C_Initialize again (docs/JOURNAL.md, 17 October
+      # 2026). Both profiles, each on a fresh store.
+      - name: "Verify PKCS #11 calls after main"
+        run: |
+          module="$GITHUB_WORKSPACE/portable-product/libsofthsm2.so"
+          for profile in false true; do
+            store="$GITHUB_WORKSPACE/lifecycle-$profile"
+            mkdir -p "$store/tokens"
+            printf 'directories.tokendir = %s/tokens\nobjectstore.backend = file\nFAKE_RUTOKEN_ECP = %s\n' \
+              "$store" "$profile" > "$store/softhsm.conf"
+            SOFTHSM2_CONF="$store/softhsm.conf" ./portable-token-e2e lifecycle "$module" \
+              > "$store/lifecycle.log" 2>&1 || { cat "$store/lifecycle.log"; exit 1; }
+            grep -F '[LIFECYCLE]' "$store/lifecycle.log"
+            grep -Fq '[LIFECYCLE] PASS: late C_CloseSession and C_Finalize after main' \
+              "$store/lifecycle.log"
+          done
       # The Rutoken C_EX_InitToken extension: full-format the token - with the
       # SO PIN, and in repair mode without it once the SO PIN is locked - and
       # set the security parameters. Needs an initialized token under the
@@ -284,3 +328,31 @@ jobs:
             --so-pin 12345678 --pin 12345678
           P11_TEST_SO_PIN=12345678 P11_TEST_USER_PIN=12345678 \
             ./portable-token-e2e device-parity-write "$module"
+
+  # The scenario of docs/JOURNAL.md, 17 October 2026, in the owner's
+  # environment: the CSR is made by the distribution's OpenSSL through the
+  # distribution's pkcs11-provider, without no-deinit, and the process has to
+  # exit 0 after the provider's late C_CloseSession and C_Finalize.
+  provider-csr:
+    name: CSR through pkcs11-provider (Ubuntu 26.04 packages)
+    needs: portable-dependency-baseline
+    runs-on: ubuntu-24.04
+    container: ubuntu:26.04
+    steps:
+      - name: Install the distribution's OpenSSL and pkcs11-provider
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates openssl pkcs11-provider
+          openssl version
+          dpkg-query -W openssl pkcs11-provider
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: ci-portable-product-linux-x64
+          path: portable-product
+      - name: Create a CSR through pkcs11-provider with a key in the module
+        run: |
+          chmod +x portable-product/softhsm2-util
+          bash tests/portable/verify-provider-csr.sh portable-product/libsofthsm2.so \
+            portable-product/softhsm2-util "$RUNNER_TEMP/provider-csr"

@@ -474,15 +474,22 @@ CK_RV checkSignature(CK_SESSION_HANDLE session, const PublicKey& key, const Byte
 
 Bytes certificationRequest(const PublicKey& key, const Bytes& tbs, const Bytes& signature)
 {
-    static const Bytes gost256 = { 0x30, 0x0a, 0x06, 0x08, 0x2a, 0x85, 0x03, 0x07,
-                                   0x01, 0x01, 0x03, 0x02 };
-    static const Bytes gost512 = { 0x30, 0x0a, 0x06, 0x08, 0x2a, 0x85, 0x03, 0x07,
-                                   0x01, 0x01, 0x03, 0x03 };
+    // Plain arrays, so that nothing here is destroyed when the process exits
+    // (ImmortalPtr.h).
+    static const unsigned char gost256[] = { 0x30, 0x0a, 0x06, 0x08, 0x2a, 0x85, 0x03, 0x07,
+                                             0x01, 0x01, 0x03, 0x02 };
+    static const unsigned char gost512[] = { 0x30, 0x0a, 0x06, 0x08, 0x2a, 0x85, 0x03, 0x07,
+                                             0x01, 0x01, 0x03, 0x03 };
     // The OIW sha1WithRSA (1.3.14.3.2.29), not PKCS #1 sha1WithRSAEncryption.
-    static const Bytes sha1Rsa = { 0x30, 0x09, 0x06, 0x05, 0x2b, 0x0e, 0x03, 0x02, 0x1d,
-                                   0x05, 0x00 };
+    static const unsigned char sha1Rsa[] = { 0x30, 0x09, 0x06, 0x05, 0x2b, 0x0e, 0x03, 0x02, 0x1d,
+                                             0x05, 0x00 };
     Bytes body = tbs;
-    append(body, key.type == CKK_RSA ? sha1Rsa : key.bits() == 256 ? gost256 : gost512);
+    if (key.type == CKK_RSA)
+        body.insert(body.end(), sha1Rsa, sha1Rsa + sizeof(sha1Rsa));
+    else if (key.bits() == 256)
+        body.insert(body.end(), gost256, gost256 + sizeof(gost256));
+    else
+        body.insert(body.end(), gost512, gost512 + sizeof(gost512));
     Bytes bits{0};
     append(bits, signature);
     append(body, tagged(0x03, bits));

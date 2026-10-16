@@ -152,9 +152,11 @@ namespace
 		SlotEventState() : open(false), waiting(false), epoch(0) { }
 	};
 
+	// Never destroyed: C_Finalize closes the epoch here, and it may come after
+	// main has returned (ImmortalPtr.h).
 	SlotEventState& slotEvents()
 	{
-		static SlotEventState state;
+		static SlotEventState& state = *new SlotEventState();
 		return state;
 	}
 
@@ -246,29 +248,14 @@ namespace
 
 // Initialise the one-and-only instance
 
-#ifdef HAVE_CXX11
-
-std::unique_ptr<MutexFactory> MutexFactory::instance(nullptr);
-std::unique_ptr<SecureMemoryRegistry> SecureMemoryRegistry::instance(nullptr);
+ImmortalPtr<MutexFactory> MutexFactory::instance;
+ImmortalPtr<SecureMemoryRegistry> SecureMemoryRegistry::instance;
 #if defined(WITH_OPENSSL)
-std::unique_ptr<OSSLCryptoFactory> OSSLCryptoFactory::instance(nullptr);
+ImmortalPtr<OSSLCryptoFactory> OSSLCryptoFactory::instance;
 #else
-std::unique_ptr<BotanCryptoFactory> BotanCryptoFactory::instance(nullptr);
+ImmortalPtr<BotanCryptoFactory> BotanCryptoFactory::instance;
 #endif
-std::unique_ptr<SoftHSM> SoftHSM::instance(nullptr);
-
-#else
-
-std::auto_ptr<MutexFactory> MutexFactory::instance(NULL);
-std::auto_ptr<SecureMemoryRegistry> SecureMemoryRegistry::instance(NULL);
-#if defined(WITH_OPENSSL)
-std::auto_ptr<OSSLCryptoFactory> OSSLCryptoFactory::instance(NULL);
-#else
-std::auto_ptr<BotanCryptoFactory> BotanCryptoFactory::instance(NULL);
-#endif
-std::auto_ptr<SoftHSM> SoftHSM::instance(NULL);
-
-#endif
+ImmortalPtr<SoftHSM> SoftHSM::instance;
 
 static CK_RV newP11Object(CK_OBJECT_CLASS objClass, CK_KEY_TYPE keyType, CK_CERTIFICATE_TYPE certType, P11Object **p11object)
 {

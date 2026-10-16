@@ -39,8 +39,10 @@ struct VerifyState {
     CK_FLAGS flags = 0;
     bool updated = false;
 };
-std::mutex stateMutex;
-std::map<CK_SESSION_HANDLE, VerifyState> states;
+// Never destroyed: C_CloseSession and C_Finalize clear them, and either may
+// come after main has returned (ImmortalPtr.h).
+std::mutex& stateMutex = *new std::mutex();
+std::map<CK_SESSION_HANDLE, VerifyState>& states = *new std::map<CK_SESSION_HANDLE, VerifyState>();
 
 CK_RV userSession(CK_SESSION_HANDLE session)
 {

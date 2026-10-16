@@ -13,6 +13,30 @@ OpenSSL и какой ответ нужен позднему вызову, — �
 Порядок: этот коммит, тест вместе с исправлением (тест без него красный, а
 транк должен быть зелёным), CSR smoke в CI и релизе, релиз, проверка
 скачанных архивов.
+**Сделано (исправление).** `ImmortalPtr<T>` (тривиальный деструктор,
+`reset()` уничтожает объект) для `MutexFactory`, `SecureMemoryRegistry`,
+`OSSLCryptoFactory`/`BotanCryptoFactory`, `SoftHSM`, `Configuration`,
+`SimpleConfigLoader` — в модуле, юнит-тестах и `softhsm2-util`;
+состояние событий слотов, карта и мьютекс `RutokenCMS`, путь модуля — через
+`*new`; таблица ключей конфигурации — `const char*`; таблицы CSR — массивы;
+домены кривых — шестнадцатеричный текст, BigInt строится при обращении.
+`C_Finalize` не менялся. Команда клиента `lifecycle`, скрипт
+`tests/portable/verify-provider-csr.sh`; в CI — опись `__cxa_atexit`,
+`lifecycle` в двух профилях и job `provider-csr` в `ubuntu:26.04`; в kit —
+`lifecycle` на Linux; в релизе — job `verify-linux-provider-csr` (x64,
+ARM64, `ubuntu:26.04`) перед публикацией.
+**Проверено локально** (Linux x64): опись — ни один объект модуля не
+регистрирует деструктор; `lifecycle` — `.75` 139, новый модуль exit 0 в
+обоих профилях, valgrind без ошибок; CSR smoke — пакеты 24.04 и 26.04,
+`.75` 139, новый модуль exit 0 (RSA, EC, профиль выкл/вкл); обычная сборка
+с системным OpenSSL 3.0.13 — `lifecycle` и CSR smoke проходят; `prepare` и
+`battery` — exit 0; ctest 7/7 в обычной сборке и в портируемой с SQLite;
+копия kit `.75` с новыми `run-test.sh`, модулем и клиентом — exit 0, в
+логе `[LIFECYCLE] PASS`. На ARM64, macOS и Windows не запускалось; job в
+контейнере `ubuntu:26.04` локально не прогонялся — пакеты 26.04 проверены
+распакованными, через их загрузчик.
+**Дальше.** CI, автоматический релиз, скачать Linux x64 и повторить
+`lifecycle` и CSR smoke.
 
 ## 2026-10-17 — план устранения падения при очистке OpenSSL
 

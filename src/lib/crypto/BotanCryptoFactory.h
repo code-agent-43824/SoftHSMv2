@@ -47,6 +47,7 @@
 #include "RNG.h"
 #include "MutexFactory.h"
 #include <memory>
+#include "ImmortalPtr.h"
 #include <map>
 #include <botan/version.h>
 
@@ -82,11 +83,7 @@ private:
 	BotanCryptoFactory();
 
 	// The one-and-only instance
-#ifdef HAVE_CXX11
-	static std::unique_ptr<BotanCryptoFactory> instance;
-#else
-	static std::auto_ptr<BotanCryptoFactory> instance;
-#endif
+	static ImmortalPtr<BotanCryptoFactory> instance;
 
 	// Thread specific RNG
 #ifdef HAVE_PTHREAD_H

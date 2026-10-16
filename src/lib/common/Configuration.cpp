@@ -36,11 +36,7 @@
 #include "log.h"
 
 // Initialise the one-and-only instance
-#ifdef HAVE_CXX11
-std::unique_ptr<Configuration> Configuration::instance(nullptr);
-#else
-std::auto_ptr<Configuration> Configuration::instance(NULL);
-#endif
+ImmortalPtr<Configuration> Configuration::instance;
 
 // Add all valid configurations
 const struct config Configuration::valid_config[] = {
@@ -78,9 +74,9 @@ Configuration::Configuration()
 // Get the type of the configuration value
 int Configuration::getType(std::string key)
 {
-	for (int i = 0; valid_config[i].key.compare("") != 0; i++)
+	for (int i = 0; valid_config[i].key[0] != '\0'; i++)
 	{
-		if (valid_config[i].key.compare(key) == 0)
+		if (key.compare(valid_config[i].key) == 0)
 		{
 			return valid_config[i].type;
 		}

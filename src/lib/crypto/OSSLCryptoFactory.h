@@ -41,6 +41,7 @@
 #include "MacAlgorithm.h"
 #include "RNG.h"
 #include <memory>
+#include "ImmortalPtr.h"
 #include <openssl/conf.h>
 #if !defined(WITHOUT_OPENSSL_ENGINES) && !defined(OPENSSL_NO_ENGINES)
 #define WITH_ENGINES 1
@@ -90,11 +91,7 @@ private:
 	OSSLCryptoFactory();
 
 	// The one-and-only instance
-#ifdef HAVE_CXX11
-	static std::unique_ptr<OSSLCryptoFactory> instance;
-#else
-	static std::auto_ptr<OSSLCryptoFactory> instance;
-#endif
+	static ImmortalPtr<OSSLCryptoFactory> instance;
 
 #if OPENSSL_VERSION_NUMBER < 0x10100000L || defined(LIBRESSL_VERSION_NUMBER)
 	bool setLockingCallback;

@@ -258,6 +258,29 @@ if [[ "$bundled_mode" == YES ]]; then
     "$kit_dir/bin/portable-token-e2e" cms-gost-verify-external "$module" \
       "$kit_dir/test-output/gost-cms/tc26"
   printf '[GOST-CMS] PASS: external CryptoPro-A and TC26-A envelopes verified by PKCS #11 module\n'
+  if [[ $(uname -s) == Linux ]]; then
+    # PKCS #11 calls after main, as pkcs11-provider makes them from OpenSSL's
+    # exit handler: the client closes sessions and finalizes from a handler
+    # registered before it loads the module (docs/JOURNAL.md, 17 October
+    # 2026). Each profile on a fresh store of its own. Linux only for now:
+    # the other platforms are to be checked later, by the owner's decision.
+    for lifecycle_profile in false true; do
+      lifecycle_store=$(mktemp -d "$kit_dir/test-output/lifecycle-$lifecycle_profile.XXXXXX")
+      mkdir -p "$lifecycle_store/tokens"
+      printf 'directories.tokendir = %s/tokens\nobjectstore.backend = file\nFAKE_RUTOKEN_ECP = %s\n' \
+        "$lifecycle_store" "$lifecycle_profile" > "$lifecycle_store/softhsm.conf"
+      if ! SOFTHSM2_CONF="$lifecycle_store/softhsm.conf" P11_TEST_EXCLUDE_FUNCTIONS= \
+          "$kit_dir/bin/portable-token-e2e" lifecycle "$module" \
+          > "$lifecycle_store/lifecycle.log" 2>&1 ||
+        ! grep -Fq '[LIFECYCLE] PASS: late C_CloseSession and C_Finalize after main' \
+          "$lifecycle_store/lifecycle.log"; then
+        cat "$lifecycle_store/lifecycle.log"
+        printf '[LIFECYCLE] FAIL: FAKE_RUTOKEN_ECP=%s\n' "$lifecycle_profile" >&2
+        exit 1
+      fi
+    done
+    printf '[LIFECYCLE] PASS: PKCS #11 calls after main, profile off and on\n'
+  fi
   spy_name=pkcs11-spy.so
   [[ $(uname -s) == Darwin ]] && spy_name=pkcs11-spy.dylib
   bash "$kit_dir/scripts/verify-rutoken-opensc.sh" \

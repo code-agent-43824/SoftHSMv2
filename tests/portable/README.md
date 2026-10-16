@@ -154,6 +154,26 @@ Ordinary RSA/GOST generation, CSR/CMS, and signing checks remain mandatory.
 The client also provides `probe <module>`, a PIN-free initialization and slot
 enumeration check used by CI to verify first-use configuration selection.
 
+`lifecycle <module>` checks that the module survives PKCS #11 calls made
+after `main` has returned, the way `pkcs11-provider` makes them from
+OpenSSL's exit handler (`docs/JOURNAL.md`, 17 October 2026). It needs a fresh
+store in `SOFTHSM2_CONF` and initializes a token there, so it is for this
+module only, never for a device. The client registers its exit handler
+before it loads the module; in the process it checks a close, an explicit
+`C_Finalize`, the refusals after it and `C_Initialize` again, then leaves
+three sessions - one in the middle of a digest, one in the middle of a
+signature - for the handler, which closes them and finalizes. Success is exit
+0 together with `[LIFECYCLE] PASS: late C_CloseSession and C_Finalize after
+main`. CI runs it with the profile off and on, and so does `run-test.sh` of
+the Linux test kits.
+
+`verify-provider-csr.sh <module> <softhsm2-util> <work-directory>` is the
+scenario itself: the distribution's `openssl req` makes a CSR through the
+distribution's `pkcs11-provider`, without `no-deinit`, with RSA and EC keys
+and the profile off and on; the process has to exit 0, the CSR has to verify
+and carry the token's key. `P11_PROVIDER_MODULE` points it at another
+`pkcs11.so`. CI and the Linux release jobs run it in `ubuntu:26.04`.
+
 `device-parity <module>` runs cases intended to hold both on this module
 and on the reference Rutoken through the vendor's `librtpkcs11ecp`. The
 original expectations were read off the device by

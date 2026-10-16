@@ -62,11 +62,7 @@
 #include "Configuration.h"
 
 // Initialise the one-and-only instance
-#ifdef HAVE_CXX11
-std::unique_ptr<SimpleConfigLoader> SimpleConfigLoader::instance(nullptr);
-#else
-std::auto_ptr<SimpleConfigLoader> SimpleConfigLoader::instance(NULL);
-#endif
+ImmortalPtr<SimpleConfigLoader> SimpleConfigLoader::instance;
 
 // Return the one-and-only instance
 SimpleConfigLoader* SimpleConfigLoader::i()
@@ -84,7 +80,8 @@ SimpleConfigLoader::SimpleConfigLoader()
 {
 }
 
-static std::string portableModulePath;
+// Never destroyed, like the loader itself (ImmortalPtr.h).
+static std::string& portableModulePath = *new std::string();
 
 void SimpleConfigLoader::setPortableModulePath(const char* path)
 {

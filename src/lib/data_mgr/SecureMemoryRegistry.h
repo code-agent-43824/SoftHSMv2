@@ -38,6 +38,7 @@
 #include <stdlib.h>
 #include <map>
 #include <memory>
+#include "ImmortalPtr.h"
 #include "MutexFactory.h"
 
 class SecureMemoryRegistry
@@ -58,11 +59,7 @@ public:
 	void wipe();
 
 private:
-#ifdef HAVE_CXX11
-	static std::unique_ptr<SecureMemoryRegistry> instance;
-#else
-	static std::auto_ptr<SecureMemoryRegistry> instance;
-#endif
+	static ImmortalPtr<SecureMemoryRegistry> instance;
 
 	std::map<void*, size_t> registry;
 

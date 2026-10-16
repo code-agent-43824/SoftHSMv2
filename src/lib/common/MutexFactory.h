@@ -37,6 +37,7 @@
 #include "osmutex.h"
 #include "cryptoki.h"
 #include <memory>
+#include "ImmortalPtr.h"
 
 class Mutex
 {
@@ -113,11 +114,7 @@ private:
 	CK_RV UnlockMutex(CK_VOID_PTR mutex);
 
 	// The one-and-only instance
-#ifdef HAVE_CXX11
-	static std::unique_ptr<MutexFactory> instance;
-#else
-	static std::auto_ptr<MutexFactory> instance;
-#endif
+	static ImmortalPtr<MutexFactory> instance;
 
 	// The function pointers
 	CK_CREATEMUTEX createMutex;

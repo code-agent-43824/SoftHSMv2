@@ -37,6 +37,7 @@
 #include <string>
 #include <map>
 #include <memory>
+#include "ImmortalPtr.h"
 
 enum
 {
@@ -47,9 +48,10 @@ enum
 	CONFIG_TYPE_BOOL
 };
 
+// Plain data, so that the table of keys is never destroyed (ImmortalPtr.h).
 struct config
 {
-	std::string key;
+	const char* key;
 	int type;
 };
 
@@ -99,11 +101,7 @@ public:
 private:
 	Configuration();
 
-#ifdef HAVE_CXX11
-	static std::unique_ptr<Configuration> instance;
-#else
-	static std::auto_ptr<Configuration> instance;
-#endif
+	static ImmortalPtr<Configuration> instance;
 
 	std::map<std::string, std::string> stringConfiguration;
 	std::map<std::string, int> integerConfiguration;
