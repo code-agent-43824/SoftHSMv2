@@ -42,5 +42,8 @@ case $(uname -s) in
     ;;
 esac
 
+# A ZIP unpacked by some tools, or carried through a CI artifact, loses the
+# executable bits; run-test.sh restores its own the same way.
+chmod +x "$tls_dir/bin/tls-client" "$kit_dir/bin/softhsm2-util" "$kit_dir/bin/pkcs11-tool"
 bash "$tls_dir/run-tls.sh" "$module" "$kit_dir/bin/softhsm2-util" "$kit_dir/bin/pkcs11-tool" \
   "$provider" "$tls_dir/bin/tls-client" "$kit_dir/test-output/tls"

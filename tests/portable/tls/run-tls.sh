@@ -136,9 +136,11 @@ for key in rsa ec; do
     -CAcreateserial -days 2 -extfile "$work/ca.cnf" -extensions client \
     -out "$work/client-$key.pem" 2>/dev/null
 
-  plain s_server -accept "127.0.0.1:$port" -cert "$work/server.pem" -key "$work/server.key" \
-    -CAfile "$work/ca.pem" -Verify 1 -verify_return_error -rev -naccept 1 \
-    > "$work/server-$key.log" 2>&1 &
+  # Started directly, not through plain(): $! has to be the server itself, or
+  # stop_server would kill a subshell and leave the server holding the port.
+  OPENSSL_CONF=/dev/null "$openssl_bin" s_server -accept "127.0.0.1:$port" \
+    -cert "$work/server.pem" -key "$work/server.key" -CAfile "$work/ca.pem" \
+    -Verify 1 -verify_return_error -rev -naccept 1 > "$work/server-$key.log" 2>&1 &
   server_pid=$!
   for _ in $(seq 1 100); do
     grep -q '^ACCEPT' "$work/server-$key.log" 2>/dev/null && break

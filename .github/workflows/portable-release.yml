@@ -864,10 +864,10 @@ jobs:
         with:
           name: softhsm-testkit-linux-${{ matrix.arch }}
           path: testkit
+      # No chmod here: the artifact has lost the executable bits, as some
+      # unpackers lose them, and the kit has to restore them itself.
       - name: Run the TLS block of the test kit
-        run: |
-          chmod +x testkit/bin/* testkit/tls/bin/tls-client
-          P11_TLS_REQUIRED=1 bash testkit/tls/run.sh
+        run: P11_TLS_REQUIRED=1 bash testkit/tls/run.sh
 
   release:
     name: Publish all verified portable packages
@@ -952,7 +952,10 @@ jobs:
                 chmod +x "$source/run-test.sh" "$source/bin/openssl" \
                   "$source/bin/pkcs11-tool" "$source/bin/portable-token-e2e" \
                   "$source/bin/softhsm2-util" "$source/bin/softhsm2-export" \
-                  "$source/scripts/"*.sh ;;
+                  "$source/scripts/"*.sh
+                if [ -d "$source/tls" ]; then
+                  chmod +x "$source/tls/bin/tls-client" "$source/tls/run.sh" "$source/tls/run-tls.sh"
+                fi ;;
               softhsm-portable-*)
                 chmod +x "$source/softhsm2-util" "$source/softhsm2-export" ;;
             esac
@@ -1019,7 +1022,8 @@ jobs:
                     zipinfo -1 "$archive" | grep -Fx 'tls/run-tls.sh' >/dev/null
                     zipinfo -1 "$archive" | grep -Fx 'tls/bin/tls-client' >/dev/null
                     zipinfo -1 "$archive" | grep -Fx 'tls/provider/lib/ossl-modules/pkcs11.so' >/dev/null
-                    zipinfo -1 "$archive" | grep -Fx 'tls/provider/COPYING' >/dev/null ;;
+                    zipinfo -1 "$archive" | grep -Fx 'tls/provider/COPYING' >/dev/null
+                    zipinfo "$archive" tls/bin/tls-client | grep -Eq '^-rwx' ;;
                 esac
                 zipinfo -1 "$archive" | grep -Fx 'config/openssl-gost-engine.cnf' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'scripts/verify-gost-cms.sh' >/dev/null
