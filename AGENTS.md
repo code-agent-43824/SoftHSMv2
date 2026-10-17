@@ -279,12 +279,15 @@ the portable builds compile with warnings-as-errors settings from
   machine that has never run the module, then the vendor-neutral client
   through `first-run`, `multi-token`, `gost28147-modes` in three
   configurations, both `rutoken-profile` runs, `core-behaviour` and
-  `lifecycle`; a second job runs the TLS block (`tests/portable/tls/`) in
-  `ubuntu:26.04`. Unit tests are still not among them (see below).
-- `.github/workflows/portable-release.yml` — six build jobs, six fresh-runner
-  verification jobs that consume the published archives as an outside user
-  would, the Linux test kits' TLS block in `ubuntu:26.04`, then the release
-  job.
+  `lifecycle`; a second job runs the TLS block (`tests/portable/tls/`) on an
+  Ubuntu 26.04 runner. Unit tests are still not among them (see below).
+- `.github/workflows/portable-release.yml` — three stages: six build jobs,
+  each making its platform's product and test kit (Linux in an
+  `ubuntu:20.04` container, which sets the glibc 2.31 floor); verification
+  matrices on fresh runners that download both archives and use them as an
+  outside user would (Linux x64/ARM64 on Ubuntu 26.04 with the TLS block
+  required, Windows x64/x86/ARM64, macOS on Apple silicon and Intel); then
+  the release job.
 
 Portable behaviour is gated by the CMake option `ENABLE_PORTABLE` (default OFF)
 and requires the OpenSSL backend. GOST 2012 is gated by

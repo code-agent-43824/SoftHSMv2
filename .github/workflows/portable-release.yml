@@ -7,8 +7,10 @@ on:
         description: Release tag to create or update
         required: true
   # Build and verify the whole product on every change to the trunk, once the
-  # quick CI on that commit has passed. Significant changes publish after all
-  # six package verifiers pass; documentation-only changes stop there.
+  # quick CI on that commit has passed: every platform builds its product and
+  # test kit, every platform's archives are then verified on fresh runners,
+  # and only then are they collected and published. Significant changes
+  # publish; documentation-only changes stop before that.
   workflow_run:
     workflows: [CI]
     types: [completed]
@@ -38,14 +40,14 @@ jobs:
   build-linux-x64:
     name: Build Linux x64 (glibc 2.31)
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     container: ubuntu:20.04
     steps:
       - name: Install build tools
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential ca-certificates cmake curl perl pkg-config python3 unzip xz-utils zip
+            build-essential ca-certificates cmake curl file perl pkg-config python3 unzip xz-utils zip
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
@@ -64,18 +66,35 @@ jobs:
           path: artifact/softhsm-portable-linux-x64/
           if-no-files-found: error
           retention-days: 90
+      - name: Install pinned CMake
+        run: bash scripts/portable/install-cmake-linux.sh
+      - name: Build the test kit
+        shell: bash
+        env:
+          OPENSC_GITHUB_TOKEN: ${{ github.token }}
+          PORTABLE_PRODUCT_DIR: artifact/softhsm-portable-linux-x64
+        run: |
+          scripts/portable/build-test-kit-unix.sh linux-x64
+          mkdir -p artifact/softhsm-testkit-linux-x64
+          unzip -q dist/softhsm-testkit-linux-x64.zip -d artifact/softhsm-testkit-linux-x64
+      - uses: actions/upload-artifact@v7
+        with:
+          name: softhsm-testkit-linux-x64
+          path: artifact/softhsm-testkit-linux-x64/
+          if-no-files-found: error
+          retention-days: 90
 
   build-linux-arm64:
     name: Build Linux ARM64 (glibc 2.31)
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     container: ubuntu:20.04
     steps:
       - name: Install build tools
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential ca-certificates cmake curl perl pkg-config python3 unzip xz-utils zip
+            build-essential ca-certificates cmake curl file perl pkg-config python3 unzip xz-utils zip
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
@@ -92,6 +111,23 @@ jobs:
         with:
           name: softhsm-portable-linux-arm64
           path: artifact/softhsm-portable-linux-arm64/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Install pinned CMake
+        run: bash scripts/portable/install-cmake-linux.sh
+      - name: Build the test kit
+        shell: bash
+        env:
+          OPENSC_GITHUB_TOKEN: ${{ github.token }}
+          PORTABLE_PRODUCT_DIR: artifact/softhsm-portable-linux-arm64
+        run: |
+          scripts/portable/build-test-kit-unix.sh linux-arm64
+          mkdir -p artifact/softhsm-testkit-linux-arm64
+          unzip -q dist/softhsm-testkit-linux-arm64.zip -d artifact/softhsm-testkit-linux-arm64
+      - uses: actions/upload-artifact@v7
+        with:
+          name: softhsm-testkit-linux-arm64
+          path: artifact/softhsm-testkit-linux-arm64/
           if-no-files-found: error
           retention-days: 90
 
@@ -117,6 +153,22 @@ jobs:
           path: artifact/softhsm-portable-windows-x64/
           if-no-files-found: error
           retention-days: 90
+      - name: Build the test kit
+        shell: cmd
+        env:
+          OPENSC_GITHUB_TOKEN: ${{ github.token }}
+          PORTABLE_ARCH: x64
+          PORTABLE_PRODUCT_DIR: artifact\softhsm-portable-windows-x64
+        run: |
+          call scripts\portable\build-test-kit-windows.cmd
+          if errorlevel 1 exit /b %ERRORLEVEL%
+          powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-x64.zip' -DestinationPath 'artifact\softhsm-testkit-windows-x64'"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: softhsm-testkit-windows-x64
+          path: artifact/softhsm-testkit-windows-x64/
+          if-no-files-found: error
+          retention-days: 90
 
   build-windows-x86:
     name: Build Windows x86
@@ -138,6 +190,22 @@ jobs:
         with:
           name: softhsm-portable-windows-x86
           path: artifact/softhsm-portable-windows-x86/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Build the test kit
+        shell: cmd
+        env:
+          OPENSC_GITHUB_TOKEN: ${{ github.token }}
+          PORTABLE_ARCH: x86
+          PORTABLE_PRODUCT_DIR: artifact\softhsm-portable-windows-x86
+        run: |
+          call scripts\portable\build-test-kit-windows.cmd
+          if errorlevel 1 exit /b %ERRORLEVEL%
+          powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-x86.zip' -DestinationPath 'artifact\softhsm-testkit-windows-x86'"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: softhsm-testkit-windows-x86
+          path: artifact/softhsm-testkit-windows-x86/
           if-no-files-found: error
           retention-days: 90
 
@@ -163,6 +231,22 @@ jobs:
           path: artifact/softhsm-portable-windows-arm64/
           if-no-files-found: error
           retention-days: 90
+      - name: Build the test kit
+        shell: cmd
+        env:
+          OPENSC_GITHUB_TOKEN: ${{ github.token }}
+          PORTABLE_ARCH: arm64
+          PORTABLE_PRODUCT_DIR: artifact\softhsm-portable-windows-arm64
+        run: |
+          call scripts\portable\build-test-kit-windows.cmd
+          if errorlevel 1 exit /b %ERRORLEVEL%
+          powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-arm64.zip' -DestinationPath 'artifact\softhsm-testkit-windows-arm64'"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: softhsm-testkit-windows-arm64
+          path: artifact/softhsm-testkit-windows-arm64/
+          if-no-files-found: error
+          retention-days: 90
 
   build-macos-universal:
     name: Build macOS universal
@@ -185,53 +269,75 @@ jobs:
           path: artifact/softhsm-portable-macos-universal/
           if-no-files-found: error
           retention-days: 90
-
-  verify-linux-x64:
-    name: Verify downloaded Linux x64 package
-    needs: build-linux-x64
-    runs-on: ubuntu-24.04
-    container: ubuntu:20.04
-    steps:
-      - name: Install minimal test tools
-        run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential ca-certificates curl file perl python3 unzip zip
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-      - name: Install pinned CMake
-        run: bash scripts/portable/install-cmake-linux.sh
-      - uses: actions/download-artifact@v8
-        with:
-          name: softhsm-portable-linux-x64
-          path: downloaded
-      - name: Build and test downloadable test kit
+      - name: Build the test kit
         shell: bash
         env:
           OPENSC_GITHUB_TOKEN: ${{ github.token }}
-          PORTABLE_PRODUCT_DIR: downloaded
+          PORTABLE_PRODUCT_DIR: artifact/softhsm-portable-macos-universal
+        run: |
+          scripts/portable/build-test-kit-unix.sh macos-universal
+          mkdir -p artifact/softhsm-testkit-macos-universal
+          unzip -q dist/softhsm-testkit-macos-universal.zip -d artifact/softhsm-testkit-macos-universal
+      - uses: actions/upload-artifact@v7
+        with:
+          name: softhsm-testkit-macos-universal
+          path: artifact/softhsm-testkit-macos-universal/
+          if-no-files-found: error
+          retention-days: 90
+
+  # Every platform's archives, product and test kit, downloaded on a fresh
+  # runner and checked as an outside user would use them. Linux runs on
+  # Ubuntu 26.04, where the test kit's TLS block is required; the archives
+  # themselves are built in an Ubuntu 20.04 container for glibc 2.31. The universal macOS
+  # archives are checked on Apple silicon and on Intel.
+  verify-linux:
+    name: Verify downloaded Linux ${{ matrix.arch }} packages (Ubuntu 26.04)
+    needs: [build-linux-x64, build-linux-arm64]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-26.04
+          - arch: arm64
+            runner: ubuntu-26.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Show the system OpenSSL the TLS block uses
+        run: openssl version
+      - uses: actions/download-artifact@v8
+        with:
+          name: softhsm-portable-linux-${{ matrix.arch }}
+          path: downloaded
+      - uses: actions/download-artifact@v8
+        with:
+          name: softhsm-testkit-linux-${{ matrix.arch }}
+          path: packaged-testkit
+      - name: Test the downloaded test kit
+        shell: bash
         run: |
           set -o pipefail
           export HOME="$RUNNER_TEMP/softhsm-user-home"
           mkdir -p "$HOME"
-          mkdir -p dist artifact-testkit
-          scripts/portable/build-test-kit-unix.sh linux-x64
-          mkdir "$RUNNER_TEMP/packaged-testkit"
-          unzip -q dist/softhsm-testkit-linux-x64.zip -d "$RUNNER_TEMP/packaged-testkit"
           test ! -e "$GITHUB_WORKSPACE/downloaded/softhsm.conf"
-          grep -Fx 'directories.tokendir = ./tokens' "$RUNNER_TEMP/packaged-testkit/softhsm.conf"
-          bash "$RUNNER_TEMP/packaged-testkit/run-test.sh" 2>&1 | \
+          grep -Fx 'directories.tokendir = ./tokens' "$GITHUB_WORKSPACE/packaged-testkit/softhsm.conf"
+          cmp "$GITHUB_WORKSPACE/packaged-testkit/libsofthsm2.so" \
+            "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so"
+          P11_TLS_REQUIRED=1 bash "$GITHUB_WORKSPACE/packaged-testkit/run-test.sh" 2>&1 | \
             tee "$RUNNER_TEMP/default-test.log"
-          test -d "$RUNNER_TEMP/packaged-testkit/tokens"
+          grep -F '[LIFECYCLE] PASS: PKCS #11 calls after main, profile off and on' \
+            "$RUNNER_TEMP/default-test.log"
+          grep -F '[TLS] PASS: TLS with the client key in the module under FAKE_RUTOKEN_ECP' \
+            "$RUNNER_TEMP/default-test.log"
+          test -d "$GITHUB_WORKSPACE/packaged-testkit/tokens"
           test ! -e "$HOME/softhsm"
           grep -F '[OPENSC] PASS: packaged pkcs11-tool loaded the tested module' \
             "$RUNNER_TEMP/default-test.log"
           grep -F '[RUTOKEN-OPENSC] PASS: fork CLI info/name/local PIN and spy on isolated fake token' \
             "$RUNNER_TEMP/default-test.log"
-          test -s "$RUNNER_TEMP/packaged-testkit/test-output/pkcs11-tool-I.log"
-          test -s "$RUNNER_TEMP/packaged-testkit/test-output/pkcs11-tool-T.log"
-          test -s "$RUNNER_TEMP/packaged-testkit/test-output/softhsm-utilities.log"
+          test -s "$GITHUB_WORKSPACE/packaged-testkit/test-output/pkcs11-tool-I.log"
+          test -s "$GITHUB_WORKSPACE/packaged-testkit/test-output/pkcs11-tool-T.log"
+          test -s "$GITHUB_WORKSPACE/packaged-testkit/test-output/softhsm-utilities.log"
           grep -F '[SCENARIO] BEGIN GOST:' "$RUNNER_TEMP/default-test.log"
           grep -F '[SCENARIO] END GOST:' "$RUNNER_TEMP/default-test.log"
           grep -F '[IMPORT] GOST exportable generation' "$RUNNER_TEMP/default-test.log"
@@ -264,35 +370,10 @@ jobs:
             echo 'GOST key type appeared inside the RSA scenario' >&2
             exit 1
           fi
-          unzip -q dist/softhsm-testkit-linux-x64.zip -d artifact-testkit
-      - name: Export Linux CMS interoperability vector
-        run: |
-          source="$RUNNER_TEMP/packaged-testkit/test-output/battery/run-1/cms"
-          mkdir -p cms-vector-linux
-          for name in attached.der detached.der root.der signer.der content.bin; do
-            test -s "$source/$name"
-            cp "$source/$name" cms-vector-linux/
-          done
-          for bits in 256 512; do
-            case "$bits" in
-              256) source="$RUNNER_TEMP/packaged-testkit/test-output/battery/run-1/cms" ;;
-              512) source="$RUNNER_TEMP/packaged-testkit/test-output/battery/run-1/cms-gost512" ;;
-            esac
-            mkdir -p "cms-vector-linux/gost$bits"
-            for name in gost-attached.der gost-detached.der gost-root.der gost-signer.der gost-content.bin; do
-              test -s "$source/$name"
-              cp "$source/$name" "cms-vector-linux/gost$bits/"
-            done
-          done
-      - uses: actions/upload-artifact@v7
-        with:
-          name: cms-vector-linux-x64
-          path: cms-vector-linux/
-          if-no-files-found: error
-          retention-days: 7
       - name: Verify alternate-library first run, reuse, and exclusion gate
+        shell: bash
         run: |
-          kit="$RUNNER_TEMP/packaged-testkit"
+          kit="$GITHUB_WORKSPACE/packaged-testkit"
           external_first_home="$RUNNER_TEMP/softhsm-external-first-home"
           mkdir -p "$external_first_home"
           HOME="$external_first_home" bash "$kit/run-test.sh" \
@@ -392,496 +473,139 @@ jobs:
             echo "excluded C_InitToken reached the module" >&2
             exit 1
           fi
-      - uses: actions/upload-artifact@v7
-        with:
-          name: softhsm-testkit-linux-x64
-          path: artifact-testkit/
-          if-no-files-found: error
-          retention-days: 90
 
-  verify-linux-arm64:
-    name: Verify downloaded Linux ARM64 package
-    needs: build-linux-arm64
-    runs-on: ubuntu-24.04-arm
-    container: ubuntu:20.04
-    steps:
-      - name: Install minimal test tools
-        run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential ca-certificates curl file perl python3 unzip zip
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-      - name: Install pinned CMake
-        run: bash scripts/portable/install-cmake-linux.sh
-      - uses: actions/download-artifact@v8
-        with:
-          name: softhsm-portable-linux-arm64
-          path: downloaded
-      - name: Build and test downloadable test kit
-        env:
-          OPENSC_GITHUB_TOKEN: ${{ github.token }}
-          PORTABLE_PRODUCT_DIR: downloaded
-        run: |
-          export HOME="$RUNNER_TEMP/softhsm-user-home"
-          mkdir -p "$HOME"
-          mkdir -p dist artifact-testkit
-          scripts/portable/build-test-kit-unix.sh linux-arm64
-          mkdir "$RUNNER_TEMP/packaged-testkit"
-          unzip -q dist/softhsm-testkit-linux-arm64.zip -d "$RUNNER_TEMP/packaged-testkit"
-          bash "$RUNNER_TEMP/packaged-testkit/run-test.sh"
-          P11_TEST_OBJECT_ID_HEX=504f525441424c46 \
-          P11_TEST_KEY_LABEL=portable-ci-rsa-alternate \
-            bash "$RUNNER_TEMP/packaged-testkit/run-test.sh" \
-              "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so"
-          test ! -e "$GITHUB_WORKSPACE/downloaded/tokens"
-          perl -0pi -e 's/FAKE_RUTOKEN_ECP = false/FAKE_RUTOKEN_ECP = true/' \
-            "$HOME/softhsm/softhsm.conf"
-          P11_TEST_USER_PIN=12345678 \
-            "$RUNNER_TEMP/packaged-testkit/bin/portable-token-e2e" rutoken-profile \
-            "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so"
-          P11_TEST_TOKEN_LABEL=portable-ci-token \
-          P11_TEST_OBJECT_ID_HEX=504f525441424c47 \
-          P11_TEST_KEY_LABEL=portable-ci-rsa-rutoken \
-            bash "$RUNNER_TEMP/packaged-testkit/run-test.sh" \
-              "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so"
-          generated_home="$RUNNER_TEMP/softhsm-generated-home"
-          no_template="$RUNNER_TEMP/softhsm-no-template"
-          mkdir -p "$generated_home" "$no_template"
-          cp "$GITHUB_WORKSPACE/downloaded/libsofthsm2.so" "$no_template/libsofthsm2.so"
-          HOME="$generated_home" "$RUNNER_TEMP/packaged-testkit/bin/portable-token-e2e" probe \
-            "$no_template/libsofthsm2.so"
-          test -f "$generated_home/softhsm/softhsm.conf"
-          test -d "$generated_home/softhsm/tokens"
-          test ! -e "$no_template/tokens"
-          unzip -q dist/softhsm-testkit-linux-arm64.zip -d artifact-testkit
-      - uses: actions/upload-artifact@v7
-        with:
-          name: softhsm-testkit-linux-arm64
-          path: artifact-testkit/
-          if-no-files-found: error
-          retention-days: 90
-
-  verify-windows-x64:
-    name: Verify downloaded Windows x64 package
-    needs: [build-windows-x64, verify-linux-x64]
-    runs-on: windows-2025
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-      - uses: actions/download-artifact@v8
-        with:
-          name: softhsm-portable-windows-x64
-          path: downloaded
-      - uses: actions/download-artifact@v8
-        with:
-          name: cms-vector-linux-x64
-          path: cms-vector-linux
-      - name: Build and test downloadable test kit
-        shell: cmd
-        env:
-          OPENSC_GITHUB_TOKEN: ${{ github.token }}
-          PORTABLE_ARCH: x64
-          PORTABLE_PRODUCT_DIR: downloaded
-        run: |
-          call scripts\portable\build-test-kit-windows.cmd
-          powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-x64.zip' -DestinationPath $env:RUNNER_TEMP\packaged-testkit"
-          set "USERPROFILE=%RUNNER_TEMP%\softhsm-user-home"
-          call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd"
-          if errorlevel 1 exit /b %ERRORLEVEL%
-          if not exist "%RUNNER_TEMP%\packaged-testkit\tokens" exit /b 1
-          if exist "%USERPROFILE%\softhsm" exit /b 1
-          set "P11_TEST_OBJECT_ID_HEX=504f525441424c46"
-          set "P11_TEST_KEY_LABEL=portable-ci-rsa-alternate"
-          call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd" "%CD%\downloaded\softhsm2.dll"
-          if errorlevel 1 exit /b %ERRORLEVEL%
-          set "P11_TEST_OBJECT_ID_HEX="
-          set "P11_TEST_KEY_LABEL="
-          if exist "%CD%\downloaded\tokens" exit /b 1
-          powershell -NoProfile -Command "(Get-Content -Raw '%USERPROFILE%\softhsm\softhsm.conf').Replace('FAKE_RUTOKEN_ECP = false','FAKE_RUTOKEN_ECP = true') | Set-Content -NoNewline -Encoding ascii '%USERPROFILE%\softhsm\softhsm.conf'"
-          set "P11_TEST_USER_PIN=12345678"
-          "%RUNNER_TEMP%\packaged-testkit\bin\portable-token-e2e.exe" rutoken-profile "%CD%\downloaded\softhsm2.dll"
-          if errorlevel 1 exit /b %ERRORLEVEL%
-          set "P11_TEST_USER_PIN="
-          set "P11_TEST_TOKEN_LABEL=portable-ci-token"
-          set "P11_TEST_OBJECT_ID_HEX=504f525441424c47"
-          set "P11_TEST_KEY_LABEL=portable-ci-rsa-rutoken"
-          call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd" "%CD%\downloaded\softhsm2.dll"
-          if errorlevel 1 exit /b %ERRORLEVEL%
-          set "P11_TEST_TOKEN_LABEL="
-          set "P11_TEST_OBJECT_ID_HEX="
-          set "P11_TEST_KEY_LABEL="
-          set "USERPROFILE=%RUNNER_TEMP%\softhsm-generated-home"
-          mkdir "%RUNNER_TEMP%\softhsm-no-template"
-          copy /y "%CD%\downloaded\softhsm2.dll" "%RUNNER_TEMP%\softhsm-no-template\softhsm2.dll"
-          "%RUNNER_TEMP%\packaged-testkit\bin\portable-token-e2e.exe" probe "%RUNNER_TEMP%\softhsm-no-template\softhsm2.dll"
-          if errorlevel 1 exit /b %ERRORLEVEL%
-          if not exist "%USERPROFILE%\softhsm\softhsm.conf" exit /b 1
-          if not exist "%USERPROFILE%\softhsm\tokens" exit /b 1
-          if exist "%RUNNER_TEMP%\softhsm-no-template\tokens" exit /b 1
-          powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-x64.zip' -DestinationPath 'artifact-testkit'"
-      - name: Verify Windows C_EX functional evidence
-        shell: pwsh
-        run: |
-          $kitModule = "$env:RUNNER_TEMP/packaged-testkit/softhsm2.dll"
-          if ((Get-FileHash -Algorithm SHA256 $kitModule).Hash -ne
-              (Get-FileHash -Algorithm SHA256 'downloaded/softhsm2.dll').Hash) {
-            throw 'test-kit module differs from the HEAD package module'
-          }
-          $log = "$env:RUNNER_TEMP/packaged-testkit/test-output/battery.log"
-          foreach ($marker in @('C_EX_InitToken behaviour verified', 'C_EX_SetTokenName = CKR_OK', 'C_EX_SetLocalPIN = CKR_OK', 'SO trust transition, permanent freeze and text verified', 'attached/detached, chain, tamper and signer output verified', 'GOST SignedData generated by token mechanism (256)', 'GOST SignedData generated by token mechanism (512)')) {
-            if (-not (Select-String -LiteralPath $log -SimpleMatch -Pattern $marker -Quiet)) { throw "missing C_EX evidence: $marker" }
-          }
-      - name: Verify Linux CMS on Windows and export Windows CMS
-        shell: pwsh
-        run: |
-          $kit = Join-Path $env:RUNNER_TEMP 'packaged-testkit'
-          $work = Join-Path $env:RUNNER_TEMP 'cms-cross-windows'
-          New-Item -ItemType Directory -Force (Join-Path $work 'tokens') | Out-Null
-          @('directories.tokendir = ./tokens', 'objectstore.backend = file', 'FAKE_RUTOKEN_ECP = true') |
-            Set-Content -LiteralPath (Join-Path $work 'softhsm.conf') -Encoding ascii
-          $env:SOFTHSM2_CONF = Join-Path $work 'softhsm.conf'
-          $env:P11_TEST_SO_PIN = '12345678'
-          $env:P11_TEST_USER_PIN = '12345678'
-          & (Join-Path $kit 'bin/portable-token-e2e.exe') cms-verify-external `
-            (Join-Path $kit 'softhsm2.dll') (Join-Path $PWD.Path 'cms-vector-linux')
-          if ($LASTEXITCODE -ne 0) { throw 'Windows did not verify the Linux CMS envelope' }
-          foreach ($bits in @(256, 512)) {
-            & (Join-Path $kit 'bin/portable-token-e2e.exe') cms-gost-verify-vector `
-              (Join-Path $kit 'softhsm2.dll') (Join-Path $PWD.Path "cms-vector-linux/gost$bits")
-            if ($LASTEXITCODE -ne 0) { throw "Windows did not verify Linux GOST-$bits CMS" }
-          }
-          $source = Join-Path $kit 'test-output/battery/run-1/cms'
-          $target = Join-Path $env:RUNNER_TEMP 'cms-vector-windows'
-          New-Item -ItemType Directory -Force $target | Out-Null
-          foreach ($name in @('attached.der', 'detached.der', 'root.der', 'signer.der', 'content.bin')) {
-            $file = Join-Path $source $name
-            if (-not (Test-Path -LiteralPath $file) -or (Get-Item -LiteralPath $file).Length -eq 0) {
-              throw "missing Windows CMS vector: $name"
-            }
-            Copy-Item -LiteralPath $file -Destination $target
-          }
-          foreach ($bits in @(256, 512)) {
-            $source = if ($bits -eq 256) { Join-Path $kit 'test-output/battery/run-1/cms' } else { Join-Path $kit 'test-output/battery/run-1/cms-gost512' }
-            $gostTarget = Join-Path $target "gost$bits"
-            New-Item -ItemType Directory -Force $gostTarget | Out-Null
-            foreach ($name in @('gost-attached.der', 'gost-detached.der', 'gost-root.der', 'gost-signer.der', 'gost-content.bin')) {
-              $file = Join-Path $source $name
-              if (-not (Test-Path -LiteralPath $file) -or (Get-Item -LiteralPath $file).Length -eq 0) {
-                throw "missing Windows GOST-$bits CMS vector: $name"
-              }
-              Copy-Item -LiteralPath $file -Destination $gostTarget
-            }
-          }
-      - uses: actions/upload-artifact@v7
-        with:
-          name: cms-vector-windows-x64
-          path: ${{ runner.temp }}/cms-vector-windows/
-          if-no-files-found: error
-          retention-days: 7
-      - uses: actions/upload-artifact@v7
-        with:
-          name: softhsm-testkit-windows-x64
-          path: artifact-testkit/
-          if-no-files-found: error
-          retention-days: 90
-
-  verify-windows-x86:
-    name: Verify downloaded Windows x86 package
-    needs: build-windows-x86
-    runs-on: windows-2025
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-      - uses: actions/download-artifact@v8
-        with:
-          name: softhsm-portable-windows-x86
-          path: downloaded
-      - name: Build and test downloadable test kit
-        shell: cmd
-        env:
-          OPENSC_GITHUB_TOKEN: ${{ github.token }}
-          PORTABLE_ARCH: x86
-          PORTABLE_PRODUCT_DIR: downloaded
-        run: |
-          call scripts\portable\build-test-kit-windows.cmd
-          powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-x86.zip' -DestinationPath $env:RUNNER_TEMP\packaged-testkit"
-          set "USERPROFILE=%RUNNER_TEMP%\softhsm-user-home"
-          call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd"
-          if errorlevel 1 exit /b %ERRORLEVEL%
-          if not exist "%RUNNER_TEMP%\packaged-testkit\tokens" exit /b 1
-          if exist "%USERPROFILE%\softhsm" exit /b 1
-          set "P11_TEST_OBJECT_ID_HEX=504f525441424c46"
-          set "P11_TEST_KEY_LABEL=portable-ci-rsa-alternate"
-          call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd" "%CD%\downloaded\softhsm2.dll"
-          if errorlevel 1 exit /b %ERRORLEVEL%
-          set "P11_TEST_OBJECT_ID_HEX="
-          set "P11_TEST_KEY_LABEL="
-          if exist "%CD%\downloaded\tokens" exit /b 1
-          powershell -NoProfile -Command "(Get-Content -Raw '%USERPROFILE%\softhsm\softhsm.conf').Replace('FAKE_RUTOKEN_ECP = false','FAKE_RUTOKEN_ECP = true') | Set-Content -NoNewline -Encoding ascii '%USERPROFILE%\softhsm\softhsm.conf'"
-          set "P11_TEST_USER_PIN=12345678"
-          "%RUNNER_TEMP%\packaged-testkit\bin\portable-token-e2e.exe" rutoken-profile "%CD%\downloaded\softhsm2.dll"
-          if errorlevel 1 exit /b %ERRORLEVEL%
-          set "P11_TEST_USER_PIN="
-          set "P11_TEST_TOKEN_LABEL=portable-ci-token"
-          set "P11_TEST_OBJECT_ID_HEX=504f525441424c47"
-          set "P11_TEST_KEY_LABEL=portable-ci-rsa-rutoken"
-          call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd" "%CD%\downloaded\softhsm2.dll"
-          if errorlevel 1 exit /b %ERRORLEVEL%
-          set "P11_TEST_TOKEN_LABEL="
-          set "P11_TEST_OBJECT_ID_HEX="
-          set "P11_TEST_KEY_LABEL="
-          set "USERPROFILE=%RUNNER_TEMP%\softhsm-generated-home"
-          mkdir "%RUNNER_TEMP%\softhsm-no-template"
-          copy /y "%CD%\downloaded\softhsm2.dll" "%RUNNER_TEMP%\softhsm-no-template\softhsm2.dll"
-          "%RUNNER_TEMP%\packaged-testkit\bin\portable-token-e2e.exe" probe "%RUNNER_TEMP%\softhsm-no-template\softhsm2.dll"
-          if errorlevel 1 exit /b %ERRORLEVEL%
-          if not exist "%USERPROFILE%\softhsm\softhsm.conf" exit /b 1
-          if not exist "%USERPROFILE%\softhsm\tokens" exit /b 1
-          if exist "%RUNNER_TEMP%\softhsm-no-template\tokens" exit /b 1
-          powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-x86.zip' -DestinationPath 'artifact-testkit'"
-      - name: Verify Windows C_EX functional evidence
-        shell: pwsh
-        run: |
-          $kitModule = "$env:RUNNER_TEMP/packaged-testkit/softhsm2.dll"
-          if ((Get-FileHash -Algorithm SHA256 $kitModule).Hash -ne
-              (Get-FileHash -Algorithm SHA256 'downloaded/softhsm2.dll').Hash) {
-            throw 'test-kit module differs from the HEAD package module'
-          }
-          $log = "$env:RUNNER_TEMP/packaged-testkit/test-output/battery.log"
-          foreach ($marker in @('C_EX_InitToken behaviour verified', 'C_EX_SetTokenName = CKR_OK', 'C_EX_SetLocalPIN = CKR_OK', 'SO trust transition, permanent freeze and text verified', 'attached/detached, chain, tamper and signer output verified', 'GOST SignedData generated by token mechanism (256)', 'GOST SignedData generated by token mechanism (512)')) {
-            if (-not (Select-String -LiteralPath $log -SimpleMatch -Pattern $marker -Quiet)) { throw "missing C_EX evidence: $marker" }
-          }
-      - uses: actions/upload-artifact@v7
-        with:
-          name: softhsm-testkit-windows-x86
-          path: artifact-testkit/
-          if-no-files-found: error
-          retention-days: 90
-
-  verify-windows-arm64:
-    name: Verify downloaded Windows ARM64 package
-    needs: build-windows-arm64
-    runs-on: windows-11-arm
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-      - uses: actions/download-artifact@v8
-        with:
-          name: softhsm-portable-windows-arm64
-          path: downloaded
-      - name: Build and test downloadable test kit
-        shell: cmd
-        env:
-          OPENSC_GITHUB_TOKEN: ${{ github.token }}
-          PORTABLE_ARCH: arm64
-          PORTABLE_PRODUCT_DIR: downloaded
-        run: |
-          call scripts\portable\build-test-kit-windows.cmd
-          powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-arm64.zip' -DestinationPath $env:RUNNER_TEMP\packaged-testkit"
-          set "USERPROFILE=%RUNNER_TEMP%\softhsm-user-home"
-          call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd"
-          if errorlevel 1 exit /b %ERRORLEVEL%
-          if not exist "%RUNNER_TEMP%\packaged-testkit\tokens" exit /b 1
-          if exist "%USERPROFILE%\softhsm" exit /b 1
-          set "P11_TEST_OBJECT_ID_HEX=504f525441424c46"
-          set "P11_TEST_KEY_LABEL=portable-ci-rsa-alternate"
-          call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd" "%CD%\downloaded\softhsm2.dll"
-          if errorlevel 1 exit /b %ERRORLEVEL%
-          set "P11_TEST_OBJECT_ID_HEX="
-          set "P11_TEST_KEY_LABEL="
-          if exist "%CD%\downloaded\tokens" exit /b 1
-          powershell -NoProfile -Command "(Get-Content -Raw '%USERPROFILE%\softhsm\softhsm.conf').Replace('FAKE_RUTOKEN_ECP = false','FAKE_RUTOKEN_ECP = true') | Set-Content -NoNewline -Encoding ascii '%USERPROFILE%\softhsm\softhsm.conf'"
-          set "P11_TEST_USER_PIN=12345678"
-          "%RUNNER_TEMP%\packaged-testkit\bin\portable-token-e2e.exe" rutoken-profile "%CD%\downloaded\softhsm2.dll"
-          if errorlevel 1 exit /b %ERRORLEVEL%
-          set "P11_TEST_USER_PIN="
-          set "P11_TEST_TOKEN_LABEL=portable-ci-token"
-          set "P11_TEST_OBJECT_ID_HEX=504f525441424c47"
-          set "P11_TEST_KEY_LABEL=portable-ci-rsa-rutoken"
-          call "%RUNNER_TEMP%\packaged-testkit\run-test.cmd" "%CD%\downloaded\softhsm2.dll"
-          if errorlevel 1 exit /b %ERRORLEVEL%
-          set "P11_TEST_TOKEN_LABEL="
-          set "P11_TEST_OBJECT_ID_HEX="
-          set "P11_TEST_KEY_LABEL="
-          set "USERPROFILE=%RUNNER_TEMP%\softhsm-generated-home"
-          mkdir "%RUNNER_TEMP%\softhsm-no-template"
-          copy /y "%CD%\downloaded\softhsm2.dll" "%RUNNER_TEMP%\softhsm-no-template\softhsm2.dll"
-          "%RUNNER_TEMP%\packaged-testkit\bin\portable-token-e2e.exe" probe "%RUNNER_TEMP%\softhsm-no-template\softhsm2.dll"
-          if errorlevel 1 exit /b %ERRORLEVEL%
-          if not exist "%USERPROFILE%\softhsm\softhsm.conf" exit /b 1
-          if not exist "%USERPROFILE%\softhsm\tokens" exit /b 1
-          if exist "%RUNNER_TEMP%\softhsm-no-template\tokens" exit /b 1
-          powershell -NoProfile -Command "Expand-Archive -LiteralPath 'dist\softhsm-testkit-windows-arm64.zip' -DestinationPath 'artifact-testkit'"
-      - name: Verify Windows C_EX functional evidence
-        shell: pwsh
-        run: |
-          $kitModule = "$env:RUNNER_TEMP/packaged-testkit/softhsm2.dll"
-          if ((Get-FileHash -Algorithm SHA256 $kitModule).Hash -ne
-              (Get-FileHash -Algorithm SHA256 'downloaded/softhsm2.dll').Hash) {
-            throw 'test-kit module differs from the HEAD package module'
-          }
-          $log = "$env:RUNNER_TEMP/packaged-testkit/test-output/battery.log"
-          foreach ($marker in @('C_EX_InitToken behaviour verified', 'C_EX_SetTokenName = CKR_OK', 'C_EX_SetLocalPIN = CKR_OK', 'SO trust transition, permanent freeze and text verified', 'attached/detached, chain, tamper and signer output verified', 'GOST SignedData generated by token mechanism (256)', 'GOST SignedData generated by token mechanism (512)')) {
-            if (-not (Select-String -LiteralPath $log -SimpleMatch -Pattern $marker -Quiet)) { throw "missing C_EX evidence: $marker" }
-          }
-      - uses: actions/upload-artifact@v7
-        with:
-          name: softhsm-testkit-windows-arm64
-          path: artifact-testkit/
-          if-no-files-found: error
-          retention-days: 90
-
-  verify-macos-universal:
-    name: Verify downloaded macOS universal package
-    needs: build-macos-universal
-    runs-on: macos-15
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-      - uses: actions/download-artifact@v8
-        with:
-          name: softhsm-portable-macos-universal
-          path: downloaded
-      - name: Build and test downloadable test kit
-        env:
-          OPENSC_GITHUB_TOKEN: ${{ github.token }}
-          PORTABLE_PRODUCT_DIR: downloaded
-        run: |
-          export HOME="$RUNNER_TEMP/softhsm-user-home"
-          mkdir -p "$HOME"
-          mkdir -p dist artifact-testkit
-          scripts/portable/build-test-kit-unix.sh macos-universal
-          mkdir "$RUNNER_TEMP/packaged-testkit"
-          unzip -q dist/softhsm-testkit-macos-universal.zip -d "$RUNNER_TEMP/packaged-testkit"
-          bash "$RUNNER_TEMP/packaged-testkit/run-test.sh"
-          test -d "$RUNNER_TEMP/packaged-testkit/tokens"
-          test ! -e "$HOME/softhsm"
-          P11_TEST_OBJECT_ID_HEX=504f525441424c46 \
-          P11_TEST_KEY_LABEL=portable-ci-rsa-alternate \
-            bash "$RUNNER_TEMP/packaged-testkit/run-test.sh" \
-              "$GITHUB_WORKSPACE/downloaded/libsofthsm2.dylib"
-          test ! -e "$GITHUB_WORKSPACE/downloaded/tokens"
-          perl -0pi -e 's/FAKE_RUTOKEN_ECP = false/FAKE_RUTOKEN_ECP = true/' \
-            "$HOME/softhsm/softhsm.conf"
-          P11_TEST_USER_PIN=12345678 \
-            "$RUNNER_TEMP/packaged-testkit/bin/portable-token-e2e" rutoken-profile \
-            "$GITHUB_WORKSPACE/downloaded/libsofthsm2.dylib"
-          P11_TEST_TOKEN_LABEL=portable-ci-token \
-          P11_TEST_OBJECT_ID_HEX=504f525441424c47 \
-          P11_TEST_KEY_LABEL=portable-ci-rsa-rutoken \
-            bash "$RUNNER_TEMP/packaged-testkit/run-test.sh" \
-              "$GITHUB_WORKSPACE/downloaded/libsofthsm2.dylib"
-          generated_home="$RUNNER_TEMP/softhsm-generated-home"
-          no_template="$RUNNER_TEMP/softhsm-no-template"
-          mkdir -p "$generated_home" "$no_template"
-          cp "$GITHUB_WORKSPACE/downloaded/libsofthsm2.dylib" "$no_template/libsofthsm2.dylib"
-          HOME="$generated_home" "$RUNNER_TEMP/packaged-testkit/bin/portable-token-e2e" probe \
-            "$no_template/libsofthsm2.dylib"
-          test -f "$generated_home/softhsm/softhsm.conf"
-          test -d "$generated_home/softhsm/tokens"
-          test ! -e "$no_template/tokens"
-          unzip -q dist/softhsm-testkit-macos-universal.zip -d artifact-testkit
-      - uses: actions/upload-artifact@v7
-        with:
-          name: softhsm-testkit-macos-universal
-          path: artifact-testkit/
-          if-no-files-found: error
-          retention-days: 90
-
-  verify-cms-cross-linux:
-    name: Verify Windows CMS on Linux x64
-    needs: [verify-linux-x64, verify-windows-x64]
-    runs-on: ubuntu-24.04
-    container: ubuntu:20.04
-    steps:
-      - name: Install test-kit runtime
-        run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates libsqlite3-0
-      - uses: actions/download-artifact@v8
-        with:
-          name: softhsm-testkit-linux-x64
-          path: kit
-      - uses: actions/download-artifact@v8
-        with:
-          name: cms-vector-windows-x64
-          path: cms-vector-windows
-      - name: Verify Windows CMS envelope with Linux module
-        run: |
-          set -eu
-          mkdir -p "$RUNNER_TEMP/cms-cross-linux/tokens"
-          cat > "$RUNNER_TEMP/cms-cross-linux/softhsm.conf" <<'EOF'
-          directories.tokendir = ./tokens
-          objectstore.backend = file
-          FAKE_RUTOKEN_ECP = true
-          EOF
-          export SOFTHSM2_CONF="$RUNNER_TEMP/cms-cross-linux/softhsm.conf"
-          export P11_TEST_SO_PIN=12345678 P11_TEST_USER_PIN=12345678
-          chmod +x kit/bin/portable-token-e2e
-          kit/bin/portable-token-e2e cms-verify-external \
-            "$GITHUB_WORKSPACE/kit/libsofthsm2.so" "$GITHUB_WORKSPACE/cms-vector-windows"
-          for bits in 256 512; do
-            kit/bin/portable-token-e2e cms-gost-verify-vector \
-              "$GITHUB_WORKSPACE/kit/libsofthsm2.so" \
-              "$GITHUB_WORKSPACE/cms-vector-windows/gost$bits"
-          done
-
-  # The test kit's TLS block, run from the kit about to be published in the
-  # owner's environment: Ubuntu 26.04's OpenSSL with the kit's tls-client and
-  # pkcs11-provider. The client key is generated on the token under the
-  # Rutoken profile with the factory PINs; the CSR goes through the provider
-  # and every OpenSSL process has to exit 0 (docs/JOURNAL.md, 17 October
-  # 2026). The kit's own verifier jobs run in Ubuntu 20.04, where the block
-  # only reports SKIP. Linux for now; the other platforms follow.
-  verify-linux-tls:
-    name: Verify Linux ${{ matrix.arch }} test-kit TLS block (Ubuntu 26.04)
-    needs: [verify-linux-x64, verify-linux-arm64]
+  verify-windows:
+    name: Verify downloaded Windows ${{ matrix.arch }} packages
+    needs: [build-windows-x64, build-windows-x86, build-windows-arm64]
     strategy:
       fail-fast: false
       matrix:
         include:
           - arch: x64
-            runner: ubuntu-24.04
+            runner: windows-2025
+          - arch: x86
+            runner: windows-2025
           - arch: arm64
-            runner: ubuntu-24.04-arm
+            runner: windows-11-arm
     runs-on: ${{ matrix.runner }}
-    container: ubuntu:26.04
     steps:
-      - name: Install the distribution's OpenSSL
-        run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            ca-certificates openssl
-          openssl version
-          dpkg-query -W openssl
       - uses: actions/download-artifact@v8
         with:
-          name: softhsm-testkit-linux-${{ matrix.arch }}
-          path: testkit
-      # No chmod here: the artifact has lost the executable bits, as some
-      # unpackers lose them, and the kit has to restore them itself.
-      - name: Run the TLS block of the test kit
-        run: P11_TLS_REQUIRED=1 bash testkit/tls/run.sh
+          name: softhsm-portable-windows-${{ matrix.arch }}
+          path: downloaded
+      - uses: actions/download-artifact@v8
+        with:
+          name: softhsm-testkit-windows-${{ matrix.arch }}
+          path: packaged-testkit
+      - name: Test the downloaded test kit
+        shell: cmd
+        run: |
+          set "USERPROFILE=%RUNNER_TEMP%\softhsm-user-home"
+          call "%GITHUB_WORKSPACE%\packaged-testkit\run-test.cmd"
+          if errorlevel 1 exit /b %ERRORLEVEL%
+          if not exist "%GITHUB_WORKSPACE%\packaged-testkit\tokens" exit /b 1
+          if exist "%USERPROFILE%\softhsm" exit /b 1
+          set "P11_TEST_OBJECT_ID_HEX=504f525441424c46"
+          set "P11_TEST_KEY_LABEL=portable-ci-rsa-alternate"
+          call "%GITHUB_WORKSPACE%\packaged-testkit\run-test.cmd" "%CD%\downloaded\softhsm2.dll"
+          if errorlevel 1 exit /b %ERRORLEVEL%
+          set "P11_TEST_OBJECT_ID_HEX="
+          set "P11_TEST_KEY_LABEL="
+          if exist "%CD%\downloaded\tokens" exit /b 1
+          powershell -NoProfile -Command "(Get-Content -Raw '%USERPROFILE%\softhsm\softhsm.conf').Replace('FAKE_RUTOKEN_ECP = false','FAKE_RUTOKEN_ECP = true') | Set-Content -NoNewline -Encoding ascii '%USERPROFILE%\softhsm\softhsm.conf'"
+          set "P11_TEST_USER_PIN=12345678"
+          "%GITHUB_WORKSPACE%\packaged-testkit\bin\portable-token-e2e.exe" rutoken-profile "%CD%\downloaded\softhsm2.dll"
+          if errorlevel 1 exit /b %ERRORLEVEL%
+          set "P11_TEST_USER_PIN="
+          set "P11_TEST_TOKEN_LABEL=portable-ci-token"
+          set "P11_TEST_OBJECT_ID_HEX=504f525441424c47"
+          set "P11_TEST_KEY_LABEL=portable-ci-rsa-rutoken"
+          call "%GITHUB_WORKSPACE%\packaged-testkit\run-test.cmd" "%CD%\downloaded\softhsm2.dll"
+          if errorlevel 1 exit /b %ERRORLEVEL%
+          set "P11_TEST_TOKEN_LABEL="
+          set "P11_TEST_OBJECT_ID_HEX="
+          set "P11_TEST_KEY_LABEL="
+          set "USERPROFILE=%RUNNER_TEMP%\softhsm-generated-home"
+          mkdir "%RUNNER_TEMP%\softhsm-no-template"
+          copy /y "%CD%\downloaded\softhsm2.dll" "%RUNNER_TEMP%\softhsm-no-template\softhsm2.dll"
+          "%GITHUB_WORKSPACE%\packaged-testkit\bin\portable-token-e2e.exe" probe "%RUNNER_TEMP%\softhsm-no-template\softhsm2.dll"
+          if errorlevel 1 exit /b %ERRORLEVEL%
+          if not exist "%USERPROFILE%\softhsm\softhsm.conf" exit /b 1
+          if not exist "%USERPROFILE%\softhsm\tokens" exit /b 1
+          if exist "%RUNNER_TEMP%\softhsm-no-template\tokens" exit /b 1
+      - name: Verify Windows C_EX functional evidence
+        shell: pwsh
+        run: |
+          $kitModule = "$env:GITHUB_WORKSPACE/packaged-testkit/softhsm2.dll"
+          if ((Get-FileHash -Algorithm SHA256 $kitModule).Hash -ne
+              (Get-FileHash -Algorithm SHA256 'downloaded/softhsm2.dll').Hash) {
+            throw 'test-kit module differs from the HEAD package module'
+          }
+          $log = "$env:GITHUB_WORKSPACE/packaged-testkit/test-output/battery.log"
+          foreach ($marker in @('C_EX_InitToken behaviour verified', 'C_EX_SetTokenName = CKR_OK', 'C_EX_SetLocalPIN = CKR_OK', 'SO trust transition, permanent freeze and text verified', 'attached/detached, chain, tamper and signer output verified', 'GOST SignedData generated by token mechanism (256)', 'GOST SignedData generated by token mechanism (512)')) {
+            if (-not (Select-String -LiteralPath $log -SimpleMatch -Pattern $marker -Quiet)) { throw "missing C_EX evidence: $marker" }
+          }
+
+  verify-macos:
+    name: Verify downloaded macOS universal packages on ${{ matrix.cpu }}
+    needs: build-macos-universal
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cpu: Apple silicon
+            runner: macos-15
+          - cpu: Intel
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: softhsm-portable-macos-universal
+          path: downloaded
+      - uses: actions/download-artifact@v8
+        with:
+          name: softhsm-testkit-macos-universal
+          path: packaged-testkit
+      - name: Test the downloaded test kit
+        run: |
+          export HOME="$RUNNER_TEMP/softhsm-user-home"
+          mkdir -p "$HOME"
+          cmp "$GITHUB_WORKSPACE/packaged-testkit/libsofthsm2.dylib" \
+            "$GITHUB_WORKSPACE/downloaded/libsofthsm2.dylib"
+          bash "$GITHUB_WORKSPACE/packaged-testkit/run-test.sh"
+          test -d "$GITHUB_WORKSPACE/packaged-testkit/tokens"
+          test ! -e "$HOME/softhsm"
+          P11_TEST_OBJECT_ID_HEX=504f525441424c46 \
+          P11_TEST_KEY_LABEL=portable-ci-rsa-alternate \
+            bash "$GITHUB_WORKSPACE/packaged-testkit/run-test.sh" \
+              "$GITHUB_WORKSPACE/downloaded/libsofthsm2.dylib"
+          test ! -e "$GITHUB_WORKSPACE/downloaded/tokens"
+          perl -0pi -e 's/FAKE_RUTOKEN_ECP = false/FAKE_RUTOKEN_ECP = true/' \
+            "$HOME/softhsm/softhsm.conf"
+          P11_TEST_USER_PIN=12345678 \
+            "$GITHUB_WORKSPACE/packaged-testkit/bin/portable-token-e2e" rutoken-profile \
+            "$GITHUB_WORKSPACE/downloaded/libsofthsm2.dylib"
+          P11_TEST_TOKEN_LABEL=portable-ci-token \
+          P11_TEST_OBJECT_ID_HEX=504f525441424c47 \
+          P11_TEST_KEY_LABEL=portable-ci-rsa-rutoken \
+            bash "$GITHUB_WORKSPACE/packaged-testkit/run-test.sh" \
+              "$GITHUB_WORKSPACE/downloaded/libsofthsm2.dylib"
+          generated_home="$RUNNER_TEMP/softhsm-generated-home"
+          no_template="$RUNNER_TEMP/softhsm-no-template"
+          mkdir -p "$generated_home" "$no_template"
+          cp "$GITHUB_WORKSPACE/downloaded/libsofthsm2.dylib" "$no_template/libsofthsm2.dylib"
+          HOME="$generated_home" "$GITHUB_WORKSPACE/packaged-testkit/bin/portable-token-e2e" probe \
+            "$no_template/libsofthsm2.dylib"
+          test -f "$generated_home/softhsm/softhsm.conf"
+          test -d "$generated_home/softhsm/tokens"
+          test ! -e "$no_template/tokens"
 
   release:
     name: Publish all verified portable packages
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
-    needs:
-      - verify-linux-x64
-      - verify-linux-arm64
-      - verify-windows-x86
-      - verify-windows-x64
-      - verify-windows-arm64
-      - verify-macos-universal
-      - verify-cms-cross-linux
-      - verify-linux-tls
-    runs-on: ubuntu-24.04
+    needs: [verify-linux, verify-windows, verify-macos]
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
     steps:

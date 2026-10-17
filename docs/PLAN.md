@@ -13,10 +13,14 @@
       CMS-кросс-проверка Linux↔Windows убирается вместе со связью
       Windows x64 → Linux x64. Сборка Linux остаётся в `ubuntu:20.04`: от неё
       зависит минимальная glibc 2.31 опубликованных бинарников.
-      1. [ ] Перенести сборку kit из verify-job в build-job; verify-job
+      1. [~] Перенести сборку kit из verify-job в build-job; verify-job
          скачивают продукт и kit и только проверяют; убрать
          `verify-cms-cross-linux` и отдельные `verify-linux-tls`; добавить
-         `verify-macos-intel`.
+         `verify-macos-intel`. Сделано в workflow, ждёт релизного прогона:
+         verify — три матрицы (`verify-linux` на runner `ubuntu-26.04` и
+         `ubuntu-26.04-arm`, `verify-windows`, `verify-macos` на `macos-15` и
+         `macos-15-intel`); все Linux runner подняты до 26.04, сборка Linux —
+         по-прежнему в контейнере `ubuntu:20.04`.
       2. [ ] TLS на macOS (пункт TLS-блока, этап 3).
       3. [ ] TLS на Windows: x64 — сейчас; x86 и ARM64 — когда в форке
          провайдера появятся их сборки (владелец добавляет).

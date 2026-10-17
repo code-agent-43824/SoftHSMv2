@@ -10,6 +10,19 @@
 для Windows x86/ARM64 он добавит сборки провайдера. Порядок: этот коммит,
 перестройка workflow (kit — в build-job, verify — только проверка), релиз и
 проверка скачанных архивов, затем TLS на macOS и Windows.
+**Сделано (workflow).** Build-job каждой платформы собирает продукт и kit и
+выкладывает оба артефакта; verify — матрицы `verify-linux` (x64, ARM64),
+`verify-windows` (x64, x86, ARM64), `verify-macos` (Apple silicon, Intel):
+скачивают продукт и kit, сверяют модуль kit с модулем продукта и гоняют те
+же проверки, что раньше, а на Linux — с `P11_TLS_REQUIRED=1`; release ждёт
+три матрицы. Убраны CMS-кросс-проверка (экспорт и импорт векторов,
+`verify-cms-cross-linux`) и отдельные `verify-linux-tls`. По документации
+GitHub есть runner `ubuntu-26.04`, `ubuntu-26.04-arm`, `macos-15-intel`: все
+Linux runner в обоих workflow подняты до 26.04, verify на Linux идёт прямо
+на runner, без контейнера; сборка Linux и CI-сборка остаются в контейнере
+`ubuntu:20.04` ради glibc 2.31. `actionlint` 1.7.7 — замечаний нет, кроме
+незнакомых ему меток `windows-11-arm`, `macos-15-intel`, `ubuntu-26.04`.
+Локально workflow не запускается — проверит релизный прогон.
 
 ## 2026-10-17 — TLS-блок в test kit
 

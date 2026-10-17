@@ -15,7 +15,7 @@ env:
 jobs:
   portable-dependency-baseline:
     name: Portable baseline (OpenSSL 3.5.8 + Botan 2.19.5)
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     container: ubuntu:20.04
     steps:
       - name: Install build tools
@@ -330,7 +330,7 @@ jobs:
             ./portable-token-e2e device-parity-write "$module"
 
   # The test kit's TLS block on the module just built, in the owner's
-  # environment: Ubuntu 26.04's OpenSSL and the pinned build of the owner's
+  # environment: an Ubuntu 26.04 runner's OpenSSL and the pinned build of the owner's
   # pkcs11-provider fork (scripts/portable/pkcs11-provider.lock). The client
   # key is generated on the token under the Rutoken profile with the factory
   # PINs; the CSR goes through the provider, and every OpenSSL process has to
@@ -339,14 +339,13 @@ jobs:
   tls:
     name: TLS through pkcs11-provider (Ubuntu 26.04)
     needs: portable-dependency-baseline
-    runs-on: ubuntu-24.04
-    container: ubuntu:26.04
+    runs-on: ubuntu-26.04
     steps:
-      - name: Install the distribution's OpenSSL, a compiler and pkcs11-tool
+      - name: Install the distribution's OpenSSL headers and pkcs11-tool
         run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            ca-certificates curl gcc libc6-dev libssl-dev opensc openssl
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            libssl-dev opensc
           openssl version
           dpkg-query -W openssl libssl-dev opensc
       - uses: actions/checkout@v7

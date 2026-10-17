@@ -176,8 +176,8 @@ that requires the client certificate. The provider is the pinned build of
 `code-agent-43824/pkcs11-provider` (`scripts/portable/pkcs11-provider.lock`,
 `scripts/portable/fetch-pkcs11-provider.sh`). The Linux kits carry it with a
 prebuilt `tls-client` and the wrapper `tls/run.sh`, which needs the system's
-OpenSSL 3 and otherwise says SKIP; CI and the Linux release jobs run it in
-`ubuntu:26.04`, where a skip is a failure.
+OpenSSL 3 and otherwise says SKIP; CI and the Linux release verification run
+it on Ubuntu 26.04 runners, where a skip is a failure.
 
 `device-parity <module>` runs cases intended to hold both on this module
 and on the reference Rutoken through the vendor's `librtpkcs11ecp`. The
