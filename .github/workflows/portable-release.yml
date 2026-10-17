@@ -473,6 +473,10 @@ jobs:
                 zipinfo -1 "$archive" | grep -Fx 'tls/openssl/LICENSE-OpenSSL.txt' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'tls/provider/COPYING' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'tls/provider/LICENSES/winpthreads-COPYING' >/dev/null
+                if zipinfo -1 "$archive" | grep -E '^tls/openssl/bin/.*[^/]$' | grep -Ev '\.(dll|exe)$'; then
+                  echo "unexpected files in tls/openssl/bin of $archive" >&2
+                  exit 1
+                fi
                 ;;
               softhsm-testkit-*.zip)
                 zipinfo -1 "$archive" | grep -Fx 'softhsm.conf' >/dev/null

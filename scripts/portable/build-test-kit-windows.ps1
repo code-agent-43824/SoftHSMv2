@@ -436,7 +436,11 @@ foreach ($Dll in @($TlsDlls | Where-Object { $_.Name -match '^lib(ssl|crypto)-3'
 $TlsClient = Join-Path $TlsBin 'tls-client.exe'
 $TlsCompile = @('/nologo', '/std:c11', '/O2', '/W3', '/MT',
     "/I$(Join-Path $Msys2Root 'include')", "/Fo$(Join-Path $TlsWork 'tls-client.obj')",
-    (Join-Path $RootDir 'tests/portable/tls/tls-client.c')) + $ImportLibs + @("/Fe:$TlsClient")
+    (Join-Path $RootDir 'tests/portable/tls/tls-client.c')) + $ImportLibs + @("/Fe:$TlsClient",
+    # applink.c exports OPENSSL_Applink, and for an executable with exports
+    # the linker writes an import library and .exp beside it; keep them out
+    # of the kit.
+    '/link', "/IMPLIB:$(Join-Path $TlsWork 'tls-client.lib')")
 # A MSYS2 OpenSSL built with UPLINK (no OPENSSL_NO_UPLINK) expects the
 # application to provide OPENSSL_Applink.
 if (Test-Path -LiteralPath (Join-Path $Msys2Root 'include/openssl/applink.c')) {
@@ -444,6 +448,8 @@ if (Test-Path -LiteralPath (Join-Path $Msys2Root 'include/openssl/applink.c')) {
 }
 & cl @TlsCompile
 if ($LASTEXITCODE -ne 0) { throw "tls-client compile failed" }
+$Stray = @(Get-ChildItem -LiteralPath $TlsBin -File | Where-Object { $_.Extension -notin '.dll', '.exe' })
+if ($Stray.Count -ne 0) { throw "unexpected files in the TLS block: $($Stray.Name -join ', ')" }
 # Every binary of the block has the kit's machine type, and every non-system
 # DLL it imports - MSYS2's are the lib*.dll ones - is in tls\openssl\bin,
 # where Windows looks first.
