@@ -2,6 +2,31 @@
 
 Новые записи сверху. Одна запись на кусок работы: план → сделано → дальше.
 
+## 2026-10-17 — pkcs11-provider сборки 24: Windows ABI и статический runtime
+
+**План.** Владелец выпустил `pkcs11-provider-dev-build-24` (`18173f2`):
+упаковка структур PKCS #11 по 1 байту под `_WIN32` (`src/pkcs11.h`, тест
+смещений `tests/tpkcs11_abi.c`), а со сборки 23 (`f84bfcb`) публикуемые
+модули — release, на Windows с прилинкованными статически winpthreads и GCC
+runtime. Закрепить сборку 24 в `pkcs11-provider.lock`; убрать из
+`msys2-openssl.lock` и Windows-kit `libwinpthread-1.dll` и
+`libgcc_s_dw2-1.dll` с их лицензиями (лицензия winpthreads теперь в
+`LICENSES/` провайдера); проверку сборки kit сделать общей — каждая
+несистемная DLL, которую импортируют `pkcs11.dll`, `openssl.exe` и
+`tls-client.exe`, должна лежать в `tls\openssl\bin`; поправить проверку
+состава архива и документацию.
+**Проверено до кода.** Все семь архивов сборки 24 совпали с её `SHA256SUMS`.
+`BUILD-INFO`: коммит `18173f2`, `Build type: release`. Импорты Windows
+`pkcs11.dll` (`llvm-objdump -p`): из несистемных — только `libcrypto-3*.dll`
+(на x86 ещё `msvcrt.dll`, системная). Поставляемый `include/pkcs11.h`
+проходит `_Static_assert` из `tests/tpkcs11_abi.c` для шести целей clang
+(`{x86_64,i686,aarch64}-pc-windows-msvc` и `-w64-windows-gnu`); заголовок
+сборки 22 там же даёт 8 нарушений. macOS-модули по-прежнему берут
+`@rpath/libcrypto.3.dylib` с `LC_RPATH @loader_path/..`. Linux x64 модуль
+сборки 24 прошёл `run-tls.sh` на компонентах kit `.78` с OpenSSL 3.0.13
+(Ubuntu 24.04) и 3.5.5 (библиотеки Ubuntu 26.04). Сами Windows-модули вне
+runner не запускались.
+
 ## 2026-10-17 — красный релиз `fe0cad2`, разбиение проверок по платформам
 
 **Что случилось.** Релиз `39015681636` на `fe0cad2` (TLS на macOS и
