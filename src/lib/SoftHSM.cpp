@@ -15000,8 +15000,10 @@ CK_RV SoftHSM::deriveGOSTVKO
 		return (CK_ULONG)parameter[offset] | ((CK_ULONG)parameter[offset + 1] << 8) |
 		       ((CK_ULONG)parameter[offset + 2] << 16) | ((CK_ULONG)parameter[offset + 3] << 24);
 	};
+	// CKD_NULL is the bare VKO; CKD_CPDIVERSIFY_KDF then diversifies its
+	// result by the UKM (RFC 4357, 6.5), as the device does.
 	const CK_ULONG kdf = readLength(0);
-	if (kdf != CKD_NULL) return CKR_MECHANISM_PARAM_INVALID;
+	if (kdf != CKD_NULL && kdf != CKD_CPDIVERSIFY_KDF) return CKR_MECHANISM_PARAM_INVALID;
 	const CK_ULONG publicLen = readLength(4);
 	// The device reads a CK_GOSTR3410_DERIVE_PARAMS structure as this buffer,
 	// finds a point length of zero and answers CKR_PUBLIC_KEY_INVALID.
@@ -15014,6 +15016,9 @@ CK_RV SoftHSM::deriveGOSTVKO
 	const CK_ULONG ukmLen = readLength(8 + publicLen);
 	if ((ukmLen != 4 && ukmLen != 8 && ukmLen != 16 && ukmLen != 32) ||
 	    parameterLen != 12 + publicLen + ukmLen)
+		return CKR_MECHANISM_PARAM_INVALID;
+	// The diversification was read with an 8-byte UKM and a 256-bit key only.
+	if (kdf == CKD_CPDIVERSIFY_KDF && (ukmLen != 8 || publicLen != 64))
 		return CKR_MECHANISM_PARAM_INVALID;
 
 	// The device creates no token object with this derive.
@@ -15072,6 +15077,17 @@ CK_RV SoftHSM::deriveGOSTVKO
 		return CKR_MECHANISM_PARAM_INVALID;
 	}
 	privateKey.setD(ByteString());
+	// On the CryptoPro-A parameter set, the one the device used; whether it
+	// follows a CKA_GOST28147_PARAMS in the template has not been read.
+	if (kdf == CKD_CPDIVERSIFY_KDF)
+	{
+		GOST28147 cipher;
+		if (!cipher.diversifyCryptoPro(key.byte_str(), ukm.const_byte_str()))
+		{
+			key.wipe();
+			return CKR_FUNCTION_FAILED;
+		}
+	}
 
 	// What the device puts into a GOST 28147-89 key the template leaves
 	// open: CKA_DERIVE TRUE and the CryptoPro-A parameter set.

@@ -28,6 +28,10 @@ public:
 	// change the behaviour on.
 	bool usesKeyMeshing() const { return paramSet != TEST; }
 	void meshKey(unsigned char[8]);
+	// RFC 4357, 6.5: the CryptoPro diversification of a 32-byte key by an
+	// 8-byte UKM, with this object's parameter set; the key is replaced in
+	// place. It rekeys this object.
+	bool diversifyCryptoPro(unsigned char[32], const unsigned char[8]);
 
 private:
 	GOST28147(const GOST28147&);

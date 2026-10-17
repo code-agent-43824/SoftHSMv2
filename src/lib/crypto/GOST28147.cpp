@@ -125,3 +125,29 @@ void GOST28147::meshKey(unsigned char iv[8])
 	}
 	memset(next, 0, 32);
 }
+bool GOST28147::diversifyCryptoPro(unsigned char k[32], const unsigned char ukm[8])
+{
+	if (!k || !ukm) return false;
+	for (size_t i = 0; i < 8; ++i)
+	{
+		// S: the sums of the key's words picked by UKM byte i's set and its
+		// clear bits.
+		uint32_t s1 = 0, s2 = 0;
+		for (size_t j = 0; j < 8; ++j)
+		{
+			const uint32_t w = loadLE32(k + 4 * j);
+			if (ukm[i] & (1u << j)) s1 += w; else s2 += w;
+		}
+		unsigned char iv[8], gamma[8];
+		storeLE32(iv, s1); storeLE32(iv + 4, s2);
+		// K[i+1] = CFB encryption of K[i] under K[i] with S as the IV.
+		if (!setKey(k, 32)) return false;
+		for (size_t b = 0; b < 32; b += 8)
+		{
+			encryptBlock(iv, gamma);
+			for (size_t n = 0; n < 8; ++n) { k[b + n] ^= gamma[n]; iv[n] = k[b + n]; }
+		}
+		memset(gamma, 0, 8);
+	}
+	return true;
+}

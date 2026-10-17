@@ -2755,6 +2755,15 @@ static void verifyGOSTVKODerive(Module& module, CK_SESSION_HANDLE session)
             fail(std::string("CKM_GOSTR3410_12_DERIVE does not give ") + answer.what);
         destroyObject(module, session, key);
     }
+    // CKD_CPDIVERSIFY_KDF: the VKO result diversified by the UKM (RFC 4357,
+    // 6.5) on CryptoPro-A - the device's answer, reproduced offline.
+    check(vkoDerive(module, session, baseKey, vkoDeriveParameter(CKD_CPDIVERSIFY_KDF, devicePoint, ukm),
+                    pluginTemplate, pluginCount, key, "the device's answer with CKD_CPDIVERSIFY_KDF"),
+          CKR_OK, "C_DeriveKey(CKM_GOSTR3410_12_DERIVE, CKD_CPDIVERSIFY_KDF)");
+    if (attribute(module, session, key, CKA_VALUE) !=
+        bytesFromHex("d7284cee76ab5404e1546a214512ce468c0968339440f8b9f6b4ad846744bbec"))
+        fail("CKM_GOSTR3410_12_DERIVE with CKD_CPDIVERSIFY_KDF does not give the device's answer");
+    destroyObject(module, session, key);
 
     // Every result type the device accepts carries the same 32 bytes; a
     // generic secret is 32 bytes even when 64 are asked for.
@@ -2880,6 +2889,8 @@ static void verifyGOSTVKODerive(Module& module, CK_SESSION_HANDLE session)
          CKR_MECHANISM_PARAM_INVALID, "a zero UKM"},
         {vkoDeriveParameter(CKD_NULL, ownPoint, bytesFromHex("0102030405")), 0,
          CKR_MECHANISM_PARAM_INVALID, "a 5-byte UKM, not read on the device"},
+        {vkoDeriveParameter(CKD_CPDIVERSIFY_KDF, ownPoint, bytesFromHex("01020304")), 0,
+         CKR_MECHANISM_PARAM_INVALID, "CKD_CPDIVERSIFY_KDF with a 4-byte UKM, not read on the device"},
         {vkoDeriveParameter(CKD_NULL, Bytes(ownPoint.begin(), ownPoint.begin() + 32), ukm), 0,
          CKR_MECHANISM_PARAM_INVALID, "a 32-byte point"},
         {vkoDeriveParameter(CKD_NULL, ownPoint, ukm), -1, CKR_MECHANISM_PARAM_INVALID,
@@ -2942,6 +2953,11 @@ static void verifyGOSTVKODerive(Module& module, CK_SESSION_HANDLE session)
         check(vkoDerive(module, session, baseKey512, vkoDeriveParameter(CKD_NULL, devicePoint, ukm),
                         pluginTemplate, pluginCount, key, "a 64-byte point with a 512-bit key"),
               CKR_ARGUMENTS_BAD, "C_DeriveKey(CKM_GOSTR3410_12_DERIVE, 512-bit key, 64-byte point)");
+        if (key != CK_INVALID_HANDLE) fail("a refused CKM_GOSTR3410_12_DERIVE returned a key");
+        check(vkoDerive(module, session, baseKey512,
+                        vkoDeriveParameter(CKD_CPDIVERSIFY_KDF, devicePoint512, ukm), pluginTemplate,
+                        pluginCount, key, "CKD_CPDIVERSIFY_KDF with a 512-bit key, not read on the device"),
+              CKR_MECHANISM_PARAM_INVALID, "C_DeriveKey(CKM_GOSTR3410_12_DERIVE, 512-bit key, CPDIVERSIFY)");
         if (key != CK_INVALID_HANDLE) fail("a refused CKM_GOSTR3410_12_DERIVE returned a key");
         destroyObject(module, session, baseKey512);
     }

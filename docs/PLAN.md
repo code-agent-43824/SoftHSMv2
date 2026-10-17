@@ -253,7 +253,7 @@
          c. [x] тип результата `CKK_GENERIC_SECRET` (длина всегда 32, заданная
             `CKA_VALUE_LEN` не влияет), `CKK_MAGMA`, `CKK_KUZNECHIK`;
          d. [x] UKM 4, 16 и 32 байта — число little-endian;
-         e. `kdf = CKD_CPDIVERSIFY_KDF` — диверсификация RFC 4357 п. 6.5 тем же
+         e. [x] `kdf = CKD_CPDIVERSIFY_KDF` — диверсификация RFC 4357 п. 6.5 тем же
             UKM на CryptoPro-A (замерено для UKM 8 байт и ключа 256);
          f. [x] базовый ключ 512 бит: VKO_GOSTR3410_2012_256, точка 128 байт,
             результат 32 байта;
