@@ -285,11 +285,13 @@ the portable builds compile with warnings-as-errors settings from
   verification. Unit tests are still not among them (see below).
 - `.github/workflows/portable-release.yml` — three stages: six build jobs,
   each making its platform's product and test kit (Linux in an
-  `ubuntu:20.04` container, which sets the glibc 2.31 floor); verification
-  matrices on fresh runners that download both archives and use them as an
-  outside user would (Linux x64/ARM64 on Ubuntu 26.04, Windows
+  `ubuntu:20.04` container, which sets the glibc 2.31 floor); seven
+  verification jobs on fresh runners that download both archives and use them
+  as an outside user would (Linux x64/ARM64 on Ubuntu 26.04, Windows
   x64/x86/ARM64, macOS on Apple silicon and Intel, all with the TLS block
-  required); then the release job.
+  required), each waiting only for its own build, their steps in the reusable
+  `verify-linux.yml`, `verify-windows.yml` and `verify-macos.yml`; then the
+  release job, which waits for all seven.
 
 Portable behaviour is gated by the CMake option `ENABLE_PORTABLE` (default OFF)
 and requires the OpenSSL backend. GOST 2012 is gated by
