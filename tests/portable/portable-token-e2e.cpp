@@ -87,6 +87,7 @@ static const char* rvName(CK_RV rv)
         case CKR_DATA_INVALID: return "CKR_DATA_INVALID";
         case CKR_DATA_LEN_RANGE: return "CKR_DATA_LEN_RANGE";
         case CKR_DEVICE_ERROR: return "CKR_DEVICE_ERROR";
+        case CKR_PUBLIC_KEY_INVALID: return "CKR_PUBLIC_KEY_INVALID";
         case CKR_DEVICE_MEMORY: return "CKR_DEVICE_MEMORY";
         case CKR_DEVICE_REMOVED: return "CKR_DEVICE_REMOVED";
         case CKR_FUNCTION_CANCELED: return "CKR_FUNCTION_CANCELED";
@@ -2735,6 +2736,15 @@ static void verifyGOSTVKODerive(Module& module, CK_SESSION_HANDLE session)
          "the device's answer to the plugin call"},
         {reversedUkm, bytesFromHex("6c9b33da09d30b0a28ddb26bada8e3afb074a796b99736b8170e5b942833d5d2"),
          "the device's answer with the UKM reversed"},
+        {bytesFromHex("01020304"),
+         bytesFromHex("0867b643fa2efac5c9c30ef041e069d73059d2b889b42b87a897c6076cd20dd9"),
+         "the device's answer with a 4-byte UKM"},
+        {bytesFromHex("0102030405060708090a0b0c0d0e0f10"),
+         bytesFromHex("60ab8d4f645b4bae95120fa656a3afb5a274f5b840294c90dc76d7f3316e6669"),
+         "the device's answer with a 16-byte UKM"},
+        {bytesFromHex("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"),
+         bytesFromHex("418b20db8fb56d3717e206d5072c050ee182f4c0997284acabaac5cf9c5daa13"),
+         "the device's answer with a 32-byte UKM"},
     };
     for (const auto& answer : deviceAnswers)
     {
@@ -2847,25 +2857,93 @@ static void verifyGOSTVKODerive(Module& module, CK_SESSION_HANDLE session)
           CKR_OK, "C_DeriveKey(B, A)");
     if (attribute(module, session, keyAB, CKA_VALUE) != attribute(module, session, keyBA, CKA_VALUE))
         fail("CKM_GOSTR3410_12_DERIVE gives the two parties different keys");
+    // A public key is refused for its type before its CKA_DERIVE is read.
+    check(vkoDerive(module, session, publicA, vkoDeriveParameter(CKD_NULL, ownPoint, ukm),
+                    pluginTemplate, pluginCount, key, "a public base key"),
+          CKR_KEY_TYPE_INCONSISTENT, "C_DeriveKey(CKM_GOSTR3410_12_DERIVE, public base key)");
     for (CK_OBJECT_HANDLE object : {keyAB, keyBA, publicA, privateA, publicB, privateB})
         destroyObject(module, session, object);
 
-    // What the trace does not show is refused, not guessed.
-    const struct { CK_ULONG kdf; Bytes point; Bytes ukm; bool truncate; const char* what; } refusals[] = {
-        {CKD_SHA1_KDF, ownPoint, ukm, false, "another KDF"},
-        {CKD_NULL, ownPoint, bytesFromHex("000102030405060708090a0b0c0d0e0f"), false, "a 16-byte UKM"},
-        {CKD_NULL, ownPoint, bytesFromHex("0000000000000000"), false, "a zero UKM"},
-        {CKD_NULL, Bytes(ownPoint.begin(), ownPoint.begin() + 32), ukm, false, "a 32-byte point"},
-        {CKD_NULL, ownPoint, ukm, true, "a buffer one byte short"},
+    // What the device was not read for is refused, not guessed; what it
+    // refuses gets its codes.
+    Bytes offCurve = ownPoint;
+    offCurve[0] ^= 1;
+    Bytes zeroLengthPoint = bytesFromHex("0100000000000000");
+    zeroLengthPoint.resize(40, 0);
+    Bytes point128 = devicePoint;
+    append(point128, devicePoint);
+    const struct { Bytes parameter; int lengthChange; CK_RV rv; const char* what; } refusals[] = {
+        {vkoDeriveParameter(0, ownPoint, ukm), 0, CKR_MECHANISM_PARAM_INVALID, "kdf 0"},
+        {vkoDeriveParameter(CKD_SHA1_KDF, ownPoint, ukm), 0, CKR_MECHANISM_PARAM_INVALID, "CKD_SHA1_KDF"},
+        {vkoDeriveParameter(CKD_NULL, ownPoint, Bytes()), 0, CKR_MECHANISM_PARAM_INVALID, "an empty UKM"},
+        {vkoDeriveParameter(CKD_NULL, ownPoint, bytesFromHex("0000000000000000")), 0,
+         CKR_MECHANISM_PARAM_INVALID, "a zero UKM"},
+        {vkoDeriveParameter(CKD_NULL, ownPoint, bytesFromHex("0102030405")), 0,
+         CKR_MECHANISM_PARAM_INVALID, "a 5-byte UKM, not read on the device"},
+        {vkoDeriveParameter(CKD_NULL, Bytes(ownPoint.begin(), ownPoint.begin() + 32), ukm), 0,
+         CKR_MECHANISM_PARAM_INVALID, "a 32-byte point"},
+        {vkoDeriveParameter(CKD_NULL, ownPoint, ukm), -1, CKR_MECHANISM_PARAM_INVALID,
+         "a buffer one byte short"},
+        {vkoDeriveParameter(CKD_NULL, ownPoint, ukm), 1, CKR_MECHANISM_PARAM_INVALID,
+         "a buffer one byte long"},
+        {Bytes(), 0, CKR_MECHANISM_PARAM_INVALID, "no parameter"},
+        {vkoDeriveParameter(CKD_NULL, point128, ukm), 0,
+         CKR_ARGUMENTS_BAD, "a 128-byte point with a 256-bit key"},
+        {zeroLengthPoint, 0, CKR_PUBLIC_KEY_INVALID, "a point length of zero, as a structure reads"},
+        {vkoDeriveParameter(CKD_NULL, offCurve, ukm), 0, CKR_DEVICE_ERROR, "a point off the curve"},
     };
     for (const auto& refusal : refusals)
     {
-        Bytes parameter = vkoDeriveParameter(refusal.kdf, refusal.point, refusal.ukm);
-        if (refusal.truncate) parameter.pop_back();
+        Bytes parameter = refusal.parameter;
+        if (refusal.lengthChange < 0) parameter.pop_back();
+        if (refusal.lengthChange > 0) parameter.push_back(0);
         check(vkoDerive(module, session, baseKey, parameter, pluginTemplate, pluginCount, key,
                         refusal.what),
-              CKR_MECHANISM_PARAM_INVALID, "C_DeriveKey(CKM_GOSTR3410_12_DERIVE, refused parameter)");
+              refusal.rv, (std::string("C_DeriveKey(CKM_GOSTR3410_12_DERIVE, ") + refusal.what + ")").c_str());
         if (key != CK_INVALID_HANDLE) fail("a refused CKM_GOSTR3410_12_DERIVE returned a key");
+    }
+
+    // A 512-bit base key: VKO_GOSTR3410_2012_256 over a 128-byte point, 32
+    // bytes out. The device derived with its key and the TC26 512-bit sample
+    // point; the sample key with the device's point gives the same value.
+    {
+        const Bytes privateValue512 = bytesFromHex(
+            "12fd7a70067479a0f66c59f9a25534adfbc7abfd3cc72d79806f8b402601644b"
+            "3005ed365a2d8989a8ccae640d5fc08dd27dfbbfe137cf528e1ac6d445192e01");
+        const Bytes devicePoint512 = bytesFromHex(
+            "2b72958e57de193ee1b22fe76bb73f4b54efa68187853c31756fc81ae4f06f3b"
+            "e34459a6710069a1581494bb071b3eed7cda167cdc8fb2c0b56c926824b3abf7"
+            "fc4ef4d15d19676eb71d549d82ede9f4694c8db4784d75754e88c1a65d39abd5"
+            "d68e8cd8488bd133eabc96cd77f7834d3c48bc827c1a936bcaca4113dea634b8");
+        Bytes curve512C = bytesFromHex("06092a8503070102010203");
+        Bytes digest512 = bytesFromHex("06082a85030701010203");
+        CK_KEY_TYPE gost512Type = CKK_GOSTR3410_512;
+        Bytes privateCopy512 = privateValue512;
+        CK_ATTRIBUTE template512[] = {
+            {CKA_CLASS, &privateClass, sizeof(privateClass)},
+            {CKA_KEY_TYPE, &gost512Type, sizeof(gost512Type)},
+            {CKA_TOKEN, &no, sizeof(no)},
+            {CKA_PRIVATE, &yes, sizeof(yes)},
+            {CKA_DERIVE, &yes, sizeof(yes)},
+            {CKA_VALUE, privateCopy512.data(), static_cast<CK_ULONG>(privateCopy512.size())},
+            {CKA_GOSTR3410_PARAMS, curve512C.data(), static_cast<CK_ULONG>(curve512C.size())},
+            {CKA_GOSTR3411_PARAMS, digest512.data(), static_cast<CK_ULONG>(digest512.size())}
+        };
+        const CK_OBJECT_HANDLE baseKey512 = createObject(
+            module, session, "GOST VKO 512-bit private-key vector", template512,
+            sizeof(template512) / sizeof(template512[0]));
+        check(vkoDerive(module, session, baseKey512, vkoDeriveParameter(CKD_NULL, devicePoint512, ukm),
+                        pluginTemplate, pluginCount, key, "a 512-bit key with the device's point"),
+              CKR_OK, "C_DeriveKey(CKM_GOSTR3410_12_DERIVE, 512-bit key)");
+        if (attribute(module, session, key, CKA_VALUE) !=
+            bytesFromHex("85698c31664115a6fcd15203f89f8ccb7d27a7a46417c45fa51b43df2fa8be7b"))
+            fail("CKM_GOSTR3410_12_DERIVE does not give the device's answer for a 512-bit key");
+        destroyObject(module, session, key);
+        check(vkoDerive(module, session, baseKey512, vkoDeriveParameter(CKD_NULL, devicePoint, ukm),
+                        pluginTemplate, pluginCount, key, "a 64-byte point with a 512-bit key"),
+              CKR_ARGUMENTS_BAD, "C_DeriveKey(CKM_GOSTR3410_12_DERIVE, 512-bit key, 64-byte point)");
+        if (key != CK_INVALID_HANDLE) fail("a refused CKM_GOSTR3410_12_DERIVE returned a key");
+        destroyObject(module, session, baseKey512);
     }
     CK_ULONG wrongLength = 64;
     CK_ATTRIBUTE longTemplate[] = {

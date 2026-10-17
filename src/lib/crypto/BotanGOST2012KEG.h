@@ -37,6 +37,11 @@ public:
 	                   const ByteString& publicValue,
 	                   const ByteString& ukm,
 	                   ByteString& key);
+
+	// Whether the little-endian X || Y is a valid point of the curve: the
+	// VKO derive refuses an invalid one with its own code, as the device does.
+	static bool isPeerPointValid(const ByteString& encodedCurveOID,
+	                             const ByteString& publicValue);
 };
 
 #endif // !_SOFTHSM_V2_BOTANGOST2012KEG_H

@@ -89,6 +89,23 @@ Botan::secure_vector<uint8_t> hmacStreebog256(
 	return outer->final();
 }
 
+// PKCS #11 carries GOST coordinates as little-endian X || Y, while Botan's
+// uncompressed point encoding is 0x04 || X || Y, big-endian. Throws, as
+// OS2ECP does, if the point is not on the curve.
+Botan::PointGFp peerPoint(const Botan::EC_Group& group, const ByteString& publicValue)
+{
+	const size_t fieldBytes = publicValue.size() / 2;
+	std::vector<uint8_t> encodedPoint(1 + 2 * fieldBytes);
+	encodedPoint[0] = 0x04;
+	const unsigned char* publicBytes = publicValue.const_byte_str();
+	for (size_t i = 0; i < fieldBytes; ++i)
+	{
+		encodedPoint[1 + i] = publicBytes[fieldBytes - 1 - i];
+		encodedPoint[1 + fieldBytes + i] = publicBytes[2 * fieldBytes - 1 - i];
+	}
+	return group.OS2ECP(encodedPoint);
+}
+
 // The point K(x, y, UKM) of RFC 7836, 4.3.1, as the little-endian X || Y that
 // VKO hashes: what KEG and the bare VKO derive share. The caller has already
 // checked the lengths; this checks the curve, the scalar and the peer point.
@@ -129,17 +146,7 @@ bool agreementPoint(const ByteString& encodedCurveOID,
 		return false;
 	}
 
-	// PKCS #11 carries GOST coordinates as little-endian X || Y, while
-	// Botan's uncompressed point encoding is 0x04 || X || Y, big-endian.
-	std::vector<uint8_t> encodedPoint(1 + 2 * fieldBytes);
-	encodedPoint[0] = 0x04;
-	const unsigned char* publicBytes = publicValue.const_byte_str();
-	for (size_t i = 0; i < fieldBytes; ++i)
-	{
-		encodedPoint[1 + i] = publicBytes[fieldBytes - 1 - i];
-		encodedPoint[1 + fieldBytes + i] = publicBytes[2 * fieldBytes - 1 - i];
-	}
-	const Botan::PointGFp peer = group.OS2ECP(encodedPoint);
+	const Botan::PointGFp peer = peerPoint(group, publicValue);
 	if (!group.verify_public_element(peer))
 	{
 		ERROR_MSG("GOST VKO received an invalid peer public point");
@@ -329,4 +336,20 @@ bool BotanGOST2012KEG::vko256(const ByteString& encodedCurveOID,
 
 	key.wipe();
 	return false;
+}
+
+bool BotanGOST2012KEG::isPeerPointValid(const ByteString& encodedCurveOID,
+	                                    const ByteString& publicValue)
+{
+	try
+	{
+		if (!BotanGOSTCurves::supported(encodedCurveOID)) return false;
+		const Botan::EC_Group group = BotanGOSTCurves::group(encodedCurveOID);
+		if (publicValue.size() != 2 * group.get_p().bytes()) return false;
+		return group.verify_public_element(peerPoint(group, publicValue));
+	}
+	catch (...)
+	{
+		return false;
+	}
 }

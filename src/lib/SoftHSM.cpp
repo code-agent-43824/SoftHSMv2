@@ -10359,6 +10359,24 @@ CK_RV SoftHSM::C_DeriveKey
 		return rv;
 	}
 
+#ifdef WITH_GOST_3410_2012_256
+	// The VKO derive takes a GOST R 34.10-2012 private key of either length,
+	// and, as on the reference Rutoken, refuses any other base key for its
+	// type before it looks at CKA_DERIVE.
+	if (pMechanism->mechanism == CKM_GOSTR3410_12_DERIVE)
+	{
+		const CK_KEY_TYPE baseType = key->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED);
+		const bool baseIsGOST = baseType == CKK_GOSTR3410
+#ifdef WITH_GOST_3410_2012_512
+		                        || baseType == CKK_GOSTR3410_512
+#endif
+		                        ;
+		if (key->getUnsignedLongValue(CKA_CLASS, CKO_VENDOR_DEFINED) != CKO_PRIVATE_KEY ||
+		    !baseIsGOST)
+			return CKR_KEY_TYPE_INCONSISTENT;
+	}
+#endif
+
 	// Check if key can be used for derive
 	if (!key->getBooleanValue(CKA_DERIVE, false))
 		return CKR_KEY_FUNCTION_NOT_PERMITTED;
@@ -10466,15 +10484,8 @@ CK_RV SoftHSM::C_DeriveKey
 		                           ulCount, phKey, isOnToken, isPrivate);
 	}
 	if (pMechanism->mechanism == CKM_GOSTR3410_12_DERIVE)
-	{
-		// Only the 256-bit key the plugin's trace shows; what the device does
-		// with a 512-bit one has not been read (docs/PLAN.md).
-		if (key->getUnsignedLongValue(CKA_CLASS, CKO_VENDOR_DEFINED) != CKO_PRIVATE_KEY ||
-		    key->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED) != CKK_GOSTR3410)
-			return CKR_KEY_TYPE_INCONSISTENT;
 		return this->deriveGOSTVKO(hSession, pMechanism, hBaseKey, pTemplate,
 		                           ulCount, phKey, keyType, isOnToken, isPrivate);
-	}
 #endif
 
 #if defined(WITH_ECC) || defined(WITH_EDDSA)
@@ -14990,10 +15001,19 @@ CK_RV SoftHSM::deriveGOSTVKO
 		       ((CK_ULONG)parameter[offset + 2] << 16) | ((CK_ULONG)parameter[offset + 3] << 24);
 	};
 	const CK_ULONG kdf = readLength(0);
+	if (kdf != CKD_NULL) return CKR_MECHANISM_PARAM_INVALID;
 	const CK_ULONG publicLen = readLength(4);
-	if (publicLen != 64 || parameterLen < 12 + publicLen) return CKR_MECHANISM_PARAM_INVALID;
+	// The device reads a CK_GOSTR3410_DERIVE_PARAMS structure as this buffer,
+	// finds a point length of zero and answers CKR_PUBLIC_KEY_INVALID.
+	if (publicLen == 0) return CKR_PUBLIC_KEY_INVALID;
+	if ((publicLen != 64 && publicLen != 128) || parameterLen < 12 + publicLen)
+		return CKR_MECHANISM_PARAM_INVALID;
+	// The UKM is a little-endian number; the device was read with 4, 8, 16
+	// and 32 bytes of it, and other lengths stay refused until it is read
+	// with them too.
 	const CK_ULONG ukmLen = readLength(8 + publicLen);
-	if (kdf != CKD_NULL || ukmLen != 8 || parameterLen != 12 + publicLen + ukmLen)
+	if ((ukmLen != 4 && ukmLen != 8 && ukmLen != 16 && ukmLen != 32) ||
+	    parameterLen != 12 + publicLen + ukmLen)
 		return CKR_MECHANISM_PARAM_INVALID;
 
 	// The device creates no token object with this derive.
@@ -15030,12 +15050,19 @@ CK_RV SoftHSM::deriveGOSTVKO
 	BotanGOST2012PrivateKey privateKey;
 	CK_RV rv = getGOSTPrivateKey(&privateKey, token, baseKey);
 	if (rv != CKR_OK) return rv;
+	// A point of the other key length, and a point off the curve, get the
+	// device's answers.
 	if (privateKey.getD().size() * 2 != publicLen)
 	{
 		privateKey.setD(ByteString());
-		return CKR_MECHANISM_PARAM_INVALID;
+		return CKR_ARGUMENTS_BAD;
 	}
 	ByteString publicValue(parameter + 8, publicLen);
+	if (!BotanGOST2012KEG::isPeerPointValid(privateKey.getEC(), publicValue))
+	{
+		privateKey.setD(ByteString());
+		return CKR_DEVICE_ERROR;
+	}
 	ByteString ukm(parameter + 12 + publicLen, ukmLen);
 	ByteString key;
 	if (!BotanGOST2012KEG::vko256(privateKey.getEC(), privateKey.getD(),

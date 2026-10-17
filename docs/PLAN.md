@@ -252,12 +252,12 @@
          b. [x] `CKA_TOKEN` TRUE — `CKR_TEMPLATE_INCONSISTENT`;
          c. [x] тип результата `CKK_GENERIC_SECRET` (длина всегда 32, заданная
             `CKA_VALUE_LEN` не влияет), `CKK_MAGMA`, `CKK_KUZNECHIK`;
-         d. UKM 4, 16 и 32 байта — число little-endian;
+         d. [x] UKM 4, 16 и 32 байта — число little-endian;
          e. `kdf = CKD_CPDIVERSIFY_KDF` — диверсификация RFC 4357 п. 6.5 тем же
             UKM на CryptoPro-A (замерено для UKM 8 байт и ключа 256);
-         f. базовый ключ 512 бит: VKO_GOSTR3410_2012_256, точка 128 байт,
+         f. [x] базовый ключ 512 бит: VKO_GOSTR3410_2012_256, точка 128 байт,
             результат 32 байта;
-         g. коды отказа: длина точки не под ключ — `CKR_ARGUMENTS_BAD`, длина
+         g. [x] коды отказа: длина точки не под ключ — `CKR_ARGUMENTS_BAD`, длина
             0 — `CKR_PUBLIC_KEY_INVALID`, точка не на кривой —
             `CKR_DEVICE_ERROR`, открытый ключ как базовый —
             `CKR_KEY_TYPE_INCONSISTENT` до проверки `CKA_DERIVE`;
