@@ -1525,11 +1525,14 @@ extern "C" {
 #define CKR_MUTEX_NOT_LOCKED                    (0x1a1UL)
 #define CKR_NEW_PIN_MODE                        (0x1b0UL)
 #define CKR_NEXT_OTP                            (0x1b1UL)
-#define CKR_EXCEEDED_MAX_ITERATIONS             (0x1c0UL)
-#define CKR_FIPS_SELF_TEST_FAILED               (0x1c1UL)
-#define CKR_LIBRARY_LOAD_FAILED                 (0x1c2UL)
-#define CKR_PIN_TOO_WEAK                        (0x1c3UL)
-#define CKR_PUBLIC_KEY_INVALID                  (0x1c4UL)
+/* The values OASIS PKCS #11 v2.40 and later assign; this header carried them
+ * as 0x1c0-0x1c4. The reference Rutoken answers 0x1b9, CKR_PUBLIC_KEY_INVALID
+ * (docs/JOURNAL.md, 17 October 2026). */
+#define CKR_EXCEEDED_MAX_ITERATIONS             (0x1b5UL)
+#define CKR_FIPS_SELF_TEST_FAILED               (0x1b6UL)
+#define CKR_LIBRARY_LOAD_FAILED                 (0x1b7UL)
+#define CKR_PIN_TOO_WEAK                        (0x1b8UL)
+#define CKR_PUBLIC_KEY_INVALID                  (0x1b9UL)
 #define CKR_FUNCTION_REJECTED                   (0x200UL)
 #define CKR_TOKEN_RESOURCE_EXCEEDED             (0x201UL)
 #define CKR_OPERATION_CANCEL_FAILED             (0x202UL)
