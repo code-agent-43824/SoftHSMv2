@@ -76,23 +76,9 @@ if ($ActualJomHash -ne $JomSha256) {
 Expand-Archive -LiteralPath $JomArchive -DestinationPath $JomDir -Force
 $Jom = Join-Path $JomDir "jom.exe"
 
-Push-Location $OpenSSLSource
-$PreviousCl = $env:CL
-try {
-    perl Configure $OpenSSLTarget no-shared no-module no-tests no-asm "--prefix=$OpenSSLPrefix" "--libdir=lib"
-    if ($LASTEXITCODE -ne 0) { throw "OpenSSL configure failed" }
-    $env:CL = ("$PreviousCl /FS").Trim()
-    & $Jom /J $env:NUMBER_OF_PROCESSORS
-    if ($LASTEXITCODE -ne 0) { throw "OpenSSL build failed" }
-    nmake install_sw install_ssldirs
-    if ($LASTEXITCODE -ne 0) { throw "OpenSSL install failed" }
-}
-finally {
-    if ($null -eq $PreviousCl) { Remove-Item Env:CL -ErrorAction SilentlyContinue }
-    else { $env:CL = $PreviousCl }
-    Pop-Location
-}
-
+# Botan does not depend on OpenSSL, so it builds alongside it: its jom runs
+# as a separate process while OpenSSL's single-threaded stretches - Configure,
+# generated files, the final links - leave cores idle.
 $BotanUrl = "https://botan.randombit.net/releases/Botan-$($env:BOTAN_VERSION).tar.xz"
 Invoke-WebRequest -Uri $BotanUrl -OutFile $BotanArchive
 $ActualBotanHash = (Get-FileHash -Algorithm SHA256 $BotanArchive).Hash.ToLowerInvariant()
@@ -107,11 +93,47 @@ python (Join-Path $BotanSource "configure.py") --cc=msvc --os=windows --cpu=$Bot
 if ($LASTEXITCODE -ne 0) { throw "Botan configure failed" }
 # Botan's makefile is in nmake syntax too, and jom runs it in parallel; its
 # objects carry no debug information, so no PDB is shared and /FS is not
-# needed.
-& $Jom /J $env:NUMBER_OF_PROCESSORS /f (Join-Path $BotanBuild "Makefile") libs
-if ($LASTEXITCODE -ne 0) { throw "Botan build failed" }
+# needed. It starts before CL is changed for OpenSSL below.
+$BotanOut = Join-Path $WorkDir "botan-build.out.log"
+$BotanErr = Join-Path $WorkDir "botan-build.err.log"
+$BotanProcess = Start-Process -FilePath $Jom -NoNewWindow -PassThru `
+    -WorkingDirectory (Get-Location).Path `
+    -RedirectStandardOutput $BotanOut -RedirectStandardError $BotanErr `
+    -ArgumentList @("/J", $env:NUMBER_OF_PROCESSORS, "/f", "`"$(Join-Path $BotanBuild 'Makefile')`"", "libs")
+# Windows PowerShell reports a started process's exit code only if its
+# handle was taken while it ran.
+$null = $BotanProcess.Handle
+$BotanStarted = [DateTime]::UtcNow
+Write-Host "[BUILD] Botan build started in the background"
+
+Push-Location $OpenSSLSource
+$PreviousCl = $env:CL
+$OpenSSLBuilt = $false
+try {
+    perl Configure $OpenSSLTarget no-shared no-module no-tests no-asm "--prefix=$OpenSSLPrefix" "--libdir=lib"
+    if ($LASTEXITCODE -ne 0) { throw "OpenSSL configure failed" }
+    $env:CL = ("$PreviousCl /FS").Trim()
+    & $Jom /J $env:NUMBER_OF_PROCESSORS
+    if ($LASTEXITCODE -ne 0) { throw "OpenSSL build failed" }
+    nmake install_sw install_ssldirs
+    if ($LASTEXITCODE -ne 0) { throw "OpenSSL install failed" }
+    $OpenSSLBuilt = $true
+}
+finally {
+    if ($null -eq $PreviousCl) { Remove-Item Env:CL -ErrorAction SilentlyContinue }
+    else { $env:CL = $PreviousCl }
+    Pop-Location
+    if (-not $OpenSSLBuilt -and -not $BotanProcess.HasExited) { Stop-Process -Id $BotanProcess.Id -Force }
+}
+
+$BotanProcess.WaitForExit()
+Get-Content -LiteralPath $BotanOut, $BotanErr | Write-Host
+Write-Host ("[BUILD] Botan build ran from {0:HH:mm:ss} to {1:HH:mm:ss} UTC, exit code {2}" -f
+    $BotanStarted, $BotanProcess.ExitTime.ToUniversalTime(), $BotanProcess.ExitCode)
+if ($BotanProcess.ExitCode -ne 0) { throw "Botan build failed" }
 $BotanLibrary = Get-ChildItem -Path $BotanBuild -Filter "botan*.lib" | Select-Object -First 1
 if (-not $BotanLibrary) { throw "Botan static library was not produced" }
+Write-Host "[BUILD] OpenSSL and Botan built"
 
 cmake -S $RootDir -B $BuildDir -A $CMakeArch `
     -DCMAKE_BUILD_TYPE=Release `
