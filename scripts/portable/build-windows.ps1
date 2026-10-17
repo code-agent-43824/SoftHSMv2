@@ -105,7 +105,10 @@ python (Join-Path $BotanSource "configure.py") --cc=msvc --os=windows --cpu=$Bot
     --msvc-runtime=MT --disable-shared --minimized-build --enable-modules=streebog,gost_3410,emsa_raw `
     --without-documentation "--with-build-dir=$BotanBuild"
 if ($LASTEXITCODE -ne 0) { throw "Botan configure failed" }
-nmake /f (Join-Path $BotanBuild "Makefile") libs
+# Botan's makefile is in nmake syntax too, and jom runs it in parallel; its
+# objects carry no debug information, so no PDB is shared and /FS is not
+# needed.
+& $Jom /J $env:NUMBER_OF_PROCESSORS /f (Join-Path $BotanBuild "Makefile") libs
 if ($LASTEXITCODE -ne 0) { throw "Botan build failed" }
 $BotanLibrary = Get-ChildItem -Path $BotanBuild -Filter "botan*.lib" | Select-Object -First 1
 if (-not $BotanLibrary) { throw "Botan static library was not produced" }
