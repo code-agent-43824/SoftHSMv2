@@ -52,16 +52,41 @@ if ($ActualHash -ne $env:OPENSSL_SHA256.ToLowerInvariant()) {
 }
 tar -xzf $OpenSSLArchive -C $WorkDir
 
+# nmake runs OpenSSL's makefile one command at a time; jom, Qt's nmake clone
+# pinned in jom.lock, runs the same makefile in parallel. Every library object
+# is compiled with /Zi into the one ossl_static.pdb, so concurrent cl
+# processes need /FS to share it.
+$JomEntry = @(Get-Content -LiteralPath (Join-Path $RootDir "scripts/portable/jom.lock") |
+    Where-Object { $_ -match '^[0-9a-f]{64}\s' })
+if ($JomEntry.Count -ne 1) { throw "jom.lock must pin exactly one jom archive" }
+$JomSha256, $JomUrl = $JomEntry[0] -split '\s+'
+$JomArchive = Join-Path $WorkDir "jom.zip"
+$JomDir = Join-Path $WorkDir "jom"
+$PreviousProgress = $ProgressPreference
+$ProgressPreference = "SilentlyContinue"
+try { Invoke-WebRequest -Uri $JomUrl -OutFile $JomArchive }
+finally { $ProgressPreference = $PreviousProgress }
+$ActualJomHash = (Get-FileHash -Algorithm SHA256 $JomArchive).Hash.ToLowerInvariant()
+if ($ActualJomHash -ne $JomSha256) {
+    throw "jom checksum mismatch: expected $JomSha256, got $ActualJomHash"
+}
+Expand-Archive -LiteralPath $JomArchive -DestinationPath $JomDir -Force
+$Jom = Join-Path $JomDir "jom.exe"
+
 Push-Location $OpenSSLSource
+$PreviousCl = $env:CL
 try {
     perl Configure $OpenSSLTarget no-shared no-module no-tests no-asm "--prefix=$OpenSSLPrefix" "--libdir=lib"
     if ($LASTEXITCODE -ne 0) { throw "OpenSSL configure failed" }
-    nmake
+    $env:CL = ("$PreviousCl /FS").Trim()
+    & $Jom /J $env:NUMBER_OF_PROCESSORS
     if ($LASTEXITCODE -ne 0) { throw "OpenSSL build failed" }
     nmake install_sw install_ssldirs
     if ($LASTEXITCODE -ne 0) { throw "OpenSSL install failed" }
 }
 finally {
+    if ($null -eq $PreviousCl) { Remove-Item Env:CL -ErrorAction SilentlyContinue }
+    else { $env:CL = $PreviousCl }
     Pop-Location
 }
 

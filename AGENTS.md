@@ -222,7 +222,8 @@ Third-party versions and their SHA-256 pins live in `.github/workflows/ci.yml`
 environment and fail without them. The pkcs11-provider build of the TLS block
 is pinned in `scripts/portable/pkcs11-provider.lock`, and the OpenSSL the macOS
 and Windows test kits carry for it in `scripts/portable/conda-openssl.lock`
-and `scripts/portable/msys2-openssl.lock`.
+and `scripts/portable/msys2-openssl.lock`. The Windows build runs OpenSSL's
+makefile with jom, pinned in `scripts/portable/jom.lock`.
 
 | Task | Command |
 | --- | --- |

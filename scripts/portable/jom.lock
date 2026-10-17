@@ -1,0 +1,4 @@
+# jom, Qt's parallel nmake, which runs OpenSSL's Windows makefile in
+# parallel in build-windows.ps1. A build tool only: nothing of it is shipped.
+# Fields: SHA-256 (as published beside the archive), URL.
+4c8af345586a9a08fbfd2f613fcac748226d91a75627aa3581b297dd513046fe  https://download.qt.io/official_releases/jom/jom_1_1_7.zip
