@@ -1,11 +1,7 @@
 # MSYS2 packages of the Windows test kit's TLS block: for each environment the
-# OpenSSL build its pkcs11-provider target is compiled against, and the
-# runtime DLLs the provider imports. Fields: environment, SHA-256, path under
-# https://repo.msys2.org/mingw/.
+# OpenSSL build its pkcs11-provider target is compiled against. The provider
+# links pthread and the GCC runtime statically, so nothing else is needed.
+# Fields: environment, SHA-256, path under https://repo.msys2.org/mingw/.
 ucrt64 773e021ebad83f14b5c103db467411e8ff064663e1c7e7f730e2be72f4117064 ucrt64/mingw-w64-ucrt-x86_64-openssl-3.6.5-1-any.pkg.tar.zst
-ucrt64 a02f5e09d666d3be657c78c86fe67c975d04fe33b5211cd5ff1b23a91c118524 ucrt64/mingw-w64-ucrt-x86_64-libwinpthread-14.0.0.r426.g4564ee4b5-2-any.pkg.tar.zst
 mingw32 55ad858c1409ae964a03c0f2aacb3326fde8c257b00579fd860e7ad030f2a7bf mingw32/mingw-w64-i686-openssl-3.6.5-1-any.pkg.tar.zst
-mingw32 f8418872da24480de128a1647f3407ab5cd3a7b49028c92c5d84ac34ea82c684 mingw32/mingw-w64-i686-libwinpthread-14.0.0.r426.g4564ee4b5-2-any.pkg.tar.zst
-mingw32 7b89855e761f98b16608160771976f12e4075b28224ff9405fcf09ed37ddec44 mingw32/mingw-w64-i686-libgcc-16.2.0-6-any.pkg.tar.zst
 clangarm64 40978ba522b2e2d663029d6a5df7ad6e0e408d334a3590930229167bbc5a5edb clangarm64/mingw-w64-clang-aarch64-openssl-3.6.5-1-any.pkg.tar.zst
-clangarm64 bf46f51956f71e2ecd9492dc74af321a5324c4966301ad4cd979e2d905982ccb clangarm64/mingw-w64-clang-aarch64-libwinpthread-14.0.0.r426.g4564ee4b5-2-any.pkg.tar.zst

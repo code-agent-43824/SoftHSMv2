@@ -47,8 +47,9 @@ openssl command and the provider share its one libcrypto.
 
 Windows: the block carries its OpenSSL in openssl\ as well - the MSYS2
 OpenSSL 3 packages the provider is compiled against (UCRT64 on x64, MINGW32 on
-x86, CLANGARM64 on ARM64; openssl\PACKAGE-SOURCE.txt) with the runtime DLLs
-the provider needs, all in openssl\bin beside openssl.exe and
-tls-client.exe, and the provider at openssl\lib\ossl-modules\pkcs11.dll.
-tls-client.exe is built with MSVC and links the C runtime statically; the
-scripts are run.ps1 and run-tls.ps1.
+x86, CLANGARM64 on ARM64; openssl\PACKAGE-SOURCE.txt) - with its DLLs in
+openssl\bin beside openssl.exe and tls-client.exe, and the provider at
+openssl\lib\ossl-modules\pkcs11.dll. The provider shares OpenSSL's
+libcrypto and carries pthread and the GCC runtime inside itself (their licence
+is in provider\LICENSES). tls-client.exe is built with MSVC and links the C
+runtime statically; the scripts are run.ps1 and run-tls.ps1.

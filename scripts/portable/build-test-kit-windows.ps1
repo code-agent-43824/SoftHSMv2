@@ -354,9 +354,11 @@ $TestKitEnvironment | Set-Content -Encoding ascii (Join-Path $StageDir "testkit.
 # The TLS block (tls\): a TLS client whose key stays in the module under the
 # Rutoken profile, reached through OpenSSL 3 and the owner's pkcs11-provider
 # fork (docs/JOURNAL.md, 17 October 2026). The kit carries that OpenSSL - the
-# MSYS2 build the provider is compiled against (msys2-openssl.lock) - with the
-# provider's runtime DLLs in tls\openssl\bin, where tls-client.exe and
-# openssl.exe load them from; tls-client.exe itself is built here with MSVC.
+# MSYS2 build the provider is compiled against (msys2-openssl.lock) - in
+# tls\openssl\bin, where tls-client.exe and openssl.exe load it from and the
+# provider shares its libcrypto; tls-client.exe itself is built here with MSVC.
+# The provider links pthread and the GCC runtime statically, so OpenSSL's DLLs
+# are all the block needs from MSYS2.
 $TlsDir = Join-Path $StageDir 'tls'
 $TlsOpenSSL = Join-Path $TlsDir 'openssl'
 $TlsBin = Join-Path $TlsOpenSSL 'bin'
@@ -402,24 +404,14 @@ finally { Pop-Location }
 $Msys2Root = Join-Path $TlsWork $Msys2Env
 $ProviderRoot = Join-Path $TlsWork "pkcs11-provider-dev-$ProviderTarget"
 $TlsDlls = @(Get-ChildItem -LiteralPath (Join-Path $Msys2Root 'bin') -File |
-    Where-Object { $_.Name -match '^(libcrypto-3.*|libssl-3.*|libwinpthread-1|libgcc_s_dw2-1)\.dll$' })
+    Where-Object { $_.Name -match '^(libcrypto-3.*|libssl-3.*)\.dll$' })
+if ($TlsDlls.Count -ne 2) { throw "expected libcrypto and libssl in the $Msys2Env OpenSSL package" }
 foreach ($Dll in $TlsDlls) { Copy-Item -LiteralPath $Dll.FullName -Destination $TlsBin }
 Copy-Item -LiteralPath (Join-Path $Msys2Root 'bin/openssl.exe') -Destination $TlsBin
 Copy-Item -LiteralPath (Join-Path $ProviderRoot 'lib/ossl-modules/pkcs11.dll') `
     -Destination (Join-Path $TlsOpenSSL 'lib/ossl-modules/pkcs11.dll')
-foreach ($Needed in @('libwinpthread-1.dll') + @(if ($Msys2Env -eq 'mingw32') { 'libgcc_s_dw2-1.dll' })) {
-    if (-not (Test-Path -LiteralPath (Join-Path $TlsBin $Needed))) { throw "the TLS block lacks $Needed" }
-}
 Copy-Item -LiteralPath (Join-Path $Msys2Root 'share/licenses/openssl/LICENSE') `
     -Destination (Join-Path $TlsOpenSSL 'LICENSE-OpenSSL.txt')
-Copy-Item -LiteralPath (Join-Path $Msys2Root 'share/licenses/libwinpthread/COPYING') `
-    -Destination (Join-Path $TlsOpenSSL 'LICENSE-libwinpthread.txt')
-if ($Msys2Env -eq 'mingw32') {
-    Copy-Item -LiteralPath (Join-Path $Msys2Root 'share/licenses/libgcc/COPYING.RUNTIME') `
-        -Destination (Join-Path $TlsOpenSSL 'LICENSE-libgcc-RUNTIME.txt')
-    Copy-Item -LiteralPath (Join-Path $Msys2Root 'share/licenses/libgcc/COPYING3') `
-        -Destination (Join-Path $TlsOpenSSL 'LICENSE-libgcc-GPL3.txt')
-}
 ($Msys2Packages | ForEach-Object { $Fields = $_ -split '\s+'; "MSYS2 $($Fields[2]) $($Fields[1])" }) |
     Set-Content -Encoding ascii (Join-Path $TlsOpenSSL 'PACKAGE-SOURCE.txt')
 Copy-Item -LiteralPath (Join-Path $ProviderRoot 'COPYING') -Destination (Join-Path $TlsDir 'provider/COPYING')
@@ -452,10 +444,22 @@ if (Test-Path -LiteralPath (Join-Path $Msys2Root 'include/openssl/applink.c')) {
 }
 & cl @TlsCompile
 if ($LASTEXITCODE -ne 0) { throw "tls-client compile failed" }
+# Every binary of the block has the kit's machine type, and every non-system
+# DLL it imports - MSYS2's are the lib*.dll ones - is in tls\openssl\bin,
+# where Windows looks first.
 foreach ($Binary in @($TlsClient, (Join-Path $TlsBin 'openssl.exe'),
         (Join-Path $TlsOpenSSL 'lib/ossl-modules/pkcs11.dll')) + @($TlsDlls | ForEach-Object { Join-Path $TlsBin $_.Name })) {
     if (-not (& dumpbin /headers $Binary | Select-String -Pattern $ExpectedMachinePattern)) {
         throw "$Binary does not have the expected $($env:PORTABLE_ARCH) PE machine type"
+    }
+    $Imports = @(& dumpbin /nologo /dependents $Binary | ForEach-Object {
+        if ($_ -match '^\s+(\S+\.dll)\s*$') { $Matches[1] }
+    })
+    if ($Imports.Count -eq 0) { throw "no imports read from $Binary" }
+    foreach ($Import in @($Imports | Where-Object { $_ -like 'lib*' })) {
+        if (-not (Test-Path -LiteralPath (Join-Path $TlsBin $Import))) {
+            throw "$Binary imports $Import, which the TLS block does not carry"
+        }
     }
 }
 if (& dumpbin /dependents $TlsClient | Select-String -Pattern 'vcruntime|msvcp|ucrtbased' -CaseSensitive:$false) {

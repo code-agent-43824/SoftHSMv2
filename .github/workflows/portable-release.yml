@@ -469,16 +469,10 @@ jobs:
                 zipinfo -1 "$archive" | grep -Fx 'tls/openssl/bin/openssl.exe' >/dev/null
                 zipinfo -1 "$archive" | grep -E '^tls/openssl/bin/libcrypto-3.*\.dll$' >/dev/null
                 zipinfo -1 "$archive" | grep -E '^tls/openssl/bin/libssl-3.*\.dll$' >/dev/null
-                zipinfo -1 "$archive" | grep -Fx 'tls/openssl/bin/libwinpthread-1.dll' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'tls/openssl/lib/ossl-modules/pkcs11.dll' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'tls/openssl/LICENSE-OpenSSL.txt' >/dev/null
-                zipinfo -1 "$archive" | grep -Fx 'tls/openssl/LICENSE-libwinpthread.txt' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'tls/provider/COPYING' >/dev/null
-                case "$(basename "$archive")" in
-                  *-x86.zip)
-                    zipinfo -1 "$archive" | grep -Fx 'tls/openssl/bin/libgcc_s_dw2-1.dll' >/dev/null
-                    zipinfo -1 "$archive" | grep -Fx 'tls/openssl/LICENSE-libgcc-RUNTIME.txt' >/dev/null ;;
-                esac
+                zipinfo -1 "$archive" | grep -Fx 'tls/provider/LICENSES/winpthreads-COPYING' >/dev/null
                 ;;
               softhsm-testkit-*.zip)
                 zipinfo -1 "$archive" | grep -Fx 'softhsm.conf' >/dev/null

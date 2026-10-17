@@ -1,8 +1,8 @@
-tag pkcs11-provider-dev-build-22
-20f595ea95794fd9b1334c89a2d32beb070c2514701622f263c75c2cea6a312d  pkcs11-provider-dev-linux-aarch64-ubuntu24.04.tar.gz
-ce12d46490b00976944193b74dff363193908ad8deda1c997bdbf1be3e697ade  pkcs11-provider-dev-linux-x86_64-ubuntu24.04.tar.gz
-bb51f3d1ca7070dbd557db130387df62f3009368c910c7c9b1a2aaf6393f5efb  pkcs11-provider-dev-macos-arm64-15.tar.gz
-3c7833b03a58a9f3f24d3161c3e10f573e22eb6050edcf30e0f5a84b206159fb  pkcs11-provider-dev-macos-x86_64-15.tar.gz
-56a4aefddbb58394a90dd92111921a204b19587f18904634251774fe427dad49  pkcs11-provider-dev-windows-arm64-clangarm64.tar.gz
-7538c248e5bb34158a988cdf50f33ded50a496fcd74dd5181a0077c1ce1d3782  pkcs11-provider-dev-windows-x86-mingw32.tar.gz
-99f35b7acd7dc03e2020afc62af158a7eeb9aaae55faa31263ebc4b748847187  pkcs11-provider-dev-windows-x86_64-ucrt64.tar.gz
+tag pkcs11-provider-dev-build-24
+e4bef18f417aa0b4bc78ca9ecfda7eb9760df2e6f4229da1663053951dc4740d  pkcs11-provider-dev-linux-aarch64-ubuntu24.04.tar.gz
+17d2fde16ee3a50aab7d859102c77c170a7a233c2013c5d27a52cb5045ba9ed1  pkcs11-provider-dev-linux-x86_64-ubuntu24.04.tar.gz
+a428b6307660be06301502f2c5da9e2e2451ddc32d4ad75a533dd670b938c1f1  pkcs11-provider-dev-macos-arm64-15.tar.gz
+882302831dcc11bf54b62d932698ee440328fce2b71004d010b288b3d25feaaf  pkcs11-provider-dev-macos-x86_64-15.tar.gz
+79468d230aff5c447bb274fb8eedbc3e3e3f3febb4375ba97cc74edc98a5e3f5  pkcs11-provider-dev-windows-arm64-clangarm64.tar.gz
+d332d8920a85f7e897c1325c66589513e48bf547177b717b985dadd23b4684a4  pkcs11-provider-dev-windows-x86-mingw32.tar.gz
+0272e2fb236dfa58f9a6d7ff78479dd135d2d1e29a394786fdcc1271e216b2cd  pkcs11-provider-dev-windows-x86_64-ucrt64.tar.gz
