@@ -1,5 +1,8 @@
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+# Windows PowerShell redraws Invoke-WebRequest's progress bar for every chunk
+# it receives, which slows the downloads below several times over.
+$ProgressPreference = "SilentlyContinue"
 
 if (-not $env:PORTABLE_ARCH) { throw "PORTABLE_ARCH is required" }
 if (-not $env:OPENSSL_VERSION) { throw "OPENSSL_VERSION is required" }
@@ -50,7 +53,10 @@ $ActualHash = (Get-FileHash -Algorithm SHA256 $OpenSSLArchive).Hash.ToLowerInvar
 if ($ActualHash -ne $env:OPENSSL_SHA256.ToLowerInvariant()) {
     throw "OpenSSL checksum mismatch: expected $($env:OPENSSL_SHA256), got $ActualHash"
 }
+# The log's timestamps on these lines time the download and the unpacking.
+Write-Host "[BUILD] OpenSSL source downloaded and verified"
 tar -xzf $OpenSSLArchive -C $WorkDir
+Write-Host "[BUILD] OpenSSL source unpacked"
 
 # nmake runs OpenSSL's makefile one command at a time; jom, Qt's nmake clone
 # pinned in jom.lock, runs the same makefile in parallel. Every library object
@@ -62,10 +68,7 @@ if ($JomEntry.Count -ne 1) { throw "jom.lock must pin exactly one jom archive" }
 $JomSha256, $JomUrl = $JomEntry[0] -split '\s+'
 $JomArchive = Join-Path $WorkDir "jom.zip"
 $JomDir = Join-Path $WorkDir "jom"
-$PreviousProgress = $ProgressPreference
-$ProgressPreference = "SilentlyContinue"
-try { Invoke-WebRequest -Uri $JomUrl -OutFile $JomArchive }
-finally { $ProgressPreference = $PreviousProgress }
+Invoke-WebRequest -Uri $JomUrl -OutFile $JomArchive
 $ActualJomHash = (Get-FileHash -Algorithm SHA256 $JomArchive).Hash.ToLowerInvariant()
 if ($ActualJomHash -ne $JomSha256) {
     throw "jom checksum mismatch: expected $JomSha256, got $ActualJomHash"
