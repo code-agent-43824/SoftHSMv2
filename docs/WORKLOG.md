@@ -16,6 +16,16 @@ pkcs11-provider; устройство вернуло 0x1b9 как `CKR_PUBLIC_KE
 Из них модуль возвращает только `CKR_FIPS_SELF_TEST_FAILED` — в FIPS-сборке,
 которую форк не выпускает. Локальная портируемая сборка и `prepare` с
 профилем — зелёные.
+**Сделано (a–c).** Результат VKO — `CKK_GOST28147`, `CKK_MAGMA`,
+`CKK_KUZNECHIK` или `CKK_GENERIC_SECRET` с одним значением (у обобщённого
+секрета длина 32 при любой запрошенной); ГОСТ 28147-89 по умолчанию с
+`CKA_DERIVE` TRUE и CryptoPro-A; `CKA_ALWAYS_SENSITIVE` и
+`CKA_NEVER_EXTRACTABLE` — FALSE (`storeDerivedGOSTSecret` получил флаг,
+KEG наследует защиту по-прежнему); `CKA_TOKEN` TRUE —
+`CKR_TEMPLATE_INCONSISTENT`. В `verifyGOSTVKODerive` — значения устройства
+для UKM `01..08` и `08..01`, атрибуты, типы результата, защита и отказ на
+токен. Локально (портируемая сборка): `prepare` с профилем и без,
+`gost28147-modes`, `core-behaviour` — зелёные.
 
 ## 2026-10-17 — ускорение сборки Windows, шаг 4: Botan параллельно с OpenSSL
 

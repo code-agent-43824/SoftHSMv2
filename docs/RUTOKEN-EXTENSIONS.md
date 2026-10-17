@@ -266,9 +266,17 @@ little-endian), длина UKM, UKM. Шаблон — `CKO_SECRET_KEY`, `CKK_GOS
 С 16.10 модуль отвечает ровно на этот вызов (часть 1 задачи в
 `docs/PLAN.md`): VKO_GOSTR3410_2012_256 по RFC 7836, п. 4.3.1 — Стрибог-256
 над `X‖Y` в обратном порядке байт точки `(кофактор·UKM·d)·Q`, UKM как число
-little-endian; результат — 32 байта, `CKK_GOST28147`, без `CKA_VALUE_LEN`.
-Механизм, как и `CKM_GOST_KEG`, к профилю не привязан; `C_GetMechanismInfo` —
-`CKF_DERIVE`, размеры 0.
+little-endian; результат — 32 байта. Механизм, как и `CKM_GOST_KEG`, к профилю
+не привязан; `C_GetMechanismInfo` — `CKF_DERIVE`, размеры 0.
+
+Результат — как у Рутокена (проба владельца 17.10, JOURNAL): тип
+`CKK_GOST28147`, `CKK_MAGMA`, `CKK_KUZNECHIK` или `CKK_GENERIC_SECRET`, у всех
+одно и то же 32-байтовое значение; у обобщённого секрета `CKA_VALUE_LEN` 32,
+какую длину ни попроси. Ключ ГОСТ 28147-89 по умолчанию получает
+`CKA_DERIVE = TRUE` и `CKA_GOST28147_PARAMS` CryptoPro-A
+(`06072a850302021f01`). `CKA_ALWAYS_SENSITIVE` и `CKA_NEVER_EXTRACTABLE`
+результата — FALSE, даже если он задан чувствительным или неизвлекаемым.
+Сессионный только: ключ на токене не создаётся.
 
 Всего, чего нет в трассе, модуль пока не принимает:
 
@@ -276,19 +284,21 @@ little-endian; результат — 32 байта, `CKK_GOST28147`, без `CK
 | --- | --- |
 | `kdf` не `CKD_NULL`; открытый ключ не 64 байта; UKM не 8 байт или нулевой; длина буфера не сходится; точка не на кривой | `CKR_MECHANISM_PARAM_INVALID` |
 | базовый ключ — не закрытый ГОСТ-2012-256 | `CKR_KEY_TYPE_INCONSISTENT` |
-| тип результата не `CKK_GOST28147`; `CKK_GOST28147` из другого механизма | `CKR_TEMPLATE_INCONSISTENT` |
-| `CKA_VALUE_LEN` не 32 | `CKR_ATTRIBUTE_VALUE_INVALID` |
+| тип результата не из четырёх выше; `CKK_GOST28147`, `CKK_MAGMA`, `CKK_KUZNECHIK` из другого механизма; `CKA_TOKEN = TRUE` | `CKR_TEMPLATE_INCONSISTENT` |
+| `CKA_VALUE_LEN` не 32 у ключей ГОСТ (у обобщённого секрета — любая) | `CKR_ATTRIBUTE_VALUE_INVALID` |
 | `CKA_VALUE` в шаблоне | `CKR_ATTRIBUTE_READ_ONLY` |
 
-Коды выбраны до данных с устройства. Что на те же случаи отвечает Рутокен,
-снимает проба `rutoken-derive-probe` (`tests/portable/README-derive-probe.txt`);
-привести таблицу к устройству — часть 2.
+Проба `rutoken-derive-probe` (`tests/portable/README-derive-probe.txt`)
+прогнана на устройстве 17.10 (JOURNAL); таблица приводится к его ответам —
+часть 2 в `docs/PLAN.md`.
 
 Сверено: эталон — gost-engine из кита (`openssl pkeyutl -derive -pkeyopt
 ukmhex:…`) на опубликованном ключе ТК 26 (самосогласование VKO(d, d·G)) в
 обоих порядках байт UKM, плюс симметрия на двух сгенерированных парах
-CryptoPro-A. Тест — в команде `prepare` сквозного клиента. **На устройстве
-результат ещё не сверялся.**
+CryptoPro-A, плюс ответы самого Рутокена: проба вырабатывала ключ его ключом
+и точкой образца ТК 26, а тест — ключом образца и точкой токена, что по
+симметрии VKO даёт то же значение. Тест — в команде `prepare` сквозного
+клиента.
 
 ## Что нужно Центру управления Рутокен
 

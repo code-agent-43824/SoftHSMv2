@@ -10399,15 +10399,24 @@ CK_RV SoftHSM::C_DeriveKey
 #ifdef WITH_GOST_3410_2012_256
 	    && keyType != CKK_MAGMA_TWIN_KEY
 	    && keyType != CKK_GOST28147
+	    && keyType != CKK_MAGMA
+	    && keyType != CKK_KUZNECHIK
 #endif
 	   )
 		return CKR_TEMPLATE_INCONSISTENT;
 #ifdef WITH_GOST_3410_2012_256
 	if (keyType == CKK_MAGMA_TWIN_KEY && pMechanism->mechanism != CKM_GOST_KEG)
 		return CKR_TEMPLATE_INCONSISTENT;
-	// The GOST 28147-89 key comes only out of the VKO derive, and the VKO
-	// derive gives only that key: the one result the plugin's trace shows.
-	if ((keyType == CKK_GOST28147) != (pMechanism->mechanism == CKM_GOSTR3410_12_DERIVE))
+	// The VKO derive gives a GOST 28147-89, Magma, Kuznechik or generic
+	// secret key, all with the same 32-byte value, as the reference Rutoken
+	// does (rutoken-derive-probe, docs/JOURNAL.md, 17 October 2026); the first
+	// three come out of no other derive.
+	const bool gostSymmetricResult = keyType == CKK_GOST28147 ||
+	                                 keyType == CKK_MAGMA || keyType == CKK_KUZNECHIK;
+	if (gostSymmetricResult && pMechanism->mechanism != CKM_GOSTR3410_12_DERIVE)
+		return CKR_TEMPLATE_INCONSISTENT;
+	if (pMechanism->mechanism == CKM_GOSTR3410_12_DERIVE &&
+	    !gostSymmetricResult && keyType != CKK_GENERIC_SECRET)
 		return CKR_TEMPLATE_INCONSISTENT;
 #endif
 
@@ -10464,7 +10473,7 @@ CK_RV SoftHSM::C_DeriveKey
 		    key->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED) != CKK_GOSTR3410)
 			return CKR_KEY_TYPE_INCONSISTENT;
 		return this->deriveGOSTVKO(hSession, pMechanism, hBaseKey, pTemplate,
-		                           ulCount, phKey, isOnToken, isPrivate);
+		                           ulCount, phKey, keyType, isOnToken, isPrivate);
 	}
 #endif
 
@@ -14949,7 +14958,7 @@ CK_RV SoftHSM::deriveGOSTKEG
 	privateKey.setD(ByteString());
 
 	rv = storeDerivedGOSTSecret(hSession, pTemplate, ulCount, phKey, isOnToken, isPrivate,
-	                            CKK_MAGMA_TWIN_KEY, twinKey, true, baseKey, token);
+	                            CKK_MAGMA_TWIN_KEY, twinKey, true, baseKey, token, true);
 	twinKey.wipe();
 	return rv;
 }
@@ -14958,8 +14967,8 @@ CK_RV SoftHSM::deriveGOSTKEG
 // decrypt GOST 28147-89 (docs/JOURNAL.md, 16 October 2026). The parameter is
 // not a structure but a flat buffer of little-endian 32-bit lengths: KDF,
 // public-key length, the sender's public key (little-endian X || Y), UKM
-// length, UKM. Only what the trace shows is accepted - CKD_NULL, a 64-byte
-// point, an 8-byte UKM - until the device has been read for the rest.
+// length, UKM. The result is made the way the reference Rutoken makes it
+// (rutoken-derive-probe, docs/JOURNAL.md, 17 October 2026).
 CK_RV SoftHSM::deriveGOSTVKO
 (CK_SESSION_HANDLE hSession,
 	CK_MECHANISM_PTR pMechanism,
@@ -14967,6 +14976,7 @@ CK_RV SoftHSM::deriveGOSTVKO
 	CK_ATTRIBUTE_PTR pTemplate,
 	CK_ULONG ulCount,
 	CK_OBJECT_HANDLE_PTR phKey,
+	CK_KEY_TYPE keyType,
 	CK_BBOOL isOnToken,
 	CK_BBOOL isPrivate)
 {
@@ -14986,10 +14996,15 @@ CK_RV SoftHSM::deriveGOSTVKO
 	if (kdf != CKD_NULL || ukmLen != 8 || parameterLen != 12 + publicLen + ukmLen)
 		return CKR_MECHANISM_PARAM_INVALID;
 
+	// The device creates no token object with this derive.
+	if (isOnToken) return CKR_TEMPLATE_INCONSISTENT;
+	bool hasDerive = false, hasGost28147Params = false;
 	for (CK_ULONG i = 0; i < ulCount; ++i)
 	{
 		if (pTemplate[i].type == CKA_VALUE)
 			return CKR_ATTRIBUTE_READ_ONLY;
+		if (pTemplate[i].type == CKA_DERIVE) hasDerive = true;
+		if (pTemplate[i].type == CKA_GOST28147_PARAMS) hasGost28147Params = true;
 		if (pTemplate[i].type == CKA_VALUE_LEN)
 		{
 			if (pTemplate[i].pValue == NULL_PTR ||
@@ -14998,7 +15013,9 @@ CK_RV SoftHSM::deriveGOSTVKO
 			CK_ULONG requestedValueLen = 0;
 			std::memcpy(&requestedValueLen, pTemplate[i].pValue,
 			            sizeof(requestedValueLen));
-			if (requestedValueLen != 32)
+			// A generic secret is 32 bytes whatever length is asked for,
+			// as on the device; for the GOST keys only 32 has been read.
+			if (keyType != CKK_GENERIC_SECRET && requestedValueLen != 32)
 				return CKR_ATTRIBUTE_VALUE_INVALID;
 		}
 	}
@@ -15029,16 +15046,33 @@ CK_RV SoftHSM::deriveGOSTVKO
 	}
 	privateKey.setD(ByteString());
 
-	// A GOST 28147-89 key object carries no CKA_VALUE_LEN.
-	rv = storeDerivedGOSTSecret(hSession, pTemplate, ulCount, phKey, isOnToken, isPrivate,
-	                            CKK_GOST28147, key, false, baseKey, token);
+	// What the device puts into a GOST 28147-89 key the template leaves
+	// open: CKA_DERIVE TRUE and the CryptoPro-A parameter set.
+	std::vector<CK_ATTRIBUTE> attributes(pTemplate, pTemplate + ulCount);
+	CK_BBOOL derivable = CK_TRUE;
+	static const CK_BYTE cryptoProA[] = { 0x06, 0x07, 0x2a, 0x85, 0x03, 0x02, 0x02, 0x1f, 0x01 };
+	if (keyType == CKK_GOST28147)
+	{
+		if (!hasDerive)
+			attributes.push_back({ CKA_DERIVE, &derivable, sizeof(derivable) });
+		if (!hasGost28147Params)
+			attributes.push_back({ CKA_GOST28147_PARAMS, (CK_VOID_PTR)cryptoProA,
+			                       sizeof(cryptoProA) });
+	}
+	// Only the generic secret carries CKA_VALUE_LEN; the GOST key objects do
+	// not. The device marks the result as neither always sensitive nor never
+	// extractable.
+	rv = storeDerivedGOSTSecret(hSession, attributes.data(), (CK_ULONG)attributes.size(),
+	                            phKey, isOnToken, isPrivate, keyType, key,
+	                            keyType == CKK_GENERIC_SECRET, baseKey, token, false);
 	key.wipe();
 	return rv;
 }
 
 // Create the secret key a GOST derive produced, from the caller's template:
-// not local, sensitivity inherited as PKCS #11 asks, the value encrypted if
-// the key is private. A failure leaves no object behind.
+// not local, sensitivity inherited as PKCS #11 asks if inheritProtection is
+// set (otherwise neither always sensitive nor never extractable), the value
+// encrypted if the key is private. A failure leaves no object behind.
 CK_RV SoftHSM::storeDerivedGOSTSecret
 (CK_SESSION_HANDLE hSession,
 	CK_ATTRIBUTE_PTR pTemplate,
@@ -15050,7 +15084,8 @@ CK_RV SoftHSM::storeDerivedGOSTSecret
 	ByteString& value,
 	bool hasValueLen,
 	OSObject* baseKey,
-	Token* token)
+	Token* token,
+	bool inheritProtection)
 {
 	CK_RV rv = CKR_OK;
 	const CK_ULONG maxAttribs = 32;
@@ -15092,10 +15127,10 @@ CK_RV SoftHSM::storeDerivedGOSTSecret
 		else
 		{
 			bool ok = object->setAttribute(CKA_LOCAL, false);
-			const bool alwaysSensitive =
+			const bool alwaysSensitive = inheritProtection &&
 				baseKey->getBooleanValue(CKA_ALWAYS_SENSITIVE, false) &&
 				object->getBooleanValue(CKA_SENSITIVE, false);
-			const bool neverExtractable =
+			const bool neverExtractable = inheritProtection &&
 				baseKey->getBooleanValue(CKA_NEVER_EXTRACTABLE, true) &&
 				!object->getBooleanValue(CKA_EXTRACTABLE, false);
 			ok = ok && object->setAttribute(CKA_ALWAYS_SENSITIVE, alwaysSensitive);

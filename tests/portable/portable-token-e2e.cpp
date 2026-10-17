@@ -2705,7 +2705,16 @@ static void verifyGOSTVKODerive(Module& module, CK_SESSION_HANDLE session)
         fail("CKM_GOSTR3410_12_DERIVE does not match the gost-engine VKO_GOSTR3410_2012_256 answer");
     if (ulongAttribute(module, session, key, CKA_KEY_TYPE) != CKK_GOST28147)
         fail("CKM_GOSTR3410_12_DERIVE did not create a GOST 28147-89 key");
+    // The attributes the reference Rutoken gives the plugin's key
+    // (rutoken-derive-probe, docs/JOURNAL.md, 17 October 2026).
     requireBooleanAttribute(module, session, key, CKA_LOCAL, CK_FALSE);
+    requireBooleanAttribute(module, session, key, CKA_DERIVE, CK_TRUE);
+    requireBooleanAttribute(module, session, key, CKA_SENSITIVE, CK_FALSE);
+    requireBooleanAttribute(module, session, key, CKA_EXTRACTABLE, CK_TRUE);
+    requireBooleanAttribute(module, session, key, CKA_ALWAYS_SENSITIVE, CK_FALSE);
+    requireBooleanAttribute(module, session, key, CKA_NEVER_EXTRACTABLE, CK_FALSE);
+    if (attribute(module, session, key, CKA_GOST28147_PARAMS) != bytesFromHex("06072a850302021f01"))
+        fail("CKM_GOSTR3410_12_DERIVE did not give the GOST 28147-89 key the CryptoPro-A parameter set");
     destroyObject(module, session, key);
     check(vkoDerive(module, session, baseKey, vkoDeriveParameter(CKD_NULL, ownPoint, reversedUkm),
                     pluginTemplate, pluginCount, key, "the UKM bytes reversed"),
@@ -2713,6 +2722,92 @@ static void verifyGOSTVKODerive(Module& module, CK_SESSION_HANDLE session)
     if (attribute(module, session, key, CKA_VALUE) != expectedReversed)
         fail("CKM_GOSTR3410_12_DERIVE reads the UKM in the wrong byte order");
     destroyObject(module, session, key);
+
+    // The reference Rutoken's own answers. The probe derived with the
+    // token's key and this sample key's point; VKO is symmetric, so this
+    // sample key with the token's point must give the same values, and
+    // gost-engine agrees with each of them.
+    const Bytes devicePoint = bytesFromHex(
+        "ce9ffdd54dd41f28a5d5c1a0565bff3703d01d37ca809b74728d8159b6533296"
+        "14122f63906570eee5c82aed6bbb8f3d0ee6795090a3a87a082cc96732ec08dd");
+    const struct { Bytes ukm; Bytes value; const char* what; } deviceAnswers[] = {
+        {ukm, bytesFromHex("efc128e76dca235f8e6b9ebc018e6c15c3c65a2b0f86d19fffa9387d2441b5ca"),
+         "the device's answer to the plugin call"},
+        {reversedUkm, bytesFromHex("6c9b33da09d30b0a28ddb26bada8e3afb074a796b99736b8170e5b942833d5d2"),
+         "the device's answer with the UKM reversed"},
+    };
+    for (const auto& answer : deviceAnswers)
+    {
+        check(vkoDerive(module, session, baseKey, vkoDeriveParameter(CKD_NULL, devicePoint, answer.ukm),
+                        pluginTemplate, pluginCount, key, answer.what),
+              CKR_OK, (std::string("C_DeriveKey(CKM_GOSTR3410_12_DERIVE, ") + answer.what + ")").c_str());
+        if (attribute(module, session, key, CKA_VALUE) != answer.value)
+            fail(std::string("CKM_GOSTR3410_12_DERIVE does not give ") + answer.what);
+        destroyObject(module, session, key);
+    }
+
+    // Every result type the device accepts carries the same 32 bytes; a
+    // generic secret is 32 bytes even when 64 are asked for.
+    CK_KEY_TYPE magma = CKK_MAGMA, kuznechik = CKK_KUZNECHIK;
+    CK_ULONG length32 = 32, length64 = 64;
+    const struct { CK_KEY_TYPE* type; CK_ULONG* valueLen; const char* what; } resultTypes[] = {
+        {&generic, nullptr, "a generic secret"},
+        {&generic, &length32, "a generic secret of 32 bytes"},
+        {&generic, &length64, "a generic secret of 64 bytes"},
+        {&magma, nullptr, "a Magma key"},
+        {&kuznechik, nullptr, "a Kuznechik key"},
+        {&gost28147, &length32, "a GOST 28147-89 key of 32 bytes"},
+    };
+    for (const auto& result : resultTypes)
+    {
+        CK_ATTRIBUTE resultTemplate[] = {
+            {CKA_CLASS, &secretClass, sizeof(secretClass)},
+            {CKA_KEY_TYPE, result.type, sizeof(*result.type)},
+            {CKA_TOKEN, &no, sizeof(no)},
+            {CKA_VALUE_LEN, result.valueLen, sizeof(CK_ULONG)}
+        };
+        check(vkoDerive(module, session, baseKey, vkoDeriveParameter(CKD_NULL, devicePoint, ukm),
+                        resultTemplate, result.valueLen ? 4 : 3, key, result.what),
+              CKR_OK, (std::string("C_DeriveKey(CKM_GOSTR3410_12_DERIVE, ") + result.what + ")").c_str());
+        if (attribute(module, session, key, CKA_VALUE) != deviceAnswers[0].value)
+            fail(std::string("CKM_GOSTR3410_12_DERIVE gives ") + result.what + " another value");
+        if (*result.type == CKK_GENERIC_SECRET && ulongAttribute(module, session, key, CKA_VALUE_LEN) != 32)
+            fail("CKM_GOSTR3410_12_DERIVE gives a generic secret a length other than 32");
+        destroyObject(module, session, key);
+    }
+
+    // Protection asked for is given, yet the key is neither always sensitive
+    // nor never extractable; and no token object is made.
+    const struct { CK_ATTRIBUTE_TYPE asked; CK_BBOOL value; CK_ATTRIBUTE_TYPE reported; const char* what; }
+        protections[] = {
+        {CKA_SENSITIVE, CK_TRUE, CKA_ALWAYS_SENSITIVE, "a sensitive result"},
+        {CKA_EXTRACTABLE, CK_FALSE, CKA_NEVER_EXTRACTABLE, "an unextractable result"},
+    };
+    for (const auto& protection : protections)
+    {
+        CK_BBOOL asked = protection.value;
+        CK_ATTRIBUTE protectedTemplate[] = {
+            {CKA_CLASS, &secretClass, sizeof(secretClass)},
+            {CKA_KEY_TYPE, &gost28147, sizeof(gost28147)},
+            {CKA_TOKEN, &no, sizeof(no)},
+            {protection.asked, &asked, sizeof(asked)}
+        };
+        check(vkoDerive(module, session, baseKey, vkoDeriveParameter(CKD_NULL, devicePoint, ukm),
+                        protectedTemplate, 4, key, protection.what),
+              CKR_OK, (std::string("C_DeriveKey(CKM_GOSTR3410_12_DERIVE, ") + protection.what + ")").c_str());
+        requireBooleanAttribute(module, session, key, protection.asked, protection.value);
+        requireBooleanAttribute(module, session, key, protection.reported, CK_FALSE);
+        destroyObject(module, session, key);
+    }
+    CK_ATTRIBUTE tokenTemplate[] = {
+        {CKA_CLASS, &secretClass, sizeof(secretClass)},
+        {CKA_KEY_TYPE, &gost28147, sizeof(gost28147)},
+        {CKA_TOKEN, &yes, sizeof(yes)}
+    };
+    check(vkoDerive(module, session, baseKey, vkoDeriveParameter(CKD_NULL, devicePoint, ukm),
+                    tokenTemplate, 3, key, "a token object"),
+          CKR_TEMPLATE_INCONSISTENT, "C_DeriveKey(CKM_GOSTR3410_12_DERIVE, CKA_TOKEN TRUE)");
+    if (key != CK_INVALID_HANDLE) fail("a refused CKM_GOSTR3410_12_DERIVE returned a key");
 
     // Two generated pairs agree on the same key from either side.
     Bytes cryptoProA = bytesFromHex("06072a850302022301");
@@ -2772,14 +2867,6 @@ static void verifyGOSTVKODerive(Module& module, CK_SESSION_HANDLE session)
               CKR_MECHANISM_PARAM_INVALID, "C_DeriveKey(CKM_GOSTR3410_12_DERIVE, refused parameter)");
         if (key != CK_INVALID_HANDLE) fail("a refused CKM_GOSTR3410_12_DERIVE returned a key");
     }
-    CK_ATTRIBUTE genericTemplate[] = {
-        {CKA_CLASS, &secretClass, sizeof(secretClass)},
-        {CKA_KEY_TYPE, &generic, sizeof(generic)},
-        {CKA_TOKEN, &no, sizeof(no)}
-    };
-    check(vkoDerive(module, session, baseKey, vkoDeriveParameter(CKD_NULL, ownPoint, ukm),
-                    genericTemplate, 3, key, "a generic-secret result"),
-          CKR_TEMPLATE_INCONSISTENT, "C_DeriveKey(CKM_GOSTR3410_12_DERIVE, generic secret)");
     CK_ULONG wrongLength = 64;
     CK_ATTRIBUTE longTemplate[] = {
         {CKA_CLASS, &secretClass, sizeof(secretClass)},
@@ -2791,8 +2878,9 @@ static void verifyGOSTVKODerive(Module& module, CK_SESSION_HANDLE session)
                     longTemplate, 4, key, "CKA_VALUE_LEN 64"),
           CKR_ATTRIBUTE_VALUE_INVALID, "C_DeriveKey(CKM_GOSTR3410_12_DERIVE, CKA_VALUE_LEN 64)");
     destroyObject(module, session, baseKey);
-    trace("REFERENCE", "CKM_GOSTR3410_12_DERIVE matched the gost-engine VKO answer in both UKM orders, "
-                       "agreed from both sides and refused every untraced form");
+    trace("REFERENCE", "CKM_GOSTR3410_12_DERIVE matched the gost-engine VKO answer and the reference "
+                       "Rutoken's answers, made its result as the device does, agreed from both sides "
+                       "and refused every form the device was not read for");
 }
 
 // KEG on a 512-bit GOST R 34.10-2012 key, against the worked example published

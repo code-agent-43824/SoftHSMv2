@@ -242,15 +242,15 @@
          буфера, другие типы результата и `CKA_VALUE_LEN`, ключ на токене,
          базовый ключ без `CKA_DERIVE`, неверные длины и точка не на кривой,
          ответ на `CKM_GOSTR3410_DERIVE` (0x1204).
-      3. [ ] **Часть 2 — по результатам пробы.** Проба прогнана владельцем
+      3. [~] **Часть 2 — по результатам пробы.** Проба прогнана владельцем
          17.10 на Рутокен ЭЦП 3.0 и на `.80`; часть 1 подтверждена на
          устройстве, расхождения и их офлайн-сверка — JOURNAL 17.10.
-         Привести к устройству (ждёт слова владельца):
-         a. атрибуты результата: `CKA_DERIVE` TRUE и `CKA_GOST28147_PARAMS`
+         Привести к устройству:
+         a. [x] атрибуты результата: `CKA_DERIVE` TRUE и `CKA_GOST28147_PARAMS`
             CryptoPro-A по умолчанию, `CKA_ALWAYS_SENSITIVE` и
             `CKA_NEVER_EXTRACTABLE` FALSE;
-         b. `CKA_TOKEN` TRUE — `CKR_TEMPLATE_INCONSISTENT`;
-         c. тип результата `CKK_GENERIC_SECRET` (длина всегда 32, заданная
+         b. [x] `CKA_TOKEN` TRUE — `CKR_TEMPLATE_INCONSISTENT`;
+         c. [x] тип результата `CKK_GENERIC_SECRET` (длина всегда 32, заданная
             `CKA_VALUE_LEN` не влияет), `CKK_MAGMA`, `CKK_KUZNECHIK`;
          d. UKM 4, 16 и 32 байта — число little-endian;
          e. `kdf = CKD_CPDIVERSIFY_KDF` — диверсификация RFC 4357 п. 6.5 тем же
