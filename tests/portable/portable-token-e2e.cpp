@@ -8730,6 +8730,250 @@ static void verifyJournalParity(Module& module, CK_SESSION_HANDLE session,
     trace("PARITY", "case journal passed");
 }
 
+// The VKO derive the way Rutoken Plugin and other software call it, with
+// only what rutoken-derive-probe read on the device (docs/JOURNAL.md, 17
+// October 2026): forms the probe did not try are left out, so that every
+// expectation here is the device's.
+static void verifyVkoDeriveParity(Module& module, CK_SESSION_HANDLE session)
+{
+    const Bytes idA = asciiBytes("parity-vko-a"), idB = asciiBytes("parity-vko-b");
+    const Bytes idNoDerive = asciiBytes("parity-vko-n");
+    const Bytes id512A = asciiBytes("parity-vko-512a"), id512B = asciiBytes("parity-vko-512b");
+    const Bytes* ids[] = {&idA, &idB, &idNoDerive, &id512A, &id512B};
+    for (const Bytes* id : ids) removePriorTestObjects(module, session, *id);
+
+    CK_OBJECT_CLASS publicClass = CKO_PUBLIC_KEY, privateClass = CKO_PRIVATE_KEY,
+                    secretClass = CKO_SECRET_KEY;
+    CK_BBOOL yes = CK_TRUE, no = CK_FALSE;
+    auto generate = [&](const Bytes& id, bool is512, CK_BBOOL derive) {
+        CK_KEY_TYPE keyType = is512 ? CKK_GOSTR3410_512 : CKK_GOSTR3410;
+        CK_MECHANISM mechanism{is512 ? CKM_GOSTR3410_512_KEY_PAIR_GEN : CKM_GOSTR3410_KEY_PAIR_GEN,
+                               nullptr, 0};
+        Bytes curve = bytesFromHex(is512 ? "06092a8503070102010203" : "06092a8503070102010101");
+        Bytes digest = bytesFromHex(is512 ? "06082a85030701010203" : "06082a85030701010202");
+        CK_ATTRIBUTE publicAttrs[] = {
+            {CKA_CLASS, &publicClass, sizeof(publicClass)},
+            {CKA_KEY_TYPE, &keyType, sizeof(keyType)},
+            {CKA_TOKEN, &yes, sizeof(yes)},
+            {CKA_ID, const_cast<unsigned char*>(id.data()), static_cast<CK_ULONG>(id.size())},
+            {CKA_GOSTR3410_PARAMS, curve.data(), static_cast<CK_ULONG>(curve.size())},
+            {CKA_GOSTR3411_PARAMS, digest.data(), static_cast<CK_ULONG>(digest.size())}
+        };
+        CK_ATTRIBUTE privateAttrs[] = {
+            {CKA_CLASS, &privateClass, sizeof(privateClass)},
+            {CKA_KEY_TYPE, &keyType, sizeof(keyType)},
+            {CKA_TOKEN, &yes, sizeof(yes)}, {CKA_PRIVATE, &yes, sizeof(yes)},
+            {CKA_DERIVE, &derive, sizeof(derive)},
+            {CKA_ID, const_cast<unsigned char*>(id.data()), static_cast<CK_ULONG>(id.size())},
+            {CKA_GOSTR3410_PARAMS, curve.data(), static_cast<CK_ULONG>(curve.size())},
+            {CKA_GOSTR3411_PARAMS, digest.data(), static_cast<CK_ULONG>(digest.size())}
+        };
+        CmsKeyPair pair{CK_INVALID_HANDLE, CK_INVALID_HANDLE};
+        callOk("C_GenerateKeyPair", "device-parity VKO pair " + std::string(id.begin(), id.end()), [&] {
+            return module->C_GenerateKeyPair(session, &mechanism,
+                publicAttrs, sizeof(publicAttrs) / sizeof(publicAttrs[0]),
+                privateAttrs, sizeof(privateAttrs) / sizeof(privateAttrs[0]),
+                &pair.publicKey, &pair.privateKey);
+        });
+        return pair;
+    };
+    const CmsKeyPair a = generate(idA, false, CK_TRUE), b = generate(idB, false, CK_TRUE);
+    const Bytes pointA = attribute(module, session, a.publicKey, CKA_VALUE);
+    const Bytes pointB = attribute(module, session, b.publicKey, CKA_VALUE);
+    const Bytes ukm = bytesFromHex("0102030405060708");
+
+    CK_KEY_TYPE gost28147 = CKK_GOST28147, generic = CKK_GENERIC_SECRET, magma = CKK_MAGMA,
+                kuznechik = CKK_KUZNECHIK;
+    CK_ATTRIBUTE pluginTemplate[] = {
+        {CKA_CLASS, &secretClass, sizeof(secretClass)},
+        {CKA_KEY_TYPE, &gost28147, sizeof(gost28147)},
+        {CKA_TOKEN, &no, sizeof(no)}
+    };
+    CK_OBJECT_HANDLE key = CK_INVALID_HANDLE;
+    // Derive A with B's point and B with A's, read the value, and require
+    // both sides to agree.
+    auto agreed = [&](CK_ULONG kdf, const Bytes& theUkm, CK_ATTRIBUTE* templ, CK_ULONG count,
+                      const char* what) {
+        Bytes values[2];
+        const CmsKeyPair* sides[2] = {&a, &b};
+        const Bytes* points[2] = {&pointB, &pointA};
+        for (int i = 0; i < 2; ++i)
+        {
+            check(vkoDerive(module, session, sides[i]->privateKey,
+                            vkoDeriveParameter(kdf, *points[i], theUkm), templ, count, key, what),
+                  CKR_OK, (std::string("C_DeriveKey(CKM_GOSTR3410_12_DERIVE, ") + what + ")").c_str());
+            values[i] = attribute(module, session, key, CKA_VALUE);
+            destroyObject(module, session, key);
+        }
+        if (values[0] != values[1] || values[0].size() != 32)
+            fail(std::string("CKM_GOSTR3410_12_DERIVE, ") + what + ": the two sides disagree");
+        trace("PARITY", std::string("VKO ") + what + ": both sides agree on 32 bytes, as on the device");
+        return values[0];
+    };
+
+    // The plugin's call, and the key it gets.
+    const Bytes plain = agreed(CKD_NULL, ukm, pluginTemplate, 3, "the plugin's call");
+    check(vkoDerive(module, session, a.privateKey, vkoDeriveParameter(CKD_NULL, pointB, ukm),
+                    pluginTemplate, 3, key, "the plugin's key"),
+          CKR_OK, "C_DeriveKey(CKM_GOSTR3410_12_DERIVE, the plugin's key)");
+    if (ulongAttribute(module, session, key, CKA_KEY_TYPE) != CKK_GOST28147)
+        fail("VKO: the plugin's key is not a GOST 28147-89 key");
+    const struct { CK_ATTRIBUTE_TYPE type; CK_BBOOL value; } flags[] = {
+        {CKA_TOKEN, CK_FALSE}, {CKA_PRIVATE, CK_TRUE}, {CKA_SENSITIVE, CK_FALSE},
+        {CKA_EXTRACTABLE, CK_TRUE}, {CKA_ALWAYS_SENSITIVE, CK_FALSE},
+        {CKA_NEVER_EXTRACTABLE, CK_FALSE}, {CKA_LOCAL, CK_FALSE}, {CKA_MODIFIABLE, CK_TRUE},
+        {CKA_ENCRYPT, CK_TRUE}, {CKA_DECRYPT, CK_TRUE}, {CKA_WRAP, CK_TRUE},
+        {CKA_UNWRAP, CK_TRUE}, {CKA_DERIVE, CK_TRUE},
+    };
+    for (const auto& flag : flags) requireBooleanAttribute(module, session, key, flag.type, flag.value);
+    expectBytes(attribute(module, session, key, CKA_GOST28147_PARAMS), bytesFromHex("06072a850302021f01"),
+                "VKO: CKA_GOST28147_PARAMS of the plugin's key");
+    destroyObject(module, session, key);
+
+    // Other result types, UKM lengths and the CryptoPro diversification.
+    CK_ULONG length64 = 64;
+    const struct { CK_KEY_TYPE* type; CK_ULONG* valueLen; const char* what; } results[] = {
+        {&generic, nullptr, "a generic secret"},
+        {&generic, &length64, "a generic secret of 64 bytes, which is 32"},
+        {&magma, nullptr, "a Magma key"},
+        {&kuznechik, nullptr, "a Kuznechik key"},
+    };
+    for (const auto& result : results)
+    {
+        CK_ATTRIBUTE resultTemplate[] = {
+            {CKA_CLASS, &secretClass, sizeof(secretClass)},
+            {CKA_KEY_TYPE, result.type, sizeof(*result.type)},
+            {CKA_TOKEN, &no, sizeof(no)},
+            {CKA_VALUE_LEN, result.valueLen, sizeof(CK_ULONG)}
+        };
+        if (agreed(CKD_NULL, ukm, resultTemplate, result.valueLen ? 4 : 3, result.what) != plain)
+            fail(std::string("VKO: ") + result.what + " carries another value than the GOST 28147-89 key");
+    }
+    for (const char* ukmHex : {"01020304", "0102030405060708090a0b0c0d0e0f10",
+                               "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"})
+    {
+        const Bytes other = bytesFromHex(ukmHex);
+        const std::string what = "a " + std::to_string(other.size()) + "-byte UKM";
+        agreed(CKD_NULL, other, pluginTemplate, 3, what.c_str());
+    }
+    if (agreed(CKD_CPDIVERSIFY_KDF, ukm, pluginTemplate, 3, "CKD_CPDIVERSIFY_KDF") == plain)
+        fail("VKO: CKD_CPDIVERSIFY_KDF gives the undiversified value");
+
+    // Protection asked for is given, yet the key is neither always
+    // sensitive nor never extractable; no token object.
+    const struct { CK_ATTRIBUTE_TYPE asked; CK_BBOOL value; CK_ATTRIBUTE_TYPE reported; const char* what; }
+        protections[] = {
+        {CKA_SENSITIVE, CK_TRUE, CKA_ALWAYS_SENSITIVE, "a sensitive result"},
+        {CKA_EXTRACTABLE, CK_FALSE, CKA_NEVER_EXTRACTABLE, "an unextractable result"},
+    };
+    for (const auto& protection : protections)
+    {
+        CK_BBOOL asked = protection.value;
+        CK_ATTRIBUTE protectedTemplate[] = {
+            {CKA_CLASS, &secretClass, sizeof(secretClass)},
+            {CKA_KEY_TYPE, &gost28147, sizeof(gost28147)},
+            {CKA_TOKEN, &no, sizeof(no)},
+            {protection.asked, &asked, sizeof(asked)}
+        };
+        check(vkoDerive(module, session, a.privateKey, vkoDeriveParameter(CKD_NULL, pointB, ukm),
+                        protectedTemplate, 4, key, protection.what),
+              CKR_OK, (std::string("C_DeriveKey(CKM_GOSTR3410_12_DERIVE, ") + protection.what + ")").c_str());
+        requireBooleanAttribute(module, session, key, protection.asked, protection.value);
+        requireBooleanAttribute(module, session, key, protection.reported, CK_FALSE);
+        CK_BYTE buffer[64];
+        CK_ATTRIBUTE read = {CKA_VALUE, buffer, sizeof(buffer)};
+        check(invoke("C_GetAttributeValue", std::string("CKA_VALUE of ") + protection.what,
+                     [&] { return module->C_GetAttributeValue(session, key, &read, 1); }),
+              CKR_ATTRIBUTE_SENSITIVE, "C_GetAttributeValue(protected VKO key)");
+        destroyObject(module, session, key);
+        trace("PARITY", std::string("VKO ") + protection.what + ": as on the device");
+    }
+
+    // The device's refusals.
+    const Bytes sample256 = bytesFromHex(
+        "a53d0c904d0c13835c5ebd3e35414e5182f3a9320f91ccec177b284eb407af2c"
+        "6b819ec462ebf933dabba24fb3c741ebe498faf2b8f4eaa21b091d6ab52cd3c4");
+    const Bytes sample512 = bytesFromHex(
+        "3a83eb1df1b839fde4d25bb352272dc210337e7c0d9f234e9b3c7067b206977a"
+        "24973e13c3f69fcd47f48b280aa3e69280f53f9b666365c672d99a47da8945f1"
+        "eaf4117a58be6ab1eb67d5b3e3e178bde62b611da0a70141cb1c5e6ae6dff299"
+        "f213043bb5dddfb1042c3a7f72957cfc0bb30ab29f05a1604e2d50365be905f3");
+    Bytes offCurve = sample256;
+    offCurve[0] ^= 1;
+    // CK_GOSTR3410_DERIVE_PARAMS{CKD_NULL, ...} as the device reads it on a
+    // 64-bit build: kdf 1, then a point length of 0.
+    Bytes zeroLengthPoint = bytesFromHex("0100000000000000");
+    zeroLengthPoint.resize(40, 0);
+    const CmsKeyPair noDerive = generate(idNoDerive, false, CK_FALSE);
+    CK_ATTRIBUTE tokenTemplate[] = {
+        {CKA_CLASS, &secretClass, sizeof(secretClass)},
+        {CKA_KEY_TYPE, &gost28147, sizeof(gost28147)},
+        {CKA_TOKEN, &yes, sizeof(yes)}
+    };
+    const struct { CK_OBJECT_HANDLE base; Bytes parameter; int lengthChange; CK_ATTRIBUTE* templ;
+                   CK_RV rv; const char* what; } refusals[] = {
+        {a.privateKey, vkoDeriveParameter(0, sample256, ukm), 0, pluginTemplate,
+         CKR_MECHANISM_PARAM_INVALID, "kdf 0"},
+        {a.privateKey, vkoDeriveParameter(CKD_SHA1_KDF, sample256, ukm), 0, pluginTemplate,
+         CKR_MECHANISM_PARAM_INVALID, "CKD_SHA1_KDF"},
+        {a.privateKey, vkoDeriveParameter(CKD_NULL, sample256, Bytes()), 0, pluginTemplate,
+         CKR_MECHANISM_PARAM_INVALID, "an empty UKM"},
+        {a.privateKey, vkoDeriveParameter(CKD_NULL, sample256, bytesFromHex("0000000000000000")), 0,
+         pluginTemplate, CKR_MECHANISM_PARAM_INVALID, "a zero UKM"},
+        {a.privateKey, Bytes(), 0, pluginTemplate, CKR_MECHANISM_PARAM_INVALID, "no parameter"},
+        {a.privateKey, vkoDeriveParameter(CKD_NULL, sample256, ukm), -1, pluginTemplate,
+         CKR_MECHANISM_PARAM_INVALID, "a buffer one byte short"},
+        {a.privateKey, vkoDeriveParameter(CKD_NULL, sample256, ukm), 1, pluginTemplate,
+         CKR_MECHANISM_PARAM_INVALID, "a buffer one byte long"},
+        {a.privateKey, vkoDeriveParameter(CKD_NULL, sample512, ukm), 0, pluginTemplate,
+         CKR_ARGUMENTS_BAD, "a 128-byte point with a 256-bit key"},
+        {a.privateKey, zeroLengthPoint, 0, pluginTemplate, CKR_PUBLIC_KEY_INVALID,
+         "a point length of zero"},
+        {a.privateKey, vkoDeriveParameter(CKD_NULL, offCurve, ukm), 0, pluginTemplate,
+         CKR_DEVICE_ERROR, "a point off the curve"},
+        {a.privateKey, vkoDeriveParameter(CKD_NULL, sample256, ukm), 0, tokenTemplate,
+         CKR_TEMPLATE_INCONSISTENT, "a token object"},
+        {noDerive.privateKey, vkoDeriveParameter(CKD_NULL, sample256, ukm), 0, pluginTemplate,
+         CKR_KEY_FUNCTION_NOT_PERMITTED, "a base key without CKA_DERIVE"},
+        {a.publicKey, vkoDeriveParameter(CKD_NULL, sample256, ukm), 0, pluginTemplate,
+         CKR_KEY_TYPE_INCONSISTENT, "a public base key"},
+    };
+    for (const auto& refusal : refusals)
+    {
+        Bytes parameter = refusal.parameter;
+        if (refusal.lengthChange < 0) parameter.pop_back();
+        if (refusal.lengthChange > 0) parameter.push_back(0);
+        check(vkoDerive(module, session, refusal.base, parameter, refusal.templ, 3, key, refusal.what),
+              refusal.rv, (std::string("C_DeriveKey(CKM_GOSTR3410_12_DERIVE, ") + refusal.what + ")").c_str());
+        if (key != CK_INVALID_HANDLE) fail("a refused CKM_GOSTR3410_12_DERIVE returned a key");
+        trace("PARITY", std::string("VKO ") + refusal.what + ": " + rvName(refusal.rv) + ", as on the device");
+    }
+
+    // 512-bit keys: both sides agree on 32 bytes; a 64-byte point is refused.
+    const CmsKeyPair a512 = generate(id512A, true, CK_TRUE), b512 = generate(id512B, true, CK_TRUE);
+    Bytes values512[2];
+    const CmsKeyPair* sides512[2] = {&a512, &b512};
+    for (int i = 0; i < 2; ++i)
+    {
+        const Bytes peer = attribute(module, session, sides512[1 - i]->publicKey, CKA_VALUE);
+        check(vkoDerive(module, session, sides512[i]->privateKey, vkoDeriveParameter(CKD_NULL, peer, ukm),
+                        pluginTemplate, 3, key, "512-bit keys"),
+              CKR_OK, "C_DeriveKey(CKM_GOSTR3410_12_DERIVE, 512-bit keys)");
+        values512[i] = attribute(module, session, key, CKA_VALUE);
+        destroyObject(module, session, key);
+    }
+    if (values512[0] != values512[1] || values512[0].size() != 32)
+        fail("CKM_GOSTR3410_12_DERIVE, 512-bit keys: the two sides disagree");
+    check(vkoDerive(module, session, a512.privateKey, vkoDeriveParameter(CKD_NULL, sample256, ukm),
+                    pluginTemplate, 3, key, "a 64-byte point with a 512-bit key"),
+          CKR_ARGUMENTS_BAD, "C_DeriveKey(CKM_GOSTR3410_12_DERIVE, 512-bit key, 64-byte point)");
+    if (key != CK_INVALID_HANDLE) fail("a refused CKM_GOSTR3410_12_DERIVE returned a key");
+    trace("PARITY", "VKO 512-bit keys: both sides agree on 32 bytes, a 64-byte point is refused");
+
+    for (const Bytes* id : ids) removePriorTestObjects(module, session, *id);
+    trace("PARITY", "case vko passed");
+}
+
 // Runs against an initialized token with P11_TEST_USER_PIN and leaves it as it
 // found it: every object a case creates is removed.
 static void verifyDeviceParity(const fs::path& modulePath)
@@ -8754,6 +8998,8 @@ static void verifyDeviceParity(const fs::path& modulePath)
     verifyDivergenceParity(module, session, ex);
     trace("PARITY", "case journal");
     verifyJournalParity(module, session, ex, slot);
+    trace("PARITY", "case vko");
+    verifyVkoDeriveParity(module, session);
 
     logout(module, session, "CKU_USER");
     closeSession(module, session);

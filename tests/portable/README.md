@@ -220,7 +220,16 @@ curve CMS checks still need a device run. Its cases:
   whose `AA` element is the signed hash, an RSA signature leaves it alone,
   and a GOST-512 record differs in size from a GOST-256 one. The lengths
   themselves are not compared by this dual test; since portable release .73,
-  the fork also writes the observed 126/224-byte GOST-256/512 records.
+  the fork also writes the observed 126/224-byte GOST-256/512 records;
+- `vko`: `C_DeriveKey` with `CKM_GOSTR3410_12_DERIVE` between two token key
+  pairs, both sides agreeing on the value - the Rutoken Plugin's exact call,
+  generic secret (with and without `CKA_VALUE_LEN`), Magma and Kuznechik
+  results, UKM of 4, 16 and 32 bytes, `CKD_CPDIVERSIFY_KDF` (differing from
+  the plain value) and 512-bit pairs; the plugin key's attributes, sensitive
+  and unextractable results, and the refusals the derive probe read off the
+  device on 17 October 2026 (other `kdf`, empty and zero UKM, wrong lengths,
+  a point for another key size, a zero-length or off-curve point, a token
+  object, a base key without `CKA_DERIVE`, a public base key).
 
 It needs an initialized token and `P11_TEST_USER_PIN`, does not format it,
 logs the user out and back in once, and removes every object it creates:
