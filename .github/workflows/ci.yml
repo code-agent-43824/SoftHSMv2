@@ -60,12 +60,6 @@ jobs:
             exit 1
           fi
           echo "$(find "$build" -name '*.o' ! -path '*/test/*' | wc -l) module objects, none registers a destructor"
-      - uses: actions/upload-artifact@v7
-        with:
-          name: ci-portable-product-linux-x64
-          path: portable-product/
-          if-no-files-found: error
-          retention-days: 7
       - name: Verify autonomous utilities and forced PKCS8 export
         shell: bash
         run: |
@@ -328,41 +322,3 @@ jobs:
             --so-pin 12345678 --pin 12345678
           P11_TEST_SO_PIN=12345678 P11_TEST_USER_PIN=12345678 \
             ./portable-token-e2e device-parity-write "$module"
-
-  # The test kit's TLS block on the module just built, in the owner's
-  # environment: an Ubuntu 26.04 runner's OpenSSL and the pinned build of the owner's
-  # pkcs11-provider fork (scripts/portable/pkcs11-provider.lock). The client
-  # key is generated on the token under the Rutoken profile with the factory
-  # PINs; the CSR goes through the provider, and every OpenSSL process has to
-  # exit 0 after the provider's late C_CloseSession and C_Finalize
-  # (docs/JOURNAL.md, 17 October 2026).
-  tls:
-    name: TLS through pkcs11-provider (Ubuntu 26.04)
-    needs: portable-dependency-baseline
-    runs-on: ubuntu-26.04
-    steps:
-      - name: Install the distribution's OpenSSL headers and pkcs11-tool
-        run: |
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            libssl-dev opensc
-          openssl version
-          dpkg-query -W openssl libssl-dev opensc
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
-        with:
-          name: ci-portable-product-linux-x64
-          path: portable-product
-      - name: Fetch the pinned pkcs11-provider and build tls-client
-        run: |
-          bash scripts/portable/fetch-pkcs11-provider.sh linux-x86_64-ubuntu24.04 \
-            "$RUNNER_TEMP/pkcs11-provider"
-          cc -std=c11 -O2 -Wall -Wextra -Werror tests/portable/tls/tls-client.c \
-            -lssl -lcrypto -o "$RUNNER_TEMP/tls-client"
-      - name: TLS with the client key in the module under the Rutoken profile
-        run: |
-          chmod +x portable-product/softhsm2-util
-          bash tests/portable/tls/run-tls.sh portable-product/libsofthsm2.so \
-            portable-product/softhsm2-util /usr/bin/pkcs11-tool \
-            "$RUNNER_TEMP/pkcs11-provider/lib/ossl-modules/pkcs11.so" \
-            "$RUNNER_TEMP/tls-client" "$RUNNER_TEMP/tls"

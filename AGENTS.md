@@ -281,8 +281,8 @@ the portable builds compile with warnings-as-errors settings from
   machine that has never run the module, then the vendor-neutral client
   through `first-run`, `multi-token`, `gost28147-modes` in three
   configurations, both `rutoken-profile` runs, `core-behaviour` and
-  `lifecycle`; a second job runs the TLS block (`tests/portable/tls/`) on an
-  Ubuntu 26.04 runner. Unit tests are still not among them (see below).
+  `lifecycle`. The TLS block (`tests/portable/tls/`) runs only in the release
+  verification. Unit tests are still not among them (see below).
 - `.github/workflows/portable-release.yml` — three stages: six build jobs,
   each making its platform's product and test kit (Linux in an
   `ubuntu:20.04` container, which sets the glibc 2.31 floor); verification
