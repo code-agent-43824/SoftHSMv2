@@ -23,6 +23,30 @@ Linux runner в обоих workflow подняты до 26.04, verify на Linux
 `ubuntu:20.04` ради glibc 2.31. `actionlint` 1.7.7 — замечаний нет, кроме
 незнакомых ему меток `windows-11-arm`, `macos-15-intel`, `ubuntu-26.04`.
 Локально workflow не запускается — проверит релизный прогон.
+**Проверено (workflow).** CI `39013665433` и релиз `39013913241` на
+`be7e580` зелёные: 6 сборок, 7 verify-job (Linux x64/ARM64 на 26.04 с
+обязательным TLS, Windows x64/x86/ARM64, macOS Apple silicon и Intel),
+публикация `v2.7.0-portable.78` — 13 файлов. Скачанные `SHA256SUMS`, kit и
+продукт Linux x64, kit Windows x64 совпали с суммами; скачанный Linux x64
+kit на Ubuntu 24.04 (OpenSSL 3.0.13) прошёл `run-test.sh` с
+`P11_TLS_REQUIRED=1`: `[LIFECYCLE] PASS`, `[TLS] PASS` для RSA и EC, exit 0;
+`tls/bin/tls-client` в ZIP — `-rwxr-xr-x`. Предыдущий прогон `39012451211`
+на `8a0a7d7` всё собрал и проверил, но публикация получила HTTP 403
+(JOURNAL 17.10).
+**Сделано (macOS, без запуска на macOS).** `scripts/portable/conda-openssl.lock`
+и `fetch-conda-openssl.sh` — conda-forge OpenSSL 3.6.5 для `osx-arm64` и
+`osx-64` (SHA-256 сверены, лицензия из пакета). Сборка kit для macOS: оба
+архитектурных набора OpenSSL и провайдера через `lipo` в universal
+`tls/openssl/{bin/openssl,lib/lib*.3.dylib,lib/ossl-modules/pkcs11.dylib}`,
+`tls-client` под каждую архитектуру со своими заголовками и `rpath`
+`@loader_path/../openssl/lib`, ad hoc подпись, проверка, что OpenSSL
+находится только через `@rpath`. `tls/run.sh` на Darwin берёт этот OpenSSL;
+`verify-macos` требует TLS (`P11_TLS_REQUIRED=1`); проверка состава архива
+требует TLS-файлы macOS-kit. Провайдер закреплён на
+`pkcs11-provider-dev-build-22` (семь платформ, код тот же, что в сборке 20) —
+на Linux сценарий с ним проходит. `tls-client` печатает ошибки OpenSSL
+через обратный вызов: на Windows у клиента и OpenSSL могут быть разные C
+runtime.
 
 ## 2026-10-17 — TLS-блок в test kit
 

@@ -568,12 +568,16 @@ jobs:
           name: softhsm-testkit-macos-universal
           path: packaged-testkit
       - name: Test the downloaded test kit
+        shell: bash
         run: |
           export HOME="$RUNNER_TEMP/softhsm-user-home"
           mkdir -p "$HOME"
           cmp "$GITHUB_WORKSPACE/packaged-testkit/libsofthsm2.dylib" \
             "$GITHUB_WORKSPACE/downloaded/libsofthsm2.dylib"
-          bash "$GITHUB_WORKSPACE/packaged-testkit/run-test.sh"
+          P11_TLS_REQUIRED=1 bash "$GITHUB_WORKSPACE/packaged-testkit/run-test.sh" 2>&1 | \
+            tee "$RUNNER_TEMP/default-test.log"
+          grep -F '[TLS] PASS: TLS with the client key in the module under FAKE_RUTOKEN_ECP' \
+            "$RUNNER_TEMP/default-test.log"
           test -d "$GITHUB_WORKSPACE/packaged-testkit/tokens"
           test ! -e "$HOME/softhsm"
           P11_TEST_OBJECT_ID_HEX=504f525441424c46 \
@@ -677,9 +681,9 @@ jobs:
                   "$source/bin/pkcs11-tool" "$source/bin/portable-token-e2e" \
                   "$source/bin/softhsm2-util" "$source/bin/softhsm2-export" \
                   "$source/scripts/"*.sh
-                if [ -d "$source/tls" ]; then
-                  chmod +x "$source/tls/bin/tls-client" "$source/tls/run.sh" "$source/tls/run-tls.sh"
-                fi ;;
+                for file in tls/bin/tls-client tls/run.sh tls/run-tls.sh tls/openssl/bin/openssl; do
+                  if [ -f "$source/$file" ]; then chmod +x "$source/$file"; fi
+                done ;;
               softhsm-portable-*)
                 chmod +x "$source/softhsm2-util" "$source/softhsm2-export" ;;
             esac
@@ -736,7 +740,18 @@ jobs:
                     zipinfo -1 "$archive" | grep -Fx 'bin/gostprov.dylib' >/dev/null
                     zipinfo -1 "$archive" | grep -Fx 'bin/gost.dylib' >/dev/null
                     zipinfo -1 "$archive" | grep -Fx 'bin/libcrypto.3.dylib' >/dev/null
-                    zipinfo -1 "$archive" | grep -Fx 'bin/libssl.3.dylib' >/dev/null ;;
+                    zipinfo -1 "$archive" | grep -Fx 'bin/libssl.3.dylib' >/dev/null
+                    zipinfo -1 "$archive" | grep -Fx 'tls/run.sh' >/dev/null
+                    zipinfo -1 "$archive" | grep -Fx 'tls/run-tls.sh' >/dev/null
+                    zipinfo -1 "$archive" | grep -Fx 'tls/bin/tls-client' >/dev/null
+                    zipinfo -1 "$archive" | grep -Fx 'tls/openssl/bin/openssl' >/dev/null
+                    zipinfo -1 "$archive" | grep -Fx 'tls/openssl/lib/libcrypto.3.dylib' >/dev/null
+                    zipinfo -1 "$archive" | grep -Fx 'tls/openssl/lib/libssl.3.dylib' >/dev/null
+                    zipinfo -1 "$archive" | grep -Fx 'tls/openssl/lib/ossl-modules/pkcs11.dylib' >/dev/null
+                    zipinfo -1 "$archive" | grep -Fx 'tls/openssl/LICENSE-OpenSSL.txt' >/dev/null
+                    zipinfo -1 "$archive" | grep -Fx 'tls/provider/COPYING' >/dev/null
+                    zipinfo "$archive" tls/bin/tls-client | grep -Eq '^-rwx'
+                    zipinfo "$archive" tls/openssl/bin/openssl | grep -Eq '^-rwx' ;;
                   *)
                     zipinfo -1 "$archive" | grep -Fx 'bin/gostprov.so' >/dev/null
                     zipinfo -1 "$archive" | grep -Fx 'bin/gost.so' >/dev/null

@@ -279,6 +279,65 @@ if [[ $platform == linux-* ]]; then
   cp "$root_dir/tests/portable/tls/README.txt" "$tls_stage/README.txt"
   chmod +x "$tls_stage/run.sh" "$tls_stage/run-tls.sh" "$tls_stage/bin/tls-client"
 fi
+# On macOS the block carries its OpenSSL: the conda-forge build the provider
+# is compiled against (conda-openssl.lock), universal like the rest of the
+# kit. One libcrypto serves tls-client, the openssl command and the provider:
+# the provider finds it through its LC_RPATH @loader_path/.., so it lives in
+# tls/openssl/lib/ossl-modules beside tls/openssl/lib.
+if [[ $platform == macos-universal ]]; then
+  tls_stage="$stage_dir/tls"
+  tls_openssl="$tls_stage/openssl"
+  mkdir -p "$tls_stage/bin" "$tls_stage/provider" "$tls_openssl/bin" \
+    "$tls_openssl/lib/ossl-modules"
+  for arch in arm64 x86_64; do
+    case "$arch" in
+      arm64) conda_subdir=osx-arm64; provider_target=macos-arm64-15 ;;
+      x86_64) conda_subdir=osx-64; provider_target=macos-x86_64-15 ;;
+    esac
+    "$root_dir/scripts/portable/fetch-conda-openssl.sh" "$conda_subdir" \
+      "$work_dir/tls-openssl-$arch"
+    "$root_dir/scripts/portable/fetch-pkcs11-provider.sh" "$provider_target" \
+      "$work_dir/tls-provider-$arch"
+    cp "$work_dir/tls-provider-$arch/BUILD-INFO.txt" "$tls_stage/provider/BUILD-INFO-$arch.txt"
+    clang -std=c11 -O2 -Wall -Wextra -Werror -arch "$arch" -mmacosx-version-min=11.0 \
+      -I"$work_dir/tls-openssl-$arch/include" "$root_dir/tests/portable/tls/tls-client.c" \
+      -L"$work_dir/tls-openssl-$arch/lib" -lssl -lcrypto \
+      -Wl,-rpath,@loader_path/../openssl/lib -o "$work_dir/tls-client-$arch"
+  done
+  for file in lib/libcrypto.3.dylib lib/libssl.3.dylib bin/openssl; do
+    lipo -create "$work_dir/tls-openssl-arm64/$file" "$work_dir/tls-openssl-x86_64/$file" \
+      -output "$tls_openssl/$file"
+  done
+  lipo -create "$work_dir/tls-provider-arm64/lib/ossl-modules/pkcs11.dylib" \
+    "$work_dir/tls-provider-x86_64/lib/ossl-modules/pkcs11.dylib" \
+    -output "$tls_openssl/lib/ossl-modules/pkcs11.dylib"
+  lipo -create "$work_dir/tls-client-arm64" "$work_dir/tls-client-x86_64" \
+    -output "$tls_stage/bin/tls-client"
+  for binary in "$tls_openssl/lib/libcrypto.3.dylib" "$tls_openssl/lib/libssl.3.dylib" \
+      "$tls_openssl/bin/openssl" "$tls_openssl/lib/ossl-modules/pkcs11.dylib" \
+      "$tls_stage/bin/tls-client"; do
+    lipo "$binary" -verify_arch arm64 x86_64
+    codesign --force --sign - "$binary"
+    # Dependency lines only: they start with a tab, unlike the per-slice
+    # headers of a universal file, which carry the file's own path.
+    if otool -L "$binary" | grep -E '^[[:space:]]' | grep -E 'lib(ssl|crypto)' | \
+        grep -v '@rpath/'; then
+      echo "$binary must reach OpenSSL through @rpath" >&2
+      exit 1
+    fi
+  done
+  cp "$work_dir/tls-openssl-arm64/LICENSE-OpenSSL.txt" "$tls_openssl/LICENSE-OpenSSL.txt"
+  cat "$work_dir/tls-openssl-arm64/PACKAGE-SOURCE.txt" \
+    "$work_dir/tls-openssl-x86_64/PACKAGE-SOURCE.txt" > "$tls_openssl/PACKAGE-SOURCE.txt"
+  cp "$work_dir/tls-provider-arm64/COPYING" "$tls_stage/provider/COPYING"
+  cp -R "$work_dir/tls-provider-arm64/LICENSES" "$tls_stage/provider/LICENSES"
+  cp "$root_dir/tests/portable/tls/run-tls.sh" "$tls_stage/run-tls.sh"
+  cp "$root_dir/tests/portable/tls/run-kit-tls.sh" "$tls_stage/run.sh"
+  cp "$root_dir/tests/portable/tls/tls-client.c" "$tls_stage/tls-client.c"
+  cp "$root_dir/tests/portable/tls/README.txt" "$tls_stage/README.txt"
+  chmod +x "$tls_stage/run.sh" "$tls_stage/run-tls.sh" "$tls_stage/bin/tls-client" \
+    "$tls_openssl/bin/openssl"
+fi
 opensc_version=$(sed -n '1p' "$stage_dir/OPENSC-VERSION.txt")
 printf 'PLATFORM=%s\nMODULE_NAME=%s\nOPENSSL_VERSION=%s\nOPENSC_VERSION=%s\n' \
   "$platform" "$module_name" "$OPENSSL_VERSION" "$opensc_version" > "$stage_dir/testkit.env"
@@ -299,7 +358,7 @@ fi
   printf '\nOpenSC pkcs11-tool binary:\n'; file "$stage_dir/bin/pkcs11-tool"
   if [[ -d "$stage_dir/tls" ]]; then
     printf '\nTLS client binary:\n'; file "$stage_dir/tls/bin/tls-client"
-    printf '\npkcs11-provider:\n'; cat "$stage_dir/tls/provider/BUILD-INFO.txt"
+    printf '\npkcs11-provider:\n'; cat "$stage_dir/tls/provider/"BUILD-INFO*.txt
   fi
 } > "$stage_dir/ENVIRONMENT.txt"
 

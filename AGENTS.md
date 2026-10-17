@@ -220,7 +220,8 @@ upstream, and upstream compatibility is not a constraint on any change.
 Third-party versions and their SHA-256 pins live in `.github/workflows/ci.yml`
 (`OPENSSL_*`, `BOTAN_*`); the portable build scripts require them in the
 environment and fail without them. The pkcs11-provider build of the TLS block
-is pinned in `scripts/portable/pkcs11-provider.lock`.
+is pinned in `scripts/portable/pkcs11-provider.lock`, and the OpenSSL the macOS
+test kit carries for it in `scripts/portable/conda-openssl.lock`.
 
 | Task | Command |
 | --- | --- |
@@ -285,9 +286,9 @@ the portable builds compile with warnings-as-errors settings from
   each making its platform's product and test kit (Linux in an
   `ubuntu:20.04` container, which sets the glibc 2.31 floor); verification
   matrices on fresh runners that download both archives and use them as an
-  outside user would (Linux x64/ARM64 on Ubuntu 26.04 with the TLS block
-  required, Windows x64/x86/ARM64, macOS on Apple silicon and Intel); then
-  the release job.
+  outside user would (Linux x64/ARM64 on Ubuntu 26.04 and macOS on Apple
+  silicon and Intel, both with the TLS block required, and Windows
+  x64/x86/ARM64); then the release job.
 
 Portable behaviour is gated by the CMake option `ENABLE_PORTABLE` (default OFF)
 and requires the OpenSSL backend. GOST 2012 is gated by

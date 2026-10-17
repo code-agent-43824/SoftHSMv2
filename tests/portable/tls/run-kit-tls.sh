@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The test kit's TLS block (tls/run.sh in the kit): run-tls.sh against the
-# kit's own module, utilities and pkcs11-provider, with the system's OpenSSL 3.
-# Test evidence goes to test-output/tls.
+# kit's own module, utilities and pkcs11-provider - with the system's OpenSSL 3
+# on Linux and with the OpenSSL the kit carries on macOS. Test evidence goes to
+# test-output/tls.
 #
 # On Linux the provider and tls-client need OpenSSL 3 from the distribution
 # (Ubuntu 24.04 or newer: the provider build targets Ubuntu 24.04). Where that
@@ -11,7 +12,7 @@ set -euo pipefail
 
 tls_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 kit_dir=$(cd "$tls_dir/.." && pwd)
-unset LD_LIBRARY_PATH OPENSSL_CONF OPENSSL_MODULES
+unset LD_LIBRARY_PATH DYLD_LIBRARY_PATH OPENSSL_CONF OPENSSL_MODULES
 
 skip() {
   if [[ ${P11_TLS_REQUIRED:-0} == 1 ]]; then
@@ -37,8 +38,16 @@ case $(uname -s) in
         skip "$(basename "$binary") cannot load here (Ubuntu 24.04 or newer is needed): $(echo "$missing" | head -1 | sed 's/^[[:space:]]*//')"
     done
     ;;
+  Darwin)
+    # The kit carries its OpenSSL here: tls/openssl, the conda-forge build the
+    # provider is compiled against.
+    module="$kit_dir/libsofthsm2.dylib"
+    provider="$tls_dir/openssl/lib/ossl-modules/pkcs11.dylib"
+    export OPENSSL="$tls_dir/openssl/bin/openssl"
+    chmod +x "$OPENSSL"
+    ;;
   *)
-    skip "the TLS block is not built for $(uname -s) yet"
+    skip "the TLS block is not built for $(uname -s)"
     ;;
 esac
 

@@ -27,12 +27,19 @@ Every OpenSSL process has to exit with status 0.
 
 Contents:
 - bin/tls-client and tls-client.c - the client and its source; it uses only
-  the OpenSSL 3.0 API and the system's libssl.so.3 and libcrypto.so.3;
-- provider/ - pkcs11-provider from github.com/code-agent-43824/pkcs11-provider,
-  the pinned dev release (BUILD-INFO.txt, licenses in COPYING and LICENSES);
+  the OpenSSL 3.0 API;
+- provider/ - the licences and build information of pkcs11-provider from
+  github.com/code-agent-43824/pkcs11-provider, the pinned dev release;
 - run.sh - checks that the system can run the block and calls run-tls.sh;
 - run-tls.sh - the scenario itself, usable with other paths.
 
-Requirements on Linux: OpenSSL 3 from the distribution - Ubuntu 24.04 or newer,
-since the provider is built for Ubuntu 24.04. Where it is missing run.sh says
-SKIP and why and exits 0; with P11_TLS_REQUIRED=1 it fails instead.
+Linux: the provider is provider/lib/ossl-modules/pkcs11.so, and tls-client
+uses the system's libssl.so.3 and libcrypto.so.3. It needs OpenSSL 3 from the
+distribution - Ubuntu 24.04 or newer, since the provider is built for Ubuntu
+24.04. Where that is missing run.sh says SKIP and why and exits 0; with
+P11_TLS_REQUIRED=1 it fails instead.
+
+macOS: the block carries its OpenSSL in openssl/ - the conda-forge OpenSSL 3
+build the provider is compiled against (openssl/PACKAGE-SOURCE.txt), universal
+- with the provider at openssl/lib/ossl-modules/pkcs11.dylib; tls-client, the
+openssl command and the provider share its one libcrypto.

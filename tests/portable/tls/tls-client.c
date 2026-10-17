@@ -28,10 +28,20 @@
 
 static const char message[] = "ping from the token key\n";
 
+/* OpenSSL's errors go through a callback, not ERR_print_errors_fp: on Windows
+ * the client may use another C runtime than OpenSSL (MSVC's UCRT against
+ * MSYS2's MINGW32 msvcrt), and a FILE * must not cross between them. */
+static int printError(const char* text, size_t length, void* unused)
+{
+	(void)unused;
+	fprintf(stderr, "%.*s", (int)length, text);
+	return 1;
+}
+
 static int failure(const char* what)
 {
 	fprintf(stderr, "[TLS-CLIENT] FAIL: %s\n", what);
-	ERR_print_errors_fp(stderr);
+	ERR_print_errors_cb(printError, NULL);
 	return 1;
 }
 

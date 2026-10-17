@@ -2,11 +2,17 @@
 
 Обновлено: 2026-10-17. Транк: `main`.
 
-**`v2.7.0-portable.77` (8b9fe3d): TLS-блок в Linux test kit — с дефектом.**
-В опубликованном kit у `tls/bin/tls-client` нет бита исполнения, поэтому на
-системе с OpenSSL 3 (Ubuntu 24.04 и новее) `run-test.sh` падает на TLS-блоке;
-на системах без OpenSSL 3 блок пишет SKIP. Исправление в транке, ждёт
-следующего релиза (JOURNAL 17.10). Модуль в `.77` тот же по коду, что в `.76`.
+**`v2.7.0-portable.78` (be7e580): симметричный релизный пайплайн, рабочий
+TLS-блок в Linux test kit.** Релиз `39013913241`: шесть сборок (продукт и
+kit), семь verify-job по скачанным архивам — Linux x64/ARM64 на Ubuntu 26.04
+с обязательным TLS, Windows x64/x86/ARM64, macOS на Apple silicon и Intel —
+затем публикация. Скачанный Linux x64 kit на Ubuntu 24.04 прошёл
+`run-test.sh` с `P11_TLS_REQUIRED=1` (`[TLS] PASS` для RSA и EC). TLS на
+macOS и Windows — в работе (PLAN). Модуль тот же по коду, что в `.76`.
+
+`v2.7.0-portable.77` (8b9fe3d) — с дефектом: в kit у `tls/bin/tls-client`
+не было бита исполнения, и на системе с OpenSSL 3 `run-test.sh` падал на
+TLS-блоке; исправлено в `.78` (JOURNAL 17.10).
 
 Предыдущий релиз `v2.7.0-portable.76` на `241009b` исправляет дефект 17.10:
 `openssl req` с `pkcs11-provider` создавал проверяемый CSR и падал с SIGSEGV
