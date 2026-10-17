@@ -49,8 +49,15 @@ KEG наследует защиту по-прежнему); `CKA_TOKEN` TRUE —
 сборка, профиль, как в CI) `device-parity` — `case vko passed`,
 `DEVICE-PARITY: all cases passed`; повторный прогон на том же сторе тоже
 зелёный, то есть кейс за собой убирает. На токене кейс не прогонялся.
-**Дальше.** Релиз этих коммитов и его проверка; приёмка владельца —
-`device-parity` на токене и W7/W8 плагина.
+**Проверено** релизом `v2.7.0-portable.84` (`39053532393`, на `6aeadd3`;
+автоматические прогоны на `4ae107a`–`e53758e` отменены более новыми): шесть
+сборок, семь проверок — в логе каждой `case vko passed`,
+`DEVICE-PARITY: all cases passed`, `[BATTERY] PASS`, `[TLS] PASS` — и
+публикация. Скачанные `SHA256SUMS` и архивы (product и kit Linux x64, kit
+Windows x64 и macOS) совпали; Linux x64 kit локально — `run-test.sh` с
+`P11_TLS_REQUIRED=1`, exit 0, модуль в product и kit одинаков.
+**Дальше.** Приёмка владельца — `device-parity` (кейс `vko`) на токене и
+W7/W8 плагина.
 
 ## 2026-10-17 — ускорение сборки Windows, шаг 4: Botan параллельно с OpenSSL
 

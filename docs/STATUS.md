@@ -2,7 +2,23 @@
 
 Обновлено: 2026-10-17. Транк: `main`.
 
-**`v2.7.0-portable.83` (88b478b): сборка Windows ускорена.** jom для OpenSSL
+**`v2.7.0-portable.84` (6aeadd3): `CKM_GOSTR3410_12_DERIVE` как у
+устройства** — по пробе владельца 17.10 на Рутокен ЭЦП 3.0 (JOURNAL 17.10).
+Результат — ГОСТ 28147-89 (`CKA_DERIVE` TRUE, CryptoPro-A), Магма, Кузнечик
+или обобщённый секрет 32 байта; `CKA_ALWAYS_SENSITIVE` и
+`CKA_NEVER_EXTRACTABLE` FALSE; UKM 4/8/16/32 байта; `CKD_CPDIVERSIFY_KDF`
+(RFC 4357 п. 6.5) с UKM 8 и ключом 256; базовый ключ 512 бит; коды отказа
+устройства. Не измеренное пробой — отказ 0x71. Пять кодов возврата
+`pkcs11.h` получили значения OASIS (0x1b5–0x1b9). Эталоны — значения
+устройства в `prepare`; новый кейс `device-parity` `vko`. Релиз
+`39053532393`: шесть сборок, семь проверок — в каждой `case vko passed`,
+`DEVICE-PARITY: all cases passed`, `[BATTERY] PASS` и `[TLS] PASS` — и
+публикация. Скачанные `SHA256SUMS` и архивы Linux x64, Windows x64 kit и
+macOS kit совпали; Linux x64 kit на Ubuntu 24.04 прошёл `run-test.sh` с
+`P11_TLS_REQUIRED=1` (exit 0), модуль одинаков в product и kit. На токене
+владельца новый кейс и сценарии W7/W8 плагина ещё не прогонялись.
+
+Перед ним **`v2.7.0-portable.83` (88b478b): сборка Windows ускорена.** jom для OpenSSL
 и Botan, загрузки без индикатора прогресса и Botan параллельно с OpenSSL (без
 кэширования): шаг «Build package» Windows x64 745 → 278–385 с, x86 843 →
 305–399 с, ARM64 975 → 480–482 с (разброс runner); `.80`–`.82` — по шагу. В `.80` же из Windows-kit x86 и
