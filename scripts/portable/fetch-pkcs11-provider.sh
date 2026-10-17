@@ -24,10 +24,12 @@ download=$(mktemp -d)
 trap 'rm -rf "$download"' EXIT
 curl --fail --silent --show-error --location --retry 5 --output "$download/$name" \
   "https://github.com/code-agent-43824/pkcs11-provider/releases/download/$tag/$name"
-if command -v sha256sum >/dev/null 2>&1; then
-  printf '%s  %s\n' "$sha" "$download/$name" | sha256sum --check
-else
+# By system, not by what is installed: macOS may have a BSD sha256sum
+# without --check.
+if [[ $(uname -s) == Darwin ]]; then
   printf '%s  %s\n' "$sha" "$download/$name" | shasum -a 256 --check
+else
+  printf '%s  %s\n' "$sha" "$download/$name" | sha256sum --check
 fi
 mkdir -p "$destination"
 tar -xzf "$download/$name" -C "$destination" --strip-components 1
