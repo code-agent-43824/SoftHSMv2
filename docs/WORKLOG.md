@@ -26,6 +26,22 @@ runtime. Закрепить сборку 24 в `pkcs11-provider.lock`; убра�
 сборки 24 прошёл `run-tls.sh` на компонентах kit `.78` с OpenSSL 3.0.13
 (Ubuntu 24.04) и 3.5.5 (библиотеки Ubuntu 26.04). Сами Windows-модули вне
 runner не запускались.
+**Сделано.** `181d891` — сборка 24 в `pkcs11-provider.lock`, без
+`libwinpthread`/`libgcc` в `msys2-openssl.lock` и kit, общая проверка
+импортов в сборке Windows-kit, новая проверка состава архива.
+**Проверено и выпущено** в `v2.7.0-portable.79` (релиз `39029189405`, CI
+`39028937916`): все шесть сборок и семь проверок зелёные, `[TLS] PASS` для
+RSA и EC в каждой — по логам Linux x64/ARM64, Windows x64/x86/ARM64
+(`windows-11-vs2026-arm64`), macOS на Apple silicon и Intel. Скачанные
+`SHA256SUMS` и архивы Linux x64, Windows x64/x86/ARM64 kit, macOS kit
+совпали; в Windows-kit `tls/` — только DLL OpenSSL, `openssl.exe`,
+`tls-client.exe`, `pkcs11.dll`, лицензии (`winpthreads-COPYING` от
+провайдера); скачанный Linux x64 kit на Ubuntu 24.04 прошёл `run-test.sh` с
+`P11_TLS_REQUIRED=1`, exit 0. Найдено: в x86 и ARM64 kit лишние
+`tls/openssl/bin/tls-client.exp` и `.lib` — import library, которую
+линковщик делает из-за экспорта `OPENSSL_Applink`.
+**Дальше.** Убрать эти файлы и запретить их в проверке архива; затем
+ускорение сборки Windows в три шага с замерами (PLAN).
 
 ## 2026-10-17 — красный релиз `fe0cad2`, разбиение проверок по платформам
 

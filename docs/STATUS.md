@@ -2,13 +2,24 @@
 
 Обновлено: 2026-10-17. Транк: `main`.
 
-**`v2.7.0-portable.78` (be7e580): симметричный релизный пайплайн, рабочий
-TLS-блок в Linux test kit.** Релиз `39013913241`: шесть сборок (продукт и
-kit), семь verify-job по скачанным архивам — Linux x64/ARM64 на Ubuntu 26.04
-с обязательным TLS, Windows x64/x86/ARM64, macOS на Apple silicon и Intel —
-затем публикация. Скачанный Linux x64 kit на Ubuntu 24.04 прошёл
-`run-test.sh` с `P11_TLS_REQUIRED=1` (`[TLS] PASS` для RSA и EC). TLS на
-macOS и Windows — в работе (PLAN). Модуль тот же по коду, что в `.76`.
+**`v2.7.0-portable.79` (181d891): TLS-блок в test kit на всех шести
+платформах.** TLS-соединение с ключом клиента в модуле под
+`FAKE_RUTOKEN_ECP` через OpenSSL 3 и pkcs11-provider владельца
+(`pkcs11-provider-dev-build-24`): на Linux — системный OpenSSL, на macOS —
+conda-forge 3.6.5 в kit, на Windows — MSYS2 3.6.5 в kit и `tls-client.exe`,
+собранный MSVC. Релиз `39029189405`: шесть сборок, семь проверок — каждая
+ждёт только свою сборку — и публикация; во всех семи `[TLS] PASS` для RSA и
+EC (Linux x64/ARM64 на Ubuntu 26.04, Windows x64/x86/ARM64, macOS на Apple
+silicon и Intel). Скачанные `SHA256SUMS`, product и kit Linux x64, kit
+Windows x64/x86/ARM64 и macOS совпали с суммами; Linux x64 kit на Ubuntu
+24.04 прошёл `run-test.sh` с `P11_TLS_REQUIRED=1` (`[LIFECYCLE] PASS`,
+`[TLS] PASS`, exit 0), модуль одинаков в обоих ZIP. Мелочь: в Windows x86 и
+ARM64 kit лишние `tls/openssl/bin/tls-client.{exp,lib}` — побочный продукт
+линковки, исправляется (PLAN). Модуль тот же по коду, что в `.76`. Владелец
+ещё не проверял TLS-блок у себя.
+
+Предыдущий `v2.7.0-portable.78` (be7e580) — симметричный пайплайн и TLS
+только на Linux.
 
 `v2.7.0-portable.77` (8b9fe3d) — с дефектом: в kit у `tls/bin/tls-client`
 не было бита исполнения, и на системе с OpenSSL 3 `run-test.sh` падал на
