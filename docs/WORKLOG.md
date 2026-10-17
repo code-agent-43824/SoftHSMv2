@@ -47,6 +47,21 @@ kit на Ubuntu 24.04 (OpenSSL 3.0.13) прошёл `run-test.sh` с
 на Linux сценарий с ним проходит. `tls-client` печатает ошибки OpenSSL
 через обратный вызов: на Windows у клиента и OpenSSL могут быть разные C
 runtime.
+**Сделано (Windows, без запуска на Windows).** `scripts/portable/msys2-openssl.lock`
+— пакеты MSYS2 для UCRT64, MINGW32 и CLANGARM64: OpenSSL 3.6.5-1 и то, что
+импортирует `pkcs11.dll` провайдера (`libwinpthread-1.dll`, для x86 ещё
+`libgcc_s_dw2-1.dll`; импорты сверены `llvm-objdump -p`). Сборка kit кладёт
+DLL, `openssl.exe` и `tls-client.exe` в `tls\openssl\bin`, провайдер — в
+`tls\openssl\lib\ossl-modules`, лицензии — рядом. `tls-client.exe`
+собирает MSVC (`cl /std:c11 /MT`) против заголовков MSYS2 и import library,
+сделанных `lib /def` из экспорта DLL; для MINGW32 и CLANGARM64, собранных с
+UPLINK, подключается `applink.c`. Сценарий `tls/run-tls.ps1` — двойник
+`run-tls.sh`; `tls/run.ps1` возвращает переменные окружения после себя;
+`run-test.ps1` вызывает блок в режиме встроенного модуля. Проверка релиза:
+состав `tls\` в архиве и `[TLS-CLIENT] PASS` в `test-output/tls` для RSA и
+EC. `run-tls.ps1` прогнан pwsh 7.5 на Linux (проход, strict mode, отказ —
+выход 1 без оставшегося сервера); Windows PowerShell 5.1 и MSVC проверит
+только релизный прогон.
 
 ## 2026-10-17 — TLS-блок в test kit
 

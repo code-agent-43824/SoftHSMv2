@@ -181,7 +181,11 @@ it on Ubuntu 26.04 runners, where a skip is a failure. The macOS kit carries
 its own universal OpenSSL in `tls/openssl` - the conda-forge 3.x build the
 provider is compiled against (`scripts/portable/conda-openssl.lock`,
 `scripts/portable/fetch-conda-openssl.sh`) - with the provider beside it, and
-the release verification requires the block on Apple silicon and Intel.
+the release verification requires the block on Apple silicon and Intel. The
+Windows kits do the same with the MSYS2 OpenSSL packages of their provider
+build (`scripts/portable/msys2-openssl.lock`) and an MSVC-built
+`tls-client.exe`, run by `tls/run.ps1` and `tls/run-tls.ps1`; the release
+verification checks the client's PASS in `test-output/tls`.
 
 `device-parity <module>` runs cases intended to hold both on this module
 and on the reference Rutoken through the vendor's `librtpkcs11ecp`. The

@@ -289,6 +289,14 @@ if ($BundledMode -eq "YES") {
         -Module $Module -Cli $Pkcs11Tool `
         -Spy (Join-Path $KitDir 'lib/pkcs11-spy.dll') `
         -Util $SoftHSMUtil -OutputDir $OutputDir
+    # TLS with the client key in the bundled module under the Rutoken
+    # profile, through the OpenSSL and pkcs11-provider the kit carries
+    # (tls\README.txt).
+    $TlsRunner = Join-Path $KitDir 'tls/run.ps1'
+    if (Test-Path -LiteralPath $TlsRunner -PathType Leaf) {
+        & $TlsRunner
+        if ($LASTEXITCODE -ne 0) { throw 'the TLS block failed' }
+    }
 }
 
 function Invoke-OpenSCPkcs11Tool([string]$Option, [string]$LogName) {

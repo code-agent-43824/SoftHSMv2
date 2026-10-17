@@ -351,6 +351,121 @@ $TestKitEnvironment = @(
 if ($UseBundle) { $TestKitEnvironment += "OPENSSL_GOST_BUNDLE_TAG=$BundleTag" }
 $TestKitEnvironment | Set-Content -Encoding ascii (Join-Path $StageDir "testkit.env")
 
+# The TLS block (tls\): a TLS client whose key stays in the module under the
+# Rutoken profile, reached through OpenSSL 3 and the owner's pkcs11-provider
+# fork (docs/JOURNAL.md, 17 October 2026). The kit carries that OpenSSL - the
+# MSYS2 build the provider is compiled against (msys2-openssl.lock) - with the
+# provider's runtime DLLs in tls\openssl\bin, where tls-client.exe and
+# openssl.exe load them from; tls-client.exe itself is built here with MSVC.
+$TlsDir = Join-Path $StageDir 'tls'
+$TlsOpenSSL = Join-Path $TlsDir 'openssl'
+$TlsBin = Join-Path $TlsOpenSSL 'bin'
+$TlsWork = Join-Path $WorkDir 'tls'
+New-Item -ItemType Directory -Force -Path $TlsBin, (Join-Path $TlsOpenSSL 'lib/ossl-modules'),
+    (Join-Path $TlsDir 'provider'), $TlsWork | Out-Null
+switch ($env:PORTABLE_ARCH.ToLowerInvariant()) {
+    'x64' { $Msys2Env = 'ucrt64'; $ProviderTarget = 'windows-x86_64-ucrt64'; $LibMachine = 'x64' }
+    'x86' { $Msys2Env = 'mingw32'; $ProviderTarget = 'windows-x86-mingw32'; $LibMachine = 'x86' }
+    'arm64' { $Msys2Env = 'clangarm64'; $ProviderTarget = 'windows-arm64-clangarm64'; $LibMachine = 'arm64' }
+}
+function Get-PinnedFile([string]$Uri, [string]$Sha256, [string]$Destination) {
+    # Windows PowerShell's progress bar slows a download many times over.
+    $ProgressPreference = 'SilentlyContinue'
+    Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $Destination
+    $Actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Destination).Hash
+    if ($Actual -ne $Sha256.ToUpperInvariant()) { throw "SHA-256 mismatch for ${Uri}: $Actual" }
+}
+$Msys2Packages = @(Get-Content -LiteralPath (Join-Path $RootDir 'scripts/portable/msys2-openssl.lock') |
+    Where-Object { $_ -match "^$Msys2Env\s" })
+if ($Msys2Packages.Count -eq 0) { throw "no pinned MSYS2 packages for $Msys2Env" }
+Push-Location $TlsWork
+try {
+    foreach ($Line in $Msys2Packages) {
+        $Fields = $Line -split '\s+'
+        $Archive = Join-Path $TlsWork (Split-Path -Leaf $Fields[2])
+        Get-PinnedFile "https://repo.msys2.org/mingw/$($Fields[2])" $Fields[1] $Archive
+        & cmake -E tar xf $Archive
+        if ($LASTEXITCODE -ne 0) { throw "cannot unpack $Archive" }
+    }
+    $ProviderLock = Get-Content -LiteralPath (Join-Path $RootDir 'scripts/portable/pkcs11-provider.lock')
+    $ProviderTag = (($ProviderLock | Where-Object { $_ -match '^tag ' }) -split '\s+')[1]
+    $ProviderName = "pkcs11-provider-dev-$ProviderTarget.tar.gz"
+    $ProviderSha = (($ProviderLock | Where-Object { $_ -match "\s$([regex]::Escape($ProviderName))$" }) -split '\s+')[0]
+    if (-not $ProviderTag -or -not $ProviderSha) { throw "no pinned pkcs11-provider for $ProviderTarget" }
+    $ProviderArchive = Join-Path $TlsWork $ProviderName
+    Get-PinnedFile "https://github.com/code-agent-43824/pkcs11-provider/releases/download/$ProviderTag/$ProviderName" `
+        $ProviderSha $ProviderArchive
+    & cmake -E tar xf $ProviderArchive
+    if ($LASTEXITCODE -ne 0) { throw "cannot unpack $ProviderArchive" }
+}
+finally { Pop-Location }
+$Msys2Root = Join-Path $TlsWork $Msys2Env
+$ProviderRoot = Join-Path $TlsWork "pkcs11-provider-dev-$ProviderTarget"
+$TlsDlls = @(Get-ChildItem -LiteralPath (Join-Path $Msys2Root 'bin') -File |
+    Where-Object { $_.Name -match '^(libcrypto-3.*|libssl-3.*|libwinpthread-1|libgcc_s_dw2-1)\.dll$' })
+foreach ($Dll in $TlsDlls) { Copy-Item -LiteralPath $Dll.FullName -Destination $TlsBin }
+Copy-Item -LiteralPath (Join-Path $Msys2Root 'bin/openssl.exe') -Destination $TlsBin
+Copy-Item -LiteralPath (Join-Path $ProviderRoot 'lib/ossl-modules/pkcs11.dll') `
+    -Destination (Join-Path $TlsOpenSSL 'lib/ossl-modules/pkcs11.dll')
+foreach ($Needed in @('libwinpthread-1.dll') + @(if ($Msys2Env -eq 'mingw32') { 'libgcc_s_dw2-1.dll' })) {
+    if (-not (Test-Path -LiteralPath (Join-Path $TlsBin $Needed))) { throw "the TLS block lacks $Needed" }
+}
+Copy-Item -LiteralPath (Join-Path $Msys2Root 'share/licenses/openssl/LICENSE') `
+    -Destination (Join-Path $TlsOpenSSL 'LICENSE-OpenSSL.txt')
+Copy-Item -LiteralPath (Join-Path $Msys2Root 'share/licenses/libwinpthread/COPYING') `
+    -Destination (Join-Path $TlsOpenSSL 'LICENSE-libwinpthread.txt')
+if ($Msys2Env -eq 'mingw32') {
+    Copy-Item -LiteralPath (Join-Path $Msys2Root 'share/licenses/libgcc/COPYING.RUNTIME') `
+        -Destination (Join-Path $TlsOpenSSL 'LICENSE-libgcc-RUNTIME.txt')
+    Copy-Item -LiteralPath (Join-Path $Msys2Root 'share/licenses/libgcc/COPYING3') `
+        -Destination (Join-Path $TlsOpenSSL 'LICENSE-libgcc-GPL3.txt')
+}
+($Msys2Packages | ForEach-Object { $Fields = $_ -split '\s+'; "MSYS2 $($Fields[2]) $($Fields[1])" }) |
+    Set-Content -Encoding ascii (Join-Path $TlsOpenSSL 'PACKAGE-SOURCE.txt')
+Copy-Item -LiteralPath (Join-Path $ProviderRoot 'COPYING') -Destination (Join-Path $TlsDir 'provider/COPYING')
+Copy-Item -LiteralPath (Join-Path $ProviderRoot 'LICENSES') -Destination (Join-Path $TlsDir 'provider') -Recurse
+Copy-Item -LiteralPath (Join-Path $ProviderRoot 'BUILD-INFO.txt') -Destination (Join-Path $TlsDir 'provider/BUILD-INFO.txt')
+
+# MSVC links the MSYS2 DLLs through import libraries made from their exports.
+$ImportLibs = @()
+foreach ($Dll in @($TlsDlls | Where-Object { $_.Name -match '^lib(ssl|crypto)-3' })) {
+    $Exports = @(& dumpbin /nologo /exports $Dll.FullName | ForEach-Object {
+        if ($_ -match '^\s+\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+([A-Za-z_][A-Za-z0-9_@]*)') { $Matches[1] }
+    })
+    if ($Exports.Count -lt 100) { throw "too few exports read from $($Dll.Name): $($Exports.Count)" }
+    $Def = Join-Path $TlsWork "$($Dll.BaseName).def"
+    (@("LIBRARY $($Dll.Name)", 'EXPORTS') + ($Exports | ForEach-Object { "    $_" })) |
+        Set-Content -Encoding ascii -LiteralPath $Def
+    $ImportLib = Join-Path $TlsWork "$($Dll.BaseName).lib"
+    & lib /nologo "/def:$Def" "/machine:$LibMachine" "/out:$ImportLib"
+    if ($LASTEXITCODE -ne 0) { throw "cannot make an import library for $($Dll.Name)" }
+    $ImportLibs += $ImportLib
+}
+$TlsClient = Join-Path $TlsBin 'tls-client.exe'
+$TlsCompile = @('/nologo', '/std:c11', '/O2', '/W3', '/MT',
+    "/I$(Join-Path $Msys2Root 'include')", "/Fo$(Join-Path $TlsWork 'tls-client.obj')",
+    (Join-Path $RootDir 'tests/portable/tls/tls-client.c')) + $ImportLibs + @("/Fe:$TlsClient")
+# A MSYS2 OpenSSL built with UPLINK (no OPENSSL_NO_UPLINK) expects the
+# application to provide OPENSSL_Applink.
+if (Test-Path -LiteralPath (Join-Path $Msys2Root 'include/openssl/applink.c')) {
+    $TlsCompile = @('/DTLS_CLIENT_APPLINK') + $TlsCompile
+}
+& cl @TlsCompile
+if ($LASTEXITCODE -ne 0) { throw "tls-client compile failed" }
+foreach ($Binary in @($TlsClient, (Join-Path $TlsBin 'openssl.exe'),
+        (Join-Path $TlsOpenSSL 'lib/ossl-modules/pkcs11.dll')) + @($TlsDlls | ForEach-Object { Join-Path $TlsBin $_.Name })) {
+    if (-not (& dumpbin /headers $Binary | Select-String -Pattern $ExpectedMachinePattern)) {
+        throw "$Binary does not have the expected $($env:PORTABLE_ARCH) PE machine type"
+    }
+}
+if (& dumpbin /dependents $TlsClient | Select-String -Pattern 'vcruntime|msvcp|ucrtbased' -CaseSensitive:$false) {
+    throw "tls-client.exe has an unexpected C runtime dependency"
+}
+Copy-Item (Join-Path $RootDir 'tests/portable/tls/run-tls.ps1') (Join-Path $TlsDir 'run-tls.ps1')
+Copy-Item (Join-Path $RootDir 'tests/portable/tls/run-kit-tls.ps1') (Join-Path $TlsDir 'run.ps1')
+Copy-Item (Join-Path $RootDir 'tests/portable/tls/tls-client.c') (Join-Path $TlsDir 'tls-client.c')
+Copy-Item (Join-Path $RootDir 'tests/portable/tls/README.txt') (Join-Path $TlsDir 'README.txt')
+
 $OpenSSLExe = Join-Path $StageDir "bin/openssl.exe"
 $env:OPENSSL_CONF = Join-Path $StageDir "config/openssl.cnf"
 $env:OPENSSL_MODULES = Join-Path $StageDir "bin"

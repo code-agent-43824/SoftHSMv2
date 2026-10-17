@@ -26,6 +26,13 @@
 #include <openssl/store.h>
 #include <openssl/x509.h>
 
+/* An OpenSSL built with UPLINK (MSYS2's MINGW32 and CLANGARM64) asks the
+ * application for its C runtime's I/O through the table applink.c defines;
+ * without it, the first such call ends the process. */
+#if defined(_WIN32) && defined(TLS_CLIENT_APPLINK)
+#include <openssl/applink.c>
+#endif
+
 static const char message[] = "ping from the token key\n";
 
 /* OpenSSL's errors go through a callback, not ERR_print_errors_fp: on Windows

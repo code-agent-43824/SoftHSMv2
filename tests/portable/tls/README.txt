@@ -8,9 +8,10 @@ reaches that key through pkcs11-provider.
 
 Run it from the kit directory:
 
-  bash tls/run.sh
+  bash tls/run.sh                                  (Linux, macOS)
+  powershell -ExecutionPolicy Bypass -File tls\run.ps1   (Windows)
 
-run-test.sh runs it as well. Evidence goes to test-output/tls.
+run-test.sh (run-test.cmd on Windows) runs it as well. Evidence goes to test-output/tls.
 
 What it does, on a fresh token store of its own:
 - initializes a token with the Rutoken factory PINs (user 12345678,
@@ -43,3 +44,11 @@ macOS: the block carries its OpenSSL in openssl/ - the conda-forge OpenSSL 3
 build the provider is compiled against (openssl/PACKAGE-SOURCE.txt), universal
 - with the provider at openssl/lib/ossl-modules/pkcs11.dylib; tls-client, the
 openssl command and the provider share its one libcrypto.
+
+Windows: the block carries its OpenSSL in openssl\ as well - the MSYS2
+OpenSSL 3 packages the provider is compiled against (UCRT64 on x64, MINGW32 on
+x86, CLANGARM64 on ARM64; openssl\PACKAGE-SOURCE.txt) with the runtime DLLs
+the provider needs, all in openssl\bin beside openssl.exe and
+tls-client.exe, and the provider at openssl\lib\ossl-modules\pkcs11.dll.
+tls-client.exe is built with MSVC and links the C runtime statically; the
+scripts are run.ps1 and run-tls.ps1.

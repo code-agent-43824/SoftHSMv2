@@ -19,7 +19,7 @@ The kit contains:
   OPENSC-SOURCE.txt); no operating-system OpenSC package is copied;
 - the portable softhsm2-util and softhsm2-export debug tools;
 - shell or PowerShell launchers;
-- on Linux and macOS, tls/: a TLS connection whose client key lives in the
+- tls/: a TLS connection whose client key lives in the
   module under the Rutoken profile, through OpenSSL 3 and pkcs11-provider
   (see tls/README.txt);
 - the C++ source and PKCS #11 headers for audit/rebuilding;
