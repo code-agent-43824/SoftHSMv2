@@ -219,7 +219,8 @@ upstream, and upstream compatibility is not a constraint on any change.
 
 Third-party versions and their SHA-256 pins live in `.github/workflows/ci.yml`
 (`OPENSSL_*`, `BOTAN_*`); the portable build scripts require them in the
-environment and fail without them.
+environment and fail without them. The pkcs11-provider build of the TLS block
+is pinned in `scripts/portable/pkcs11-provider.lock`.
 
 | Task | Command |
 | --- | --- |
@@ -272,15 +273,18 @@ the portable builds compile with warnings-as-errors settings from
 - `scripts/portable/` — per-platform build scripts and OpenSC bundling.
 - `tests/portable/` — the vendor-neutral PKCS #11 client
   (`portable-token-e2e.cpp`), its launchers, and the test kits.
-- `.github/workflows/ci.yml` — one job, but far more than a build: the portable
-  dependency combination, an audit of the produced archive, the autonomous
-  utilities and forced PKCS #8 export on a machine that has never run the
-  module, then the vendor-neutral client through `first-run`, `multi-token`,
-  `gost28147-modes` in three configurations, both `rutoken-profile` runs and
-  `core-behaviour`. Unit tests are still not among them (see below).
+- `.github/workflows/ci.yml` — far more than a build: the portable
+  dependency combination, an audit of the produced archive and of exit-time
+  destructors, the autonomous utilities and forced PKCS #8 export on a
+  machine that has never run the module, then the vendor-neutral client
+  through `first-run`, `multi-token`, `gost28147-modes` in three
+  configurations, both `rutoken-profile` runs, `core-behaviour` and
+  `lifecycle`; a second job runs the TLS block (`tests/portable/tls/`) in
+  `ubuntu:26.04`. Unit tests are still not among them (see below).
 - `.github/workflows/portable-release.yml` — six build jobs, six fresh-runner
   verification jobs that consume the published archives as an outside user
-  would, then the release job.
+  would, the Linux test kits' TLS block in `ubuntu:26.04`, then the release
+  job.
 
 Portable behaviour is gated by the CMake option `ENABLE_PORTABLE` (default OFF)
 and requires the OpenSSL backend. GOST 2012 is gated by

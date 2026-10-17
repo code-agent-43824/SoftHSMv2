@@ -234,6 +234,51 @@ if [[ -f "$product_dir/README.txt" ]]; then
   cp "$product_dir/README.txt" "$stage_dir/PRODUCT-README.txt"
 fi
 "$root_dir/scripts/portable/bundle-opensc-unix.sh" "$platform" "$stage_dir"
+
+# The TLS block (tls/): a TLS client whose key stays in the module under the
+# Rutoken profile, reached through the system's OpenSSL 3 and the owner's
+# pkcs11-provider fork (docs/JOURNAL.md, 17 October 2026). Linux for now.
+if [[ $platform == linux-* ]]; then
+  case "$platform" in
+    linux-x64) provider_target=linux-x86_64-ubuntu24.04 ;;
+    linux-arm64) provider_target=linux-aarch64-ubuntu24.04 ;;
+  esac
+  tls_stage="$stage_dir/tls"
+  mkdir -p "$tls_stage/bin"
+  "$root_dir/scripts/portable/fetch-pkcs11-provider.sh" "$provider_target" "$tls_stage/provider"
+  # OpenSSL's public headers, generated from the pinned source. tls-client
+  # links libssl.so.3 and libcrypto.so.3 by soname and keeps to the 3.0 API,
+  # so it runs against whichever OpenSSL 3 the system has.
+  if [[ ! -f "$source_dir/include/openssl/opensslv.h" ]]; then
+    if [[ ! -f "$source_dir/Configure" ]]; then
+      curl --fail --location --retry 5 --output "$archive" \
+        "https://github.com/openssl/openssl/releases/download/openssl-$OPENSSL_VERSION/openssl-$OPENSSL_VERSION.tar.gz"
+      printf '%s  %s\n' "$OPENSSL_SHA256" "$archive" | sha256sum --check
+      tar -xzf "$archive" -C "$work_dir"
+    fi
+    (cd "$source_dir" && ./Configure no-tests > "$work_dir/tls-headers.log" 2>&1 &&
+      make build_generated >> "$work_dir/tls-headers.log" 2>&1)
+  fi
+  cc -std=c11 -O2 -Wall -Wextra -Werror -I"$source_dir/include" \
+    "$root_dir/tests/portable/tls/tls-client.c" \
+    "$stage_dir/bin/libssl.so.3" "$stage_dir/bin/libcrypto.so.3" \
+    -o "$tls_stage/bin/tls-client"
+  newer_api=$(objdump -T "$tls_stage/bin/tls-client" | grep -oE 'OPENSSL_[0-9.]+' | \
+    sort -u | grep -vx 'OPENSSL_3.0.0' || true)
+  if [[ -n $newer_api ]]; then
+    echo "tls-client uses OpenSSL API newer than 3.0: $newer_api" >&2
+    exit 1
+  fi
+  if readelf -d "$tls_stage/bin/tls-client" | grep -Eq 'R(UN)?PATH'; then
+    echo "tls-client must find the system OpenSSL, not a bundled one" >&2
+    exit 1
+  fi
+  cp "$root_dir/tests/portable/tls/run-tls.sh" "$tls_stage/run-tls.sh"
+  cp "$root_dir/tests/portable/tls/run-kit-tls.sh" "$tls_stage/run.sh"
+  cp "$root_dir/tests/portable/tls/tls-client.c" "$tls_stage/tls-client.c"
+  cp "$root_dir/tests/portable/tls/README.txt" "$tls_stage/README.txt"
+  chmod +x "$tls_stage/run.sh" "$tls_stage/run-tls.sh" "$tls_stage/bin/tls-client"
+fi
 opensc_version=$(sed -n '1p' "$stage_dir/OPENSC-VERSION.txt")
 printf 'PLATFORM=%s\nMODULE_NAME=%s\nOPENSSL_VERSION=%s\nOPENSC_VERSION=%s\n' \
   "$platform" "$module_name" "$OPENSSL_VERSION" "$opensc_version" > "$stage_dir/testkit.env"
@@ -252,6 +297,10 @@ fi
   printf '\nClient binary:\n'; file "$stage_dir/bin/portable-token-e2e"
   printf '\nOpenSSL binary:\n'; file "$stage_dir/bin/openssl"
   printf '\nOpenSC pkcs11-tool binary:\n'; file "$stage_dir/bin/pkcs11-tool"
+  if [[ -d "$stage_dir/tls" ]]; then
+    printf '\nTLS client binary:\n'; file "$stage_dir/tls/bin/tls-client"
+    printf '\npkcs11-provider:\n'; cat "$stage_dir/tls/provider/BUILD-INFO.txt"
+  fi
 } > "$stage_dir/ENVIRONMENT.txt"
 
 chmod +x "$stage_dir/run-test.sh" "$stage_dir/bin/openssl" "$stage_dir/bin/pkcs11-tool" \

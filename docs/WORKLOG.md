@@ -12,6 +12,26 @@ PIN: отказ провайдера при `CKF_USER_PIN_TO_BE_CHANGED` вла�
 своём форке, новую сборку дождаться и проверить. Порядок: этот коммит, Linux
 (пример, сценарий, kit, CI, релиз), проверка на новой сборке провайдера,
 пауза владельцу, затем macOS и Windows.
+**Сделано (Linux, локально).** `tests/portable/tls/`: `tls-client.c`
+(OpenSSL 3.0 API, ключ по `pkcs11:` URI через `OSSL_STORE`, проверка
+сервера по CA, строка туда и обратно), `run-tls.sh` (сценарий), `run-kit-tls.sh`
+(в kit — `tls/run.sh`: проверка системы, SKIP или `P11_TLS_REQUIRED=1`),
+`README.txt`. Провайдер — `scripts/portable/pkcs11-provider.lock` (сборка 20)
+и `fetch-pkcs11-provider.sh`. Сборка kit для Linux: заголовки из
+закреплённых исходников OpenSSL, `tls-client` против библиотек kit с
+проверкой, что нужен только `OPENSSL_3.0.0` и нет RPATH. `run-test.sh`
+вызывает блок. CI: job `tls` в `ubuntu:26.04` вместо `provider-csr`; релиз:
+`verify-linux-tls` (x64, ARM64) по артефакту kit вместо
+`verify-linux-provider-csr`. `verify-provider-csr.sh` удалён — его сценарий
+вошёл в блок. Проверено (Linux x64): сценарий на сборке 20 и заводских PIN —
+OpenSSL 3.0.13 (24.04) и 3.5.5 (распакованные пакеты 26.04), RSA и EC, TLS
+1.3; с kit-овым и системным `pkcs11-tool`; сборка 19 — отказ; клиент,
+собранный с заголовками 3.5.8, на системном 3.0.13; копия kit `.76` с
+блоком — `run-test.sh` exit 0; SKIP и обязательный режим. Не проверено:
+ARM64, полная сборка kit (`build-test-kit-unix.sh` целиком) — их проверит
+релиз; контейнер `ubuntu:26.04` локально.
+**Дальше.** CI, релиз, скачать Linux x64 kit и прогнать блок; пауза
+владельцу; затем macOS.
 
 ## 2026-10-17 — падение при очистке OpenSSL: воспроизведение и исправление
 

@@ -281,6 +281,11 @@ if [[ "$bundled_mode" == YES ]]; then
     done
     printf '[LIFECYCLE] PASS: PKCS #11 calls after main, profile off and on\n'
   fi
+  # TLS with the client key in the bundled module under the Rutoken profile,
+  # through the system's OpenSSL 3 and pkcs11-provider (tls/README.txt).
+  if [[ -f "$kit_dir/tls/run.sh" ]]; then
+    bash "$kit_dir/tls/run.sh"
+  fi
   spy_name=pkcs11-spy.so
   [[ $(uname -s) == Darwin ]] && spy_name=pkcs11-spy.dylib
   bash "$kit_dir/scripts/verify-rutoken-opensc.sh" \

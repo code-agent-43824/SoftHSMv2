@@ -19,6 +19,9 @@ The kit contains:
   OPENSC-SOURCE.txt); no operating-system OpenSC package is copied;
 - the portable softhsm2-util and softhsm2-export debug tools;
 - shell or PowerShell launchers;
+- on Linux, tls/: a TLS connection whose client key lives in the module under
+  the Rutoken profile, through the system's OpenSSL 3 and pkcs11-provider
+  (see tls/README.txt);
 - the C++ source and PKCS #11 headers for audit/rebuilding;
 - the exact environment/tool versions in ENVIRONMENT.txt;
 - applicable license texts.

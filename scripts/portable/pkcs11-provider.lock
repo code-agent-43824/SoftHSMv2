@@ -1,0 +1,6 @@
+tag pkcs11-provider-dev-build-20
+31bb44c2594b73cd75c6f13d310ddadcfd8b8dcc72b26777ab14652c0d534aae  pkcs11-provider-dev-linux-aarch64-ubuntu24.04.tar.gz
+692d191842e00863692ca7e62b49a9a4ce9f84c3124fd954da35eab51fd84530  pkcs11-provider-dev-linux-x86_64-ubuntu24.04.tar.gz
+e8581a83d219720401195334718177abbb0b70d9e025b1806a61ff49e8e76545  pkcs11-provider-dev-macos-arm64-15.tar.gz
+1ef8631bbf5f95c12e7e20871f0b63361c146504c5b4f67cc78775c46fb2d2a9  pkcs11-provider-dev-macos-x86_64-15.tar.gz
+99eada70942d9ed1d788a90085dd0deae7bbf4673bfe09a1a689f2f93625a8e7  pkcs11-provider-dev-windows-x86_64-ucrt64.tar.gz

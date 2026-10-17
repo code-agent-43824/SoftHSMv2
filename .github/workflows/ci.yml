@@ -329,30 +329,41 @@ jobs:
           P11_TEST_SO_PIN=12345678 P11_TEST_USER_PIN=12345678 \
             ./portable-token-e2e device-parity-write "$module"
 
-  # The scenario of docs/JOURNAL.md, 17 October 2026, in the owner's
-  # environment: the CSR is made by the distribution's OpenSSL through the
-  # distribution's pkcs11-provider, without no-deinit, and the process has to
-  # exit 0 after the provider's late C_CloseSession and C_Finalize.
-  provider-csr:
-    name: CSR through pkcs11-provider (Ubuntu 26.04 packages)
+  # The test kit's TLS block on the module just built, in the owner's
+  # environment: Ubuntu 26.04's OpenSSL and the pinned build of the owner's
+  # pkcs11-provider fork (scripts/portable/pkcs11-provider.lock). The client
+  # key is generated on the token under the Rutoken profile with the factory
+  # PINs; the CSR goes through the provider, and every OpenSSL process has to
+  # exit 0 after the provider's late C_CloseSession and C_Finalize
+  # (docs/JOURNAL.md, 17 October 2026).
+  tls:
+    name: TLS through pkcs11-provider (Ubuntu 26.04)
     needs: portable-dependency-baseline
     runs-on: ubuntu-24.04
     container: ubuntu:26.04
     steps:
-      - name: Install the distribution's OpenSSL and pkcs11-provider
+      - name: Install the distribution's OpenSSL, a compiler and pkcs11-tool
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            ca-certificates openssl pkcs11-provider
+            ca-certificates curl gcc libc6-dev libssl-dev opensc openssl
           openssl version
-          dpkg-query -W openssl pkcs11-provider
+          dpkg-query -W openssl libssl-dev opensc
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           name: ci-portable-product-linux-x64
           path: portable-product
-      - name: Create a CSR through pkcs11-provider with a key in the module
+      - name: Fetch the pinned pkcs11-provider and build tls-client
+        run: |
+          bash scripts/portable/fetch-pkcs11-provider.sh linux-x86_64-ubuntu24.04 \
+            "$RUNNER_TEMP/pkcs11-provider"
+          cc -std=c11 -O2 -Wall -Wextra -Werror tests/portable/tls/tls-client.c \
+            -lssl -lcrypto -o "$RUNNER_TEMP/tls-client"
+      - name: TLS with the client key in the module under the Rutoken profile
         run: |
           chmod +x portable-product/softhsm2-util
-          bash tests/portable/verify-provider-csr.sh portable-product/libsofthsm2.so \
-            portable-product/softhsm2-util "$RUNNER_TEMP/provider-csr"
+          bash tests/portable/tls/run-tls.sh portable-product/libsofthsm2.so \
+            portable-product/softhsm2-util /usr/bin/pkcs11-tool \
+            "$RUNNER_TEMP/pkcs11-provider/lib/ossl-modules/pkcs11.so" \
+            "$RUNNER_TEMP/tls-client" "$RUNNER_TEMP/tls"

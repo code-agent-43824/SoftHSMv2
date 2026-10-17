@@ -167,12 +167,17 @@ signature - for the handler, which closes them and finalizes. Success is exit
 main`. CI runs it with the profile off and on, and so does `run-test.sh` of
 the Linux test kits.
 
-`verify-provider-csr.sh <module> <softhsm2-util> <work-directory>` is the
-scenario itself: the distribution's `openssl req` makes a CSR through the
-distribution's `pkcs11-provider`, without `no-deinit`, with RSA and EC keys
-and the profile off and on; the process has to exit 0, the CSR has to verify
-and carry the token's key. `P11_PROVIDER_MODULE` points it at another
-`pkcs11.so`. CI and the Linux release jobs run it in `ubuntu:26.04`.
+`tls/` is the test kit's TLS block (`tls/README.txt`): `tls/run-tls.sh
+<module> <softhsm2-util> <pkcs11-tool> <pkcs11-provider> <tls-client> <work>`
+generates RSA and EC keys on a token under the Rutoken profile with the
+factory PINs, makes a CSR for each through `openssl req` and pkcs11-provider,
+and connects `tls/tls-client.c` with that key to a local `openssl s_server`
+that requires the client certificate. The provider is the pinned build of
+`code-agent-43824/pkcs11-provider` (`scripts/portable/pkcs11-provider.lock`,
+`scripts/portable/fetch-pkcs11-provider.sh`). The Linux kits carry it with a
+prebuilt `tls-client` and the wrapper `tls/run.sh`, which needs the system's
+OpenSSL 3 and otherwise says SKIP; CI and the Linux release jobs run it in
+`ubuntu:26.04`, where a skip is a failure.
 
 `device-parity <module>` runs cases intended to hold both on this module
 and on the reference Rutoken through the vendor's `librtpkcs11ecp`. The

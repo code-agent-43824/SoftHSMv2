@@ -832,15 +832,16 @@ jobs:
               "$GITHUB_WORKSPACE/cms-vector-windows/gost$bits"
           done
 
-  # The scenario of docs/JOURNAL.md, 17 October 2026, on the archive that is
-  # about to be published and in the owner's environment: the distribution's
-  # OpenSSL makes a CSR through the distribution's pkcs11-provider, without
-  # no-deinit, and the process has to exit 0 after the provider's late
-  # C_CloseSession and C_Finalize. Linux for now; the other platforms are to
-  # be checked later, by the owner's decision.
-  verify-linux-provider-csr:
-    name: Verify Linux ${{ matrix.arch }} CSR through pkcs11-provider (Ubuntu 26.04)
-    needs: [build-linux-x64, build-linux-arm64]
+  # The test kit's TLS block, run from the kit about to be published in the
+  # owner's environment: Ubuntu 26.04's OpenSSL with the kit's tls-client and
+  # pkcs11-provider. The client key is generated on the token under the
+  # Rutoken profile with the factory PINs; the CSR goes through the provider
+  # and every OpenSSL process has to exit 0 (docs/JOURNAL.md, 17 October
+  # 2026). The kit's own verifier jobs run in Ubuntu 20.04, where the block
+  # only reports SKIP. Linux for now; the other platforms follow.
+  verify-linux-tls:
+    name: Verify Linux ${{ matrix.arch }} test-kit TLS block (Ubuntu 26.04)
+    needs: [verify-linux-x64, verify-linux-arm64]
     strategy:
       fail-fast: false
       matrix:
@@ -852,25 +853,21 @@ jobs:
     runs-on: ${{ matrix.runner }}
     container: ubuntu:26.04
     steps:
-      - name: Install the distribution's OpenSSL and pkcs11-provider
+      - name: Install the distribution's OpenSSL
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            ca-certificates openssl pkcs11-provider
+            ca-certificates openssl
           openssl version
-          dpkg-query -W openssl pkcs11-provider
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          dpkg-query -W openssl
       - uses: actions/download-artifact@v8
         with:
-          name: softhsm-portable-linux-${{ matrix.arch }}
-          path: downloaded
-      - name: Create a CSR through pkcs11-provider with a key in the module
+          name: softhsm-testkit-linux-${{ matrix.arch }}
+          path: testkit
+      - name: Run the TLS block of the test kit
         run: |
-          chmod +x downloaded/softhsm2-util
-          bash tests/portable/verify-provider-csr.sh downloaded/libsofthsm2.so \
-            downloaded/softhsm2-util "$RUNNER_TEMP/provider-csr"
+          chmod +x testkit/bin/* testkit/tls/bin/tls-client
+          P11_TLS_REQUIRED=1 bash testkit/tls/run.sh
 
   release:
     name: Publish all verified portable packages
@@ -883,7 +880,7 @@ jobs:
       - verify-windows-arm64
       - verify-macos-universal
       - verify-cms-cross-linux
-      - verify-linux-provider-csr
+      - verify-linux-tls
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -1017,7 +1014,12 @@ jobs:
                     zipinfo -1 "$archive" | grep -Fx 'bin/gostprov.so' >/dev/null
                     zipinfo -1 "$archive" | grep -Fx 'bin/gost.so' >/dev/null
                     zipinfo -1 "$archive" | grep -Fx 'bin/libcrypto.so.3' >/dev/null
-                    zipinfo -1 "$archive" | grep -Fx 'bin/libssl.so.3' >/dev/null ;;
+                    zipinfo -1 "$archive" | grep -Fx 'bin/libssl.so.3' >/dev/null
+                    zipinfo -1 "$archive" | grep -Fx 'tls/run.sh' >/dev/null
+                    zipinfo -1 "$archive" | grep -Fx 'tls/run-tls.sh' >/dev/null
+                    zipinfo -1 "$archive" | grep -Fx 'tls/bin/tls-client' >/dev/null
+                    zipinfo -1 "$archive" | grep -Fx 'tls/provider/lib/ossl-modules/pkcs11.so' >/dev/null
+                    zipinfo -1 "$archive" | grep -Fx 'tls/provider/COPYING' >/dev/null ;;
                 esac
                 zipinfo -1 "$archive" | grep -Fx 'config/openssl-gost-engine.cnf' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'scripts/verify-gost-cms.sh' >/dev/null
