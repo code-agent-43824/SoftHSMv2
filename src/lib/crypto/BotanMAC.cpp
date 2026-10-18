@@ -93,6 +93,30 @@ size_t BotanHMACSHA512::getMacSize() const
 	return 64;
 }
 
+#ifdef WITH_GOST_3411_2012
+std::string BotanHMACStreebog256::getAlgorithm() const
+{
+	return "HMAC(Streebog-256)";
+}
+
+size_t BotanHMACStreebog256::getMacSize() const
+{
+	return 32;
+}
+#endif
+
+#ifdef WITH_GOST_3411_2012_512
+std::string BotanHMACStreebog512::getAlgorithm() const
+{
+	return "HMAC(Streebog-512)";
+}
+
+size_t BotanHMACStreebog512::getMacSize() const
+{
+	return 64;
+}
+#endif
+
 #ifdef WITH_GOST
 std::string BotanHMACGOSTR3411::getAlgorithm() const
 {

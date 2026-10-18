@@ -3565,6 +3565,8 @@ static void prepare(const fs::path& modulePath, const fs::path& work)
         requireMechanism(module, slot, CKM_GOST28147_ECB, CKF_ENCRYPT | CKF_DECRYPT, 32);
         requireMechanism(module, slot, CKM_KUZNECHIK_ECB, CKF_ENCRYPT | CKF_DECRYPT, 32);
         requireMechanism(module, slot, CKM_MAGMA_MGM, CKF_ENCRYPT | CKF_DECRYPT, 32);
+        requireMechanism(module, slot, CKM_GOSTR3411_12_256_HMAC, CKF_SIGN | CKF_VERIFY);
+        requireMechanism(module, slot, CKM_GOSTR3411_12_512_HMAC, CKF_SIGN | CKF_VERIFY);
         verifyGOSTSymmetric(module, session);
         trace("SCENARIO", "END GOST SYMMETRIC: all required checks passed");
     }
@@ -5234,6 +5236,89 @@ static void verifyOneShot(Module& module, CK_SESSION_HANDLE session,
                          static_cast<CK_ULONG>(signature.size())); });
 }
 
+static void verifyStreebogHMAC(Module& module, CK_SESSION_HANDLE session)
+{
+    // RFC 7836, Appendix B, examples 1 and 2. One key and message exercise
+    // both Streebog sizes through the PKCS #11 signing and verification paths.
+    const Bytes keyBytes = bytesFromHex(
+        "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
+    const Bytes data = bytesFromHex("0126bdb87800af214341456563780100");
+    const CK_OBJECT_HANDLE key = createGOSTSecret(module, session, CKK_GENERIC_SECRET, keyBytes);
+    struct Vector { CK_MECHANISM_TYPE mechanism; const char* expected; };
+    const Vector vectors[] = {
+        {CKM_GOSTR3411_12_256_HMAC,
+         "a1aa5f7de402d7b3d323f2991c8d4534013137010a83754fd0af6d7cd4922ed9"},
+        {CKM_GOSTR3411_12_512_HMAC,
+         "a59bab22ecae19c65fbde6e5f4e9f5d8549d31f037f9df9b905500e171923a77"
+         "3d5f1530f2ed7e964cb2eedc29e9ad2f3afe93b2814f79f5000ffc0366c251e6"}
+    };
+    for (const Vector& vector : vectors)
+    {
+        const Bytes expected = bytesFromHex(vector.expected);
+        const Bytes actual = signOneShot(module, session, key, vector.mechanism, data);
+        if (actual != expected) fail("Streebog HMAC differs from RFC 7836 Appendix B");
+        verifyOneShot(module, session, key, vector.mechanism, data, expected);
+
+        CK_MECHANISM mechanism{vector.mechanism, nullptr, 0};
+        callOk("C_SignInit", "Streebog HMAC multipart", [&] {
+            return module->C_SignInit(session, &mechanism, key);
+        });
+        callOk("C_SignUpdate", "Streebog HMAC first part", [&] {
+            return module->C_SignUpdate(session, const_cast<CK_BYTE*>(data.data()), 7);
+        });
+        callOk("C_SignUpdate", "Streebog HMAC second part", [&] {
+            return module->C_SignUpdate(session, const_cast<CK_BYTE*>(data.data() + 7),
+                                         static_cast<CK_ULONG>(data.size() - 7));
+        });
+        CK_ULONG length = static_cast<CK_ULONG>(expected.size());
+        Bytes multipart(length);
+        callOk("C_SignFinal", "Streebog HMAC multipart", [&] {
+            return module->C_SignFinal(session, multipart.data(), &length);
+        });
+        multipart.resize(length);
+        if (multipart != expected) fail("Streebog HMAC multipart differs from RFC 7836");
+
+        callOk("C_VerifyInit", "Streebog HMAC multipart", [&] {
+            return module->C_VerifyInit(session, &mechanism, key);
+        });
+        callOk("C_VerifyUpdate", "Streebog HMAC first part", [&] {
+            return module->C_VerifyUpdate(session, const_cast<CK_BYTE*>(data.data()), 7);
+        });
+        callOk("C_VerifyUpdate", "Streebog HMAC second part", [&] {
+            return module->C_VerifyUpdate(session, const_cast<CK_BYTE*>(data.data() + 7),
+                                           static_cast<CK_ULONG>(data.size() - 7));
+        });
+        callOk("C_VerifyFinal", "Streebog HMAC multipart", [&] {
+            return module->C_VerifyFinal(session, const_cast<CK_BYTE*>(expected.data()),
+                                          static_cast<CK_ULONG>(expected.size()));
+        });
+
+        Bytes tampered = expected;
+        tampered.back() ^= 1;
+        callOk("C_VerifyInit", "Streebog HMAC tampered tag", [&] {
+            return module->C_VerifyInit(session, &mechanism, key);
+        });
+        check(invoke("C_Verify", "Streebog HMAC tampered tag", [&] {
+            return module->C_Verify(session, const_cast<CK_BYTE*>(data.data()),
+                                     static_cast<CK_ULONG>(data.size()), tampered.data(),
+                                     static_cast<CK_ULONG>(tampered.size()));
+        }), CKR_SIGNATURE_INVALID, "C_Verify(Streebog HMAC tampered tag)");
+
+        CK_BYTE invalidParameter = 0;
+        CK_MECHANISM invalid{vector.mechanism, &invalidParameter, 1};
+        check(invoke("C_SignInit", "Streebog HMAC invalid parameter", [&] {
+            return module->C_SignInit(session, &invalid, key);
+        }), CKR_MECHANISM_PARAM_INVALID, "C_SignInit(Streebog HMAC invalid parameter)");
+        check(invoke("C_VerifyInit", "Streebog HMAC invalid parameter", [&] {
+            return module->C_VerifyInit(session, &invalid, key);
+        }), CKR_MECHANISM_PARAM_INVALID, "C_VerifyInit(Streebog HMAC invalid parameter)");
+    }
+    callOk("C_DestroyObject", "Streebog HMAC key", [&] {
+        return module->C_DestroyObject(session, key);
+    });
+    trace("REFERENCE", "Streebog HMAC-256/512 matched RFC 7836 in one-shot and multipart PKCS #11 calls");
+}
+
 // A digest of a large buffer, without the argument dump the shared helper
 // writes: the inputs here are 16 KB and would bury the trace.
 static Bytes digestQuietly(Module& module, CK_SESSION_HANDLE session,
@@ -5585,6 +5670,7 @@ static void verifyGOST28147OnPrivateKeys(Module& module, CK_SESSION_HANDLE sessi
 
 static void verifyGOSTSymmetric(Module& module, CK_SESSION_HANDLE session)
 {
+    verifyStreebogHMAC(module, session);
     generateGOSTSecret(module, session, CKM_GOST28147_KEY_GEN, CKK_GOST28147);
     generateGOSTSecret(module, session, CKM_KUZNECHIK_KEY_GEN, CKK_KUZNECHIK);
     generateGOSTSecret(module, session, CKM_MAGMA_KEY_GEN, CKK_MAGMA);

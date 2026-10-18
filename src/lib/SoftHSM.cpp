@@ -1708,9 +1708,11 @@ void SoftHSM::prepareSupportedMechanisms(std::map<std::string, CK_MECHANISM_TYPE
 #endif
 #ifdef WITH_GOST_3411_2012
 	t["CKM_GOSTR3411_2012_256"] = CKM_GOSTR3411_2012_256;
+	t["CKM_GOSTR3411_12_256_HMAC"] = CKM_GOSTR3411_12_256_HMAC;
 #endif
 #ifdef WITH_GOST_3411_2012_512
 	t["CKM_GOSTR3411_12_512"] = CKM_GOSTR3411_12_512;
+	t["CKM_GOSTR3411_12_512_HMAC"] = CKM_GOSTR3411_12_512_HMAC;
 #endif
 	t["CKM_GOST28147_KEY_GEN"] = CKM_GOST28147_KEY_GEN;
 	t["CKM_KUZNECHIK_KEY_GEN"] = CKM_KUZNECHIK_KEY_GEN;
@@ -2289,6 +2291,18 @@ CK_RV SoftHSM::C_GetMechanismInfo(CK_SLOT_ID slotID, CK_MECHANISM_TYPE type, CK_
 			pInfo->ulMaxKeySize = 512;
 			pInfo->flags = CKF_SIGN | CKF_VERIFY;
 			break;
+#ifdef WITH_GOST_3411_2012
+		case CKM_GOSTR3411_12_256_HMAC:
+#endif
+#ifdef WITH_GOST_3411_2012_512
+		case CKM_GOSTR3411_12_512_HMAC:
+#endif
+#if defined(WITH_GOST_3411_2012) || defined(WITH_GOST_3411_2012_512)
+			pInfo->ulMinKeySize = 1;
+			pInfo->ulMaxKeySize = 512;
+			pInfo->flags = CKF_SIGN | CKF_VERIFY;
+			break;
+#endif
 		case CKM_RSA_PKCS_KEY_PAIR_GEN:
 			pInfo->ulMinKeySize = rsaMinSize;
 			pInfo->ulMaxKeySize = rsaMaxSize;
@@ -5750,6 +5764,12 @@ static bool isMacMechanism(CK_MECHANISM_PTR pMechanism)
 		case CKM_SHA256_HMAC:
 		case CKM_SHA384_HMAC:
 		case CKM_SHA512_HMAC:
+#ifdef WITH_GOST_3411_2012
+		case CKM_GOSTR3411_12_256_HMAC:
+#endif
+#ifdef WITH_GOST_3411_2012_512
+		case CKM_GOSTR3411_12_512_HMAC:
+#endif
 #ifdef WITH_GOST
 		case CKM_GOSTR3411_HMAC:
 #endif
@@ -5854,6 +5874,22 @@ CK_RV SoftHSM::MacSignInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMechani
 			minSize = 64;
 			algo = MacAlgo::HMAC_SHA512;
 			break;
+#ifdef WITH_GOST_3411_2012
+		case CKM_GOSTR3411_12_256_HMAC:
+			if (keyType != CKK_GENERIC_SECRET) return CKR_KEY_TYPE_INCONSISTENT;
+			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
+				return CKR_MECHANISM_PARAM_INVALID;
+			algo = MacAlgo::HMAC_GOST2012_256;
+			break;
+#endif
+#ifdef WITH_GOST_3411_2012_512
+		case CKM_GOSTR3411_12_512_HMAC:
+			if (keyType != CKK_GENERIC_SECRET) return CKR_KEY_TYPE_INCONSISTENT;
+			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
+				return CKR_MECHANISM_PARAM_INVALID;
+			algo = MacAlgo::HMAC_GOST2012_512;
+			break;
+#endif
 #ifdef WITH_GOST
 		case CKM_GOSTR3411_HMAC:
 			if (keyType != CKK_GENERIC_SECRET && keyType != CKK_GOST28147)
@@ -7046,6 +7082,22 @@ CK_RV SoftHSM::MacVerifyInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMecha
 			minSize = 64;
 			algo = MacAlgo::HMAC_SHA512;
 			break;
+#ifdef WITH_GOST_3411_2012
+		case CKM_GOSTR3411_12_256_HMAC:
+			if (keyType != CKK_GENERIC_SECRET) return CKR_KEY_TYPE_INCONSISTENT;
+			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
+				return CKR_MECHANISM_PARAM_INVALID;
+			algo = MacAlgo::HMAC_GOST2012_256;
+			break;
+#endif
+#ifdef WITH_GOST_3411_2012_512
+		case CKM_GOSTR3411_12_512_HMAC:
+			if (keyType != CKK_GENERIC_SECRET) return CKR_KEY_TYPE_INCONSISTENT;
+			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
+				return CKR_MECHANISM_PARAM_INVALID;
+			algo = MacAlgo::HMAC_GOST2012_512;
+			break;
+#endif
 #ifdef WITH_GOST
 		case CKM_GOSTR3411_HMAC:
 			if (keyType != CKK_GENERIC_SECRET && keyType != CKK_GOST28147)

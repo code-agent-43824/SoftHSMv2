@@ -117,6 +117,10 @@ if(WITH_GOST_3411_2012_512)
     list(APPEND SOURCES BotanStreebog512.cpp)
 endif(WITH_GOST_3411_2012_512)
 
+if(WITH_OPENSSL AND (WITH_GOST_3411_2012 OR WITH_GOST_3411_2012_512))
+    list(APPEND SOURCES BotanMacAlgorithm.cpp BotanMAC.cpp)
+endif()
+
 if(WITH_GOST_3410_2012_256)
     list(APPEND SOURCES BotanGOST2012KEG.cpp
                         BotanGOST2012KeyGenerator.cpp

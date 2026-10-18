@@ -233,6 +233,14 @@ MacAlgorithm* BotanCryptoFactory::getMacAlgorithm(MacAlgo::Type algorithm)
 			return new BotanHMACSHA384();
 		case MacAlgo::HMAC_SHA512:
 			return new BotanHMACSHA512();
+#ifdef WITH_GOST_3411_2012
+		case MacAlgo::HMAC_GOST2012_256:
+			return new BotanHMACStreebog256();
+#endif
+#ifdef WITH_GOST_3411_2012_512
+		case MacAlgo::HMAC_GOST2012_512:
+			return new BotanHMACStreebog512();
+#endif
 #ifdef WITH_GOST
 		case MacAlgo::HMAC_GOST:
 			return new BotanHMACGOSTR3411();

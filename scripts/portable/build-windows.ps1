@@ -88,7 +88,7 @@ if ($ActualBotanHash -ne $env:BOTAN_SHA256.ToLowerInvariant()) {
 tar -xJf $BotanArchive -C $WorkDir
 
 python (Join-Path $BotanSource "configure.py") --cc=msvc --os=windows --cpu=$BotanCpu `
-    --msvc-runtime=MT --disable-shared --minimized-build --enable-modules=streebog,gost_3410,emsa_raw `
+    --msvc-runtime=MT --disable-shared --minimized-build --enable-modules=streebog,gost_3410,emsa_raw,hmac `
     --without-documentation "--with-build-dir=$BotanBuild"
 if ($LASTEXITCODE -ne 0) { throw "Botan configure failed" }
 # Botan's makefile is in nmake syntax too, and jom runs it in parallel; its
