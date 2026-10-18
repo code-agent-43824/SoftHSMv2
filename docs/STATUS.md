@@ -1,6 +1,6 @@
 # STATUS — состояние проекта
 
-Обновлено: 2026-10-17. Транк: `main`.
+Обновлено: 2026-10-18. Транк: `main`.
 
 **`v2.7.0-portable.84` (6aeadd3): `CKM_GOSTR3410_12_DERIVE` как у
 устройства** — по пробе владельца 17.10 на Рутокен ЭЦП 3.0 (JOURNAL 17.10).
@@ -15,8 +15,10 @@
 `DEVICE-PARITY: all cases passed`, `[BATTERY] PASS` и `[TLS] PASS` — и
 публикация. Скачанные `SHA256SUMS` и архивы Linux x64, Windows x64 kit и
 macOS kit совпали; Linux x64 kit на Ubuntu 24.04 прошёл `run-test.sh` с
-`P11_TLS_REQUIRED=1` (exit 0), модуль одинаков в product и kit. На токене
-владельца новый кейс и сценарии W7/W8 плагина ещё не прогонялись.
+`P11_TLS_REQUIRED=1` (exit 0), модуль одинаков в product и kit. На реальном
+Рутокене владельца `device-parity` с новым кейсом `vko` и
+`device-parity-write` прошли по сырым логам от 17.10 (JOURNAL 18.10).
+Сценарии W7/W8 плагина на стенде ещё не представлены.
 
 Перед ним **`v2.7.0-portable.83` (88b478b): сборка Windows ускорена.** jom для OpenSSL
 и Botan, загрузки без индикатора прогресса и Botan параллельно с OpenSSL (без
