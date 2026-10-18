@@ -1,9 +1,8 @@
 /*
- * One-run probe of CKM_GOSTR3410_12_DERIVE (0xD4321007) on a real Rutoken:
- * the call Rutoken Plugin makes to decrypt GOST 28147-89, and every variant of
- * it the plugin's trace does not show (docs/PLAN.md, docs/JOURNAL.md of
- * 16 October 2026). It prints one text log; the fork's implementation of the
- * rest waits for that log.
+ * One-run probe of CKM_GOSTR3410_12_DERIVE (0xD4321007) on a real Rutoken.
+ * The original measurements informed release .84; this version also measures
+ * the VKO variants that the first run left unknown. It prints one text log;
+ * answers for unknown variants are not assumed before a hardware run.
  *
  * What it reads:
  *   1. identity and the mechanism information of the GOST derive mechanisms;
@@ -16,14 +15,17 @@
  *   3. agreement from both sides on CryptoPro-A/B/C and TC26-A, and whether
  *      the token accepts the sample private key for import;
  *   4. other KDF values, UKM lengths and a zero UKM;
- *   5. the parameter as a CK_GOSTR3410_DERIVE_PARAMS structure instead of the
+ *   5. unmeasured UKM lengths, diversification, S-box and result attributes;
+ *   6. the parameter as a CK_GOSTR3410_DERIVE_PARAMS structure instead of the
  *      flat buffer, and malformed buffers;
- *   6. other result key types, CKA_VALUE_LEN, token, sensitive and
+ *   7. other result key types, CKA_VALUE_LEN, token, sensitive and
  *      non-extractable results, explicit CKA_GOST28147_PARAMS;
- *   7. 512-bit keys (TC26 paramSetC, the curve of the 512-bit TC26 sample);
- *   8. a base key without CKA_DERIVE, a public key as the base key, and the
+ *   8. 512-bit keys (TC26 paramSetC, the curve of the 512-bit TC26 sample);
+ *   9. a base key without CKA_DERIVE, a public key as the base key, and the
  *      same parameter under CKM_GOSTR3410_DERIVE (0x1204);
- *   9. clean-up.
+ *  10. identify five advertised mechanisms and try the two named KDFs
+ *      only with disposable session keys;
+ *  11. clean-up.
  *
  * It needs only the user PIN. It does not format the token, uses no SO PIN,
  * makes no wrong PIN attempt, and destroys every object it created (they all
@@ -54,6 +56,11 @@
 #define MECH_GOSTR3410_12_DERIVE 0xD4321007UL
 #define MECH_GOSTR3410_DERIVE    0x00001204UL
 #define MECH_GOST_KEG            0xD4321039UL
+#define MECH_KDF_HMAC_256        0xD4321028UL
+#define MECH_KDF_TREE_256        0xD432102AUL
+#define MECH_VKO_512             0xD4321038UL
+#define MECH_VENDOR_CBC_FSS      0x8000000BUL
+#define MECH_VENDOR_SECURE_IMPORT 0x80000003UL
 
 static const char PROBE_LABEL[] = "CryptoMost derive probe";
 
@@ -79,6 +86,8 @@ static const CK_BYTE DIGEST_256[]    = { 0x06,0x08,0x2a,0x85,0x03,0x07,0x01,0x01
 static const CK_BYTE DIGEST_512[]    = { 0x06,0x08,0x2a,0x85,0x03,0x07,0x01,0x01,0x02,0x03 };
 /* id-Gost28147-89-CryptoPro-A-ParamSet, 1.2.643.2.2.31.1 */
 static const CK_BYTE GOST28147_CP_A[] = { 0x06,0x07,0x2a,0x85,0x03,0x02,0x02,0x1f,0x01 };
+static const CK_BYTE GOST28147_CP_B[] = { 0x06,0x07,0x2a,0x85,0x03,0x02,0x02,0x1f,0x02 };
+static const CK_BYTE GOST28147_TC26_Z[] = { 0x06,0x09,0x2a,0x85,0x03,0x07,0x01,0x02,0x05,0x01,0x01 };
 
 /* Public halves of the TC26 sample keys the fork's tests use (verifyGOSTKEG,
  * verifyGOSTKEG512), as little-endian X || Y. The private halves are public
@@ -340,10 +349,11 @@ typedef struct {
 	CK_BBOOL token;
 	int sensitive;		/* -1: not given */
 	int extractable;	/* -1: not given */
-	int gostParams;		/* 1: CKA_GOST28147_PARAMS = CryptoPro-A */
+	int gostParams;		/* 1: CryptoPro-A, 2: CryptoPro-B, 3: TC26-Z */
+	int deriveAttribute;	/* 0: omitted, -1: FALSE, 1: TRUE */
 } Result;
 
-static const Result PLUGIN_RESULT = { CKK_GOST28147, -1, CK_FALSE, -1, -1, 0 };
+static const Result PLUGIN_RESULT = { CKK_GOST28147, -1, CK_FALSE, -1, -1, 0, 0 };
 
 static CK_RV derive(CK_MECHANISM_TYPE mechanism, CK_OBJECT_HANDLE base, const void* param,
 		    CK_ULONG paramLen, const Result* result, CK_OBJECT_HANDLE* key)
@@ -354,7 +364,8 @@ static CK_RV derive(CK_MECHANISM_TYPE mechanism, CK_OBJECT_HANDLE base, const vo
 	CK_BBOOL token = result->token;
 	CK_BBOOL sensitive = result->sensitive > 0 ? CK_TRUE : CK_FALSE;
 	CK_BBOOL extractable = result->extractable > 0 ? CK_TRUE : CK_FALSE;
-	CK_ATTRIBUTE t[8];
+	CK_BBOOL deriveValue = result->deriveAttribute > 0 ? CK_TRUE : CK_FALSE;
+	CK_ATTRIBUTE t[9];
 	CK_ULONG n = 0;
 	CK_MECHANISM mech = { mechanism, (CK_VOID_PTR)param, paramLen };
 	t[n].type = CKA_CLASS; t[n].pValue = &secret; t[n++].ulValueLen = sizeof(secret);
@@ -363,7 +374,17 @@ static CK_RV derive(CK_MECHANISM_TYPE mechanism, CK_OBJECT_HANDLE base, const vo
 	if (result->valueLen >= 0) { t[n].type = CKA_VALUE_LEN; t[n].pValue = &valueLen; t[n++].ulValueLen = sizeof(valueLen); }
 	if (result->sensitive >= 0) { t[n].type = CKA_SENSITIVE; t[n].pValue = &sensitive; t[n++].ulValueLen = sizeof(sensitive); }
 	if (result->extractable >= 0) { t[n].type = CKA_EXTRACTABLE; t[n].pValue = &extractable; t[n++].ulValueLen = sizeof(extractable); }
-	if (result->gostParams) { t[n].type = CKA_GOST28147_PARAMS; t[n].pValue = (CK_VOID_PTR)GOST28147_CP_A; t[n++].ulValueLen = sizeof(GOST28147_CP_A); }
+	if (result->gostParams)
+	{
+		const CK_BYTE* params = result->gostParams == 2 ? GOST28147_CP_B :
+			result->gostParams == 3 ? GOST28147_TC26_Z : GOST28147_CP_A;
+		CK_ULONG len = result->gostParams == 3 ? sizeof(GOST28147_TC26_Z) : sizeof(GOST28147_CP_A);
+		t[n].type = CKA_GOST28147_PARAMS; t[n].pValue = (CK_VOID_PTR)params; t[n++].ulValueLen = len;
+	}
+	if (result->deriveAttribute)
+	{
+		t[n].type = CKA_DERIVE; t[n].pValue = &deriveValue; t[n++].ulValueLen = sizeof(deriveValue);
+	}
 	if (result->token) { t[n].type = CKA_LABEL; t[n].pValue = (CK_VOID_PTR)PROBE_LABEL; t[n++].ulValueLen = sizeof(PROBE_LABEL) - 1; }
 	*key = CK_INVALID_HANDLE;
 	return p11->C_DeriveKey(session, &mech, base, t, n, key);
@@ -408,6 +429,11 @@ static void probeMechanisms(void)
 		{ MECH_GOSTR3410_12_DERIVE, "CKM_GOSTR3410_12_DERIVE 0xD4321007" },
 		{ MECH_GOSTR3410_DERIVE, "CKM_GOSTR3410_DERIVE 0x1204" },
 		{ MECH_GOST_KEG, "CKM_GOST_KEG 0xD4321039" },
+		{ MECH_KDF_HMAC_256, "CKM_KDF_HMAC3411_2012_256 0xD4321028" },
+		{ MECH_KDF_TREE_256, "CKM_KDF_TREE_GOSTR3411_2012_256 0xD432102A" },
+		{ MECH_VKO_512, "CKM_VKO_GOSTR3410_2012_512 0xD4321038" },
+		{ MECH_VENDOR_CBC_FSS, "CKM_VENDOR_GOST28147_CBC_FSS 0x8000000B" },
+		{ MECH_VENDOR_SECURE_IMPORT, "CKM_VENDOR_SECURE_IMPORT 0x80000003" },
 	};
 	CK_TOKEN_INFO token;
 	CK_INFO info;
@@ -555,6 +581,74 @@ static void probeParameterValues(void)
 		  flatParameter(param, CKD_NULL, SAMPLE_256_POINT, 64, zero8, 8), &PLUGIN_RESULT, 0, NULL, 0);
 }
 
+static void probeUnmeasuredVko(void)
+{
+	static const CK_ULONG lengths[] = { 1, 2, 3, 5, 6, 7, 9, 15, 17, 24, 31, 33, 64 };
+	static const CK_ULONG diversifyLengths[] = { 1, 4, 16, 32, 33 };
+	static const Result cpB = { CKK_GOST28147, -1, CK_FALSE, -1, -1, 2, 0 };
+	static const Result tc26Z = { CKK_GOST28147, -1, CK_FALSE, -1, -1, 3, 0 };
+	static const Result explicitDeriveFalse = { CKK_GOST28147, -1, CK_FALSE, -1, -1, 0, -1 };
+	static const Result explicitDeriveTrue = { CKK_GOST28147, -1, CK_FALSE, -1, -1, 0, 1 };
+	static const Result resultLen16 = { CKK_GOST28147, 16, CK_FALSE, -1, -1, 0, 0 };
+	static const Result resultLen64 = { CKK_GOST28147, 64, CK_FALSE, -1, -1, 0, 0 };
+	CK_BYTE ukm[64], padded[32] = { 1 }, param[256];
+	size_t i;
+	char name[96];
+	section("Unmeasured VKO variants: UKM, diversification, result template (256-bit key)");
+	if (basePriv == CK_INVALID_HANDLE) { line("    no base key"); return; }
+	for (i = 0; i < sizeof(ukm); ++i) ukm[i] = (CK_BYTE)(i + 1);
+	for (i = 0; i < sizeof(lengths) / sizeof(lengths[0]); ++i)
+	{
+		CK_ULONG len = lengths[i];
+		snprintf(name, sizeof(name), "CKD_NULL, UKM %lu bytes, 01..%02lx", (unsigned long)len,
+			 (unsigned long)len);
+		tryDerive(name, MECH_GOSTR3410_12_DERIVE, basePriv, param,
+			flatParameter(param, CKD_NULL, SAMPLE_256_POINT, 64, ukm, len),
+			&PLUGIN_RESULT, 0, NULL, 0);
+	}
+	for (i = 0; i < 5; ++i)
+	{
+		static const CK_ULONG paddedLengths[] = { 1, 4, 8, 16, 32 };
+		CK_ULONG len = paddedLengths[i];
+		snprintf(name, sizeof(name), "CKD_NULL, padded UKM 01 + zeros, %lu bytes", (unsigned long)len);
+		tryDerive(name, MECH_GOSTR3410_12_DERIVE, basePriv, param,
+			flatParameter(param, CKD_NULL, SAMPLE_256_POINT, 64, padded, len),
+			&PLUGIN_RESULT, 0, NULL, 0);
+	}
+	for (i = 0; i < sizeof(diversifyLengths) / sizeof(diversifyLengths[0]); ++i)
+	{
+		CK_ULONG len = diversifyLengths[i];
+		snprintf(name, sizeof(name), "CKD_CPDIVERSIFY_KDF, UKM %lu bytes", (unsigned long)len);
+		tryDerive(name, MECH_GOSTR3410_12_DERIVE, basePriv, param,
+			flatParameter(param, CKD_CPDIVERSIFY_KDF, SAMPLE_256_POINT, 64, ukm, len),
+			&PLUGIN_RESULT, 0, NULL, 0);
+	}
+	tryDerive("CKD_CPDIVERSIFY_KDF, explicit CryptoPro-B", MECH_GOSTR3410_12_DERIVE,
+		basePriv, param, flatParameter(param, CKD_CPDIVERSIFY_KDF, SAMPLE_256_POINT, 64,
+		UKM_1, 8), &cpB, 1, NULL, 0);
+	tryDerive("CKD_CPDIVERSIFY_KDF, explicit TC26-Z", MECH_GOSTR3410_12_DERIVE,
+		basePriv, param, flatParameter(param, CKD_CPDIVERSIFY_KDF, SAMPLE_256_POINT, 64,
+		UKM_1, 8), &tc26Z, 1, NULL, 0);
+	tryDerive("CKD_NULL, explicit CryptoPro-B", MECH_GOSTR3410_12_DERIVE,
+		basePriv, param, flatParameter(param, CKD_NULL, SAMPLE_256_POINT, 64,
+		UKM_1, 8), &cpB, 1, NULL, 0);
+	tryDerive("CKD_NULL, explicit TC26-Z", MECH_GOSTR3410_12_DERIVE,
+		basePriv, param, flatParameter(param, CKD_NULL, SAMPLE_256_POINT, 64,
+		UKM_1, 8), &tc26Z, 1, NULL, 0);
+	tryDerive("CKD_NULL, explicit CKA_DERIVE FALSE", MECH_GOSTR3410_12_DERIVE,
+		basePriv, param, flatParameter(param, CKD_NULL, SAMPLE_256_POINT, 64,
+		UKM_1, 8), &explicitDeriveFalse, 1, NULL, 0);
+	tryDerive("CKD_NULL, explicit CKA_DERIVE TRUE", MECH_GOSTR3410_12_DERIVE,
+		basePriv, param, flatParameter(param, CKD_NULL, SAMPLE_256_POINT, 64,
+		UKM_1, 8), &explicitDeriveTrue, 1, NULL, 0);
+	tryDerive("CKD_NULL, CKK_GOST28147 CKA_VALUE_LEN 16", MECH_GOSTR3410_12_DERIVE,
+		basePriv, param, flatParameter(param, CKD_NULL, SAMPLE_256_POINT, 64,
+		UKM_1, 8), &resultLen16, 0, NULL, 0);
+	tryDerive("CKD_NULL, CKK_GOST28147 CKA_VALUE_LEN 64", MECH_GOSTR3410_12_DERIVE,
+		basePriv, param, flatParameter(param, CKD_NULL, SAMPLE_256_POINT, 64,
+		UKM_1, 8), &resultLen64, 0, NULL, 0);
+}
+
 static void probeParameterForms(void)
 {
 	CK_GOSTR3410_DERIVE_PARAMS structured;
@@ -589,16 +683,16 @@ static void probeParameterForms(void)
 static void probeResults(void)
 {
 	static const struct { const char* name; Result r; int full; } results[] = {
-		{ "CKK_GOST28147, CKA_VALUE_LEN 32", { CKK_GOST28147, 32, CK_FALSE, -1, -1, 0 }, 0 },
-		{ "CKK_GOST28147, CKA_GOST28147_PARAMS CryptoPro-A", { CKK_GOST28147, -1, CK_FALSE, -1, -1, 1 }, 1 },
-		{ "CKK_GOST28147, CKA_SENSITIVE TRUE", { CKK_GOST28147, -1, CK_FALSE, 1, -1, 0 }, 1 },
-		{ "CKK_GOST28147, CKA_EXTRACTABLE FALSE", { CKK_GOST28147, -1, CK_FALSE, -1, 0, 0 }, 1 },
-		{ "CKK_GOST28147, CKA_TOKEN TRUE", { CKK_GOST28147, -1, CK_TRUE, -1, -1, 0 }, 0 },
-		{ "CKK_GENERIC_SECRET, no CKA_VALUE_LEN", { CKK_GENERIC_SECRET, -1, CK_FALSE, -1, -1, 0 }, 0 },
-		{ "CKK_GENERIC_SECRET, CKA_VALUE_LEN 32", { CKK_GENERIC_SECRET, 32, CK_FALSE, -1, -1, 0 }, 0 },
-		{ "CKK_GENERIC_SECRET, CKA_VALUE_LEN 64", { CKK_GENERIC_SECRET, 64, CK_FALSE, -1, -1, 0 }, 0 },
-		{ "CKK_MAGMA (0xD4321005)", { 0xD4321005UL, -1, CK_FALSE, -1, -1, 0 }, 0 },
-		{ "CKK_KUZNECHIK (0xD4321004)", { 0xD4321004UL, -1, CK_FALSE, -1, -1, 0 }, 0 },
+		{ "CKK_GOST28147, CKA_VALUE_LEN 32", { CKK_GOST28147, 32, CK_FALSE, -1, -1, 0, 0 }, 0 },
+		{ "CKK_GOST28147, CKA_GOST28147_PARAMS CryptoPro-A", { CKK_GOST28147, -1, CK_FALSE, -1, -1, 1, 0 }, 1 },
+		{ "CKK_GOST28147, CKA_SENSITIVE TRUE", { CKK_GOST28147, -1, CK_FALSE, 1, -1, 0, 0 }, 1 },
+		{ "CKK_GOST28147, CKA_EXTRACTABLE FALSE", { CKK_GOST28147, -1, CK_FALSE, -1, 0, 0, 0 }, 1 },
+		{ "CKK_GOST28147, CKA_TOKEN TRUE", { CKK_GOST28147, -1, CK_TRUE, -1, -1, 0, 0 }, 0 },
+		{ "CKK_GENERIC_SECRET, no CKA_VALUE_LEN", { CKK_GENERIC_SECRET, -1, CK_FALSE, -1, -1, 0, 0 }, 0 },
+		{ "CKK_GENERIC_SECRET, CKA_VALUE_LEN 32", { CKK_GENERIC_SECRET, 32, CK_FALSE, -1, -1, 0, 0 }, 0 },
+		{ "CKK_GENERIC_SECRET, CKA_VALUE_LEN 64", { CKK_GENERIC_SECRET, 64, CK_FALSE, -1, -1, 0, 0 }, 0 },
+		{ "CKK_MAGMA (0xD4321005)", { 0xD4321005UL, -1, CK_FALSE, -1, -1, 0, 0 }, 0 },
+		{ "CKK_KUZNECHIK (0xD4321004)", { 0xD4321004UL, -1, CK_FALSE, -1, -1, 0, 0 }, 0 },
 	};
 	CK_BYTE param[256];
 	CK_ULONG paramLen;
@@ -613,7 +707,7 @@ static void probeResults(void)
 
 static void probe512(void)
 {
-	static const Result generic64 = { CKK_GENERIC_SECRET, 64, CK_FALSE, -1, -1, 0 };
+	static const Result generic64 = { CKK_GENERIC_SECRET, 64, CK_FALSE, -1, -1, 0, 0 };
 	CK_OBJECT_HANDLE pa, ka, pb, kb;
 	CK_BYTE pointA[160], pointB[160], param[320], vab[64], vba[64];
 	long la, lb, xab, xba;
@@ -633,6 +727,29 @@ static void probe512(void)
 		  ka, param, flatParameter(param, CKD_NULL, SAMPLE_512_POINT, 128, UKM_1, 8), &generic64, 0, NULL, 0);
 	tryDerive("A with a 64-byte point", MECH_GOSTR3410_12_DERIVE, ka, param,
 		  flatParameter(param, CKD_NULL, SAMPLE_256_POINT, 64, UKM_1, 8), &PLUGIN_RESULT, 0, NULL, 0);
+	{
+		CK_BYTE ukm[32];
+		static const CK_ULONG lengths[] = { 4, 16, 32 };
+		size_t i;
+		char name[96];
+		for (i = 0; i < sizeof(ukm); ++i) ukm[i] = (CK_BYTE)(i + 1);
+		for (i = 0; i < sizeof(lengths) / sizeof(lengths[0]); ++i)
+		{
+			CK_ULONG len = lengths[i];
+			snprintf(name, sizeof(name), "512-bit key, CKD_NULL, UKM %lu bytes", (unsigned long)len);
+			tryDerive(name, MECH_GOSTR3410_12_DERIVE, ka, param,
+				flatParameter(param, CKD_NULL, SAMPLE_512_POINT, 128, ukm, len),
+				&PLUGIN_RESULT, 0, NULL, 0);
+		}
+		tryDerive("512-bit key, CKD_CPDIVERSIFY_KDF, UKM 8 bytes",
+			MECH_GOSTR3410_12_DERIVE, ka, param,
+			flatParameter(param, CKD_CPDIVERSIFY_KDF, SAMPLE_512_POINT, 128,
+			UKM_1, 8), &PLUGIN_RESULT, 0, NULL, 0);
+		tryDerive("512-bit key, CKD_CPDIVERSIFY_KDF, UKM 16 bytes",
+			MECH_GOSTR3410_12_DERIVE, ka, param,
+			flatParameter(param, CKD_CPDIVERSIFY_KDF, SAMPLE_512_POINT, 128,
+			ukm, 16), &PLUGIN_RESULT, 0, NULL, 0);
+	}
 	if (la == 128 && lb == 128)
 	{
 		xab = tryDerive("A with B's point", MECH_GOSTR3410_12_DERIVE, ka, param,
@@ -677,6 +794,83 @@ static void probeBaseKeys(void)
 	}
 }
 
+/* This layout is CK_KDF_TREE_GOST_PARAMS from Rutoken SDK pkcs11tc26_18.h.
+ * No vendor header or guessed parameter format is needed for the other three
+ * vendor mechanisms: only their C_GetMechanismInfo is queried above. */
+typedef struct {
+	CK_ULONG ulLabelLength;
+	CK_BYTE_PTR pLabel;
+	CK_ULONG ulSeedLength;
+	CK_BYTE_PTR pSeed;
+	CK_ULONG ulR;
+	CK_ULONG ulL;
+	CK_ULONG ulOffset;
+} ProbeKdfTreeParams;
+
+static void probeDocumentedKdfsAndHmac(void)
+{
+	static const Result generic32 = { CKK_GENERIC_SECRET, 32, CK_FALSE, -1, -1, 0, 0 };
+	static const struct { CK_MECHANISM_TYPE mechanism; const char* name; } hmacs[] = {
+		{ 0xD4321014UL, "HMAC-Streebog-256" },
+		{ 0xD4321015UL, "HMAC-Streebog-512" }
+	};
+	CK_BYTE keyBytes[32], seed[8] = { 1,2,3,4,5,6,7,8 };
+	CK_BYTE label[] = { 'k', 'd', 'f' };
+	CK_BYTE message[] = { 0x01,0x26,0xbd,0xb8,0x78,0x00,0xaf,0x21,
+		0x43,0x41,0x45,0x65,0x63,0x78,0x01,0x00 };
+	CK_BYTE mac[64];
+	CK_OBJECT_CLASS secret = CKO_SECRET_KEY;
+	CK_KEY_TYPE generic = CKK_GENERIC_SECRET;
+	CK_BBOOL no = CK_FALSE, yes = CK_TRUE;
+	CK_OBJECT_HANDLE base = CK_INVALID_HANDLE;
+	CK_ATTRIBUTE attributes[] = {
+		{ CKA_CLASS, &secret, sizeof(secret) },
+		{ CKA_KEY_TYPE, &generic, sizeof(generic) },
+		{ CKA_TOKEN, &no, sizeof(no) },
+		{ CKA_PRIVATE, &no, sizeof(no) },
+		{ CKA_SENSITIVE, &no, sizeof(no) },
+		{ CKA_EXTRACTABLE, &yes, sizeof(yes) },
+		{ CKA_DERIVE, &yes, sizeof(yes) },
+		{ CKA_SIGN, &yes, sizeof(yes) },
+		{ CKA_VERIFY, &yes, sizeof(yes) },
+		{ CKA_VALUE, keyBytes, sizeof(keyBytes) },
+		{ CKA_LABEL, (CK_VOID_PTR)PROBE_LABEL, sizeof(PROBE_LABEL) - 1 }
+	};
+	ProbeKdfTreeParams tree = { sizeof(label), label, sizeof(seed), seed, 8, 256, 0 };
+	CK_RV rv;
+	size_t i;
+	section("Named KDFs and Streebog HMAC using a disposable generic session key");
+	for (i = 0; i < sizeof(keyBytes); ++i) keyBytes[i] = (CK_BYTE)i;
+	rv = p11->C_CreateObject(session, attributes,
+		(CK_ULONG)(sizeof(attributes) / sizeof(attributes[0])), &base);
+	showRv("create RFC 7836 generic session key 00..1f", rv);
+	if (rv != CKR_OK) return;
+	tryDerive("CKM_KDF_HMAC3411_2012_256, NULL parameter (format unspecified)",
+		MECH_KDF_HMAC_256, base, NULL, 0, &generic32, 0, NULL, 0);
+	tryDerive("CKM_KDF_TREE_GOSTR3411_2012_256, SDK struct, R=8 L=256 offset=0",
+		MECH_KDF_TREE_256, base, &tree, sizeof(tree), &generic32, 0, NULL, 0);
+	for (i = 0; i < sizeof(hmacs) / sizeof(hmacs[0]); ++i)
+	{
+		CK_MECHANISM mech = { hmacs[i].mechanism, NULL_PTR, 0 };
+		CK_ULONG macLen = sizeof(mac);
+		rv = p11->C_SignInit(session, &mech, base);
+		showRv(hmacs[i].name, rv);
+		if (rv != CKR_OK) continue;
+		rv = p11->C_Sign(session, message, sizeof(message), mac, &macLen);
+		showRv("C_Sign RFC 7836 sample message", rv);
+		if (rv == CKR_OK && macLen <= sizeof(mac))
+		{
+			hexLine("HMAC", mac, macLen);
+			rv = p11->C_VerifyInit(session, &mech, base);
+			showRv("C_VerifyInit with the same key", rv);
+			if (rv == CKR_OK)
+				showRv("C_Verify with the produced HMAC",
+					p11->C_Verify(session, message, sizeof(message), mac, macLen));
+		}
+	}
+	destroy(base);
+}
+
 /* ---- main ---------------------------------------------------------------- */
 
 static int loadLibrary(void)
@@ -703,7 +897,6 @@ int main(int argc, char** argv)
 	CK_RV rv;
 	int i;
 
-	opt.userPin = "12345678";
 	for (i = 1; i < argc; i++)
 	{
 		if (argv[i][0] != '-' && opt.module == NULL) opt.module = argv[i];
@@ -720,7 +913,7 @@ int main(int argc, char** argv)
 	{
 		fprintf(stderr,
 			"usage: %s <path to librtpkcs11ecp.so> [options]\n"
-			"  --user-pin PIN         the user PIN (default 12345678)\n"
+			"  --user-pin PIN         the user PIN (required unless --user-pin-env is set)\n"
 			"  --user-pin-env NAME    take the user PIN from the environment\n"
 			"  --slot N               the slot (default: the first with a token)\n",
 			argv[0]);
@@ -747,10 +940,12 @@ int main(int argc, char** argv)
 	probePluginCall();
 	probeCurves();
 	probeParameterValues();
+	probeUnmeasuredVko();
 	probeParameterForms();
 	probeResults();
 	probe512();
 	probeBaseKeys();
+	probeDocumentedKdfsAndHmac();
 
 	section("Clean-up");
 	deleteProbeObjects();
