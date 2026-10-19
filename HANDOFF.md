@@ -11,7 +11,9 @@
 механизмов собрана и локально проверена: исходник
 `tests/portable/rutoken-derive-probe.c`, инструкция
 `tests/portable/README-gap-probe.txt`, комплект
-`/workspace/rutoken-gap-probe-20261019-linux-x64.zip`. Запуск на Linux x64:
+`/workspace/rutoken-gap-probe-20261019-linux-x64.zip`.
+CI и публикация `v2.7.0-portable.88` прошли; скачанный Linux x64 пакет
+сверен с `SHA256SUMS` и проверен по CRC. Запуск диагностического бинарника:
 `./rutoken-gap-probe --interactive`; путь модуля, слот и PIN вводятся в
 терминале, PIN скрыт. Программа пишет один лог с отметками разделов 1–16.
 Владелец присылает полный лог, включая `Done.`; если запуск аварийно
