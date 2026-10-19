@@ -36,7 +36,12 @@ Rutoken SDK **v.2026** (релиз 15.05.2026), `rutoken-sdk-latest.zip`
 | --- | --- |
 | `C_EX_GetFunctionListExtended` | работает всегда, как `C_GetFunctionList` |
 | `C_EX_GetTokenInfoExtended` | работает при включённом `FAKE_RUTOKEN_ECP` |
-| остальные 32 | `CKR_FUNCTION_NOT_SUPPORTED` |
+| `C_EX_InitToken`, `UnblockUserPIN`, `SetTokenName`, `GetTokenName`, `SetLicense`, `GetLicense`, `GetCertificateInfoText`, `PKCS7Sign`, `CreateCSR`, `FreeBuffer`, `SetLocalPIN`, `TokenManage`, `GetJournal`, `SlotManage`, `PKCS7VerifyInit`, `PKCS7Verify`, `PKCS7VerifyUpdate`, `PKCS7VerifyFinal` | реализованы с ограничениями отдельных режимов и профиля |
+| `C_EX_LoadActivationKey`, `SetActivationPassword`, `GetVolumesInfo`, `GetDriveSize`, `ChangeVolumeAttributes`, `FormatDrive`, `GenerateActivationPassword`, `SignInvisibleInit`, `SignInvisible`, `WrapKey`, `UnwrapKey`, `Authenticate`, `Deauthenticate`, `UnblockAuthenticator` | безусловные заглушки `CKR_FUNCTION_NOT_SUPPORTED` |
+
+Сверено с `src/lib/main.cpp` 19.10.2026: из 34 указателей таблицы 20 имеют
+обработчики, 14 остаются заглушками. Это наличие обработчика, а не обещание,
+что в нём поддержаны все возможные параметры.
 
 `C_EX_GetTokenInfoExtended` вне профиля отвечает `CKR_FUNCTION_NOT_SUPPORTED`:
 без профиля модуль не Рутокен и не должен отвечать на вопрос, заданный только
