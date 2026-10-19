@@ -23,8 +23,7 @@
  *   8. 512-bit keys (TC26 paramSetC, the curve of the 512-bit TC26 sample);
  *   9. a base key without CKA_DERIVE, a public key as the base key, and the
  *      same parameter under CKM_GOSTR3410_DERIVE (0x1204);
- *  10. identify five advertised mechanisms and try the two named KDFs
- *      only with disposable session keys;
+ *  10. test the SDK's VKO KDF selector and compare HMAC/KDF key types;
  *  11. clean-up.
  *
  * It needs only the user PIN. It does not format the token, uses no SO PIN,
@@ -56,6 +55,7 @@
 #define MECH_GOSTR3410_12_DERIVE 0xD4321007UL
 #define MECH_GOSTR3410_DERIVE    0x00001204UL
 #define MECH_GOST_KEG            0xD4321039UL
+#define MECH_KDF_GOST_256        0xD4321026UL
 #define MECH_KDF_HMAC_256        0xD4321028UL
 #define MECH_KDF_TREE_256        0xD432102AUL
 #define MECH_VKO_512             0xD4321038UL
@@ -278,6 +278,8 @@ static void describeKey(CK_OBJECT_HANDLE key)
 		{ CKA_DECRYPT, "CKA_DECRYPT", 1 },
 		{ CKA_WRAP, "CKA_WRAP", 1 },
 		{ CKA_UNWRAP, "CKA_UNWRAP", 1 },
+		{ CKA_SIGN, "CKA_SIGN", 1 },
+		{ CKA_VERIFY, "CKA_VERIFY", 1 },
 		{ CKA_DERIVE, "CKA_DERIVE", 1 },
 	};
 	CK_BYTE buf[256];
@@ -421,6 +423,40 @@ static long tryDerive(const char* what, CK_MECHANISM_TYPE mechanism, CK_OBJECT_H
 	return length;
 }
 
+/* Both SDK VKO-2012-256 samples put 0xD4321026 into the first four bytes of
+ * CKM_GOSTR3410_12_DERIVE's flat parameter, including the sample with a
+ * 512-bit base key. This is a KDF selector inside that mechanism, not a call
+ * to C_DeriveKey with CKM_KDF_GOSTR3411_2012_256 as the mechanism. The
+ * template below follows the samples' CKO_SECRET_KEY result attributes. */
+static void trySdkVko(const char* what, CK_OBJECT_HANDLE base,
+		      const CK_BYTE* peer, CK_ULONG peerLen)
+{
+	CK_BYTE param[256];
+	CK_OBJECT_CLASS secret = CKO_SECRET_KEY;
+	CK_KEY_TYPE gost = CKK_GOST28147;
+	CK_BBOOL yes = CK_TRUE, no = CK_FALSE;
+	CK_ATTRIBUTE attributes[] = {
+		{ CKA_LABEL, (CK_VOID_PTR)PROBE_LABEL, sizeof(PROBE_LABEL) - 1 },
+		{ CKA_CLASS, &secret, sizeof(secret) },
+		{ CKA_KEY_TYPE, &gost, sizeof(gost) },
+		{ CKA_TOKEN, &no, sizeof(no) },
+		{ CKA_MODIFIABLE, &yes, sizeof(yes) },
+		{ CKA_PRIVATE, &yes, sizeof(yes) },
+		{ CKA_EXTRACTABLE, &yes, sizeof(yes) },
+		{ CKA_SENSITIVE, &no, sizeof(no) }
+	};
+	CK_MECHANISM mechanism = { MECH_GOSTR3410_12_DERIVE, param, 0 };
+	CK_OBJECT_HANDLE key = CK_INVALID_HANDLE;
+	CK_RV rv;
+	mechanism.ulParameterLen = flatParameter(param, MECH_KDF_GOST_256,
+		peer, peerLen, UKM_1, sizeof(UKM_1));
+	rv = p11->C_DeriveKey(session, &mechanism, base, attributes,
+		(CK_ULONG)(sizeof(attributes) / sizeof(attributes[0])), &key);
+	showRv(what, rv);
+	if (rv == CKR_OK && key != CK_INVALID_HANDLE) describeKey(key);
+	destroy(key);
+}
+
 /* ---- sections ------------------------------------------------------------ */
 
 static void probeMechanisms(void)
@@ -429,11 +465,14 @@ static void probeMechanisms(void)
 		{ MECH_GOSTR3410_12_DERIVE, "CKM_GOSTR3410_12_DERIVE 0xD4321007" },
 		{ MECH_GOSTR3410_DERIVE, "CKM_GOSTR3410_DERIVE 0x1204" },
 		{ MECH_GOST_KEG, "CKM_GOST_KEG 0xD4321039" },
+		{ MECH_KDF_GOST_256, "CKM_KDF_GOSTR3411_2012_256 0xD4321026" },
 		{ MECH_KDF_HMAC_256, "CKM_KDF_HMAC3411_2012_256 0xD4321028" },
 		{ MECH_KDF_TREE_256, "CKM_KDF_TREE_GOSTR3411_2012_256 0xD432102A" },
 		{ MECH_VKO_512, "CKM_VKO_GOSTR3410_2012_512 0xD4321038" },
 		{ MECH_VENDOR_CBC_FSS, "CKM_VENDOR_GOST28147_CBC_FSS 0x8000000B" },
 		{ MECH_VENDOR_SECURE_IMPORT, "CKM_VENDOR_SECURE_IMPORT 0x80000003" },
+		{ 0xD4321014UL, "CKM_GOSTR3411_12_256_HMAC 0xD4321014" },
+		{ 0xD4321015UL, "CKM_GOSTR3411_12_512_HMAC 0xD4321015" },
 	};
 	CK_TOKEN_INFO token;
 	CK_INFO info;
@@ -553,7 +592,8 @@ static void probeCurves(void)
 
 static void probeParameterValues(void)
 {
-	static const CK_ULONG kdfs[] = { 0, CKD_SHA1_KDF, CKD_CPDIVERSIFY_KDF };
+	static const CK_ULONG kdfs[] = { 0, CKD_SHA1_KDF, CKD_CPDIVERSIFY_KDF,
+		MECH_KDF_GOST_256, MECH_KDF_HMAC_256, MECH_KDF_TREE_256 };
 	static const CK_BYTE ukm16[16] = { 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16 };
 	static const CK_BYTE ukm32[32] = { 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,
 					   17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32 };
@@ -569,6 +609,8 @@ static void probeParameterValues(void)
 		tryDerive(what, MECH_GOSTR3410_12_DERIVE, basePriv, param,
 			  flatParameter(param, kdfs[i], SAMPLE_256_POINT, 64, UKM_1, 8), &PLUGIN_RESULT, 0, NULL, 0);
 	}
+	trySdkVko("SDK 256-bit VKO sample: KDF 0xD4321026 and full result template",
+		basePriv, SAMPLE_256_POINT, sizeof(SAMPLE_256_POINT));
 	tryDerive("UKM length 0", MECH_GOSTR3410_12_DERIVE, basePriv, param,
 		  flatParameter(param, CKD_NULL, SAMPLE_256_POINT, 64, NULL, 0), &PLUGIN_RESULT, 0, NULL, 0);
 	tryDerive("UKM 4 bytes 01..04", MECH_GOSTR3410_12_DERIVE, basePriv, param,
@@ -723,6 +765,16 @@ static void probe512(void)
 	line("      peer: the TC26 512-bit sample key's point (see the probe source)");
 	tryDerive("A with the sample point (128 bytes), CKK_GOST28147", MECH_GOSTR3410_12_DERIVE, ka, param,
 		  flatParameter(param, CKD_NULL, SAMPLE_512_POINT, 128, UKM_1, 8), &PLUGIN_RESULT, 1, NULL, 0);
+	trySdkVko("SDK 512-bit base-key sample: KDF 0xD4321026 and full result template",
+		ka, SAMPLE_512_POINT, sizeof(SAMPLE_512_POINT));
+	tryDerive("standalone CKM_VKO_GOSTR3410_2012_512: flat CKD_NULL (format hypothesis)",
+		MECH_VKO_512, ka, param,
+		flatParameter(param, CKD_NULL, SAMPLE_512_POINT, 128, UKM_1, 8),
+		&PLUGIN_RESULT, 0, NULL, 0);
+	tryDerive("standalone CKM_VKO_GOSTR3410_2012_512: flat SDK KDF 0xD4321026 (hypothesis)",
+		MECH_VKO_512, ka, param,
+		flatParameter(param, MECH_KDF_GOST_256, SAMPLE_512_POINT, 128, UKM_1, 8),
+		&PLUGIN_RESULT, 0, NULL, 0);
 	tryDerive("A with the sample point, CKK_GENERIC_SECRET CKA_VALUE_LEN 64", MECH_GOSTR3410_12_DERIVE,
 		  ka, param, flatParameter(param, CKD_NULL, SAMPLE_512_POINT, 128, UKM_1, 8), &generic64, 0, NULL, 0);
 	tryDerive("A with a 64-byte point", MECH_GOSTR3410_12_DERIVE, ka, param,
@@ -794,9 +846,7 @@ static void probeBaseKeys(void)
 	}
 }
 
-/* This layout is CK_KDF_TREE_GOST_PARAMS from Rutoken SDK pkcs11tc26_18.h.
- * No vendor header or guessed parameter format is needed for the other three
- * vendor mechanisms: only their C_GetMechanismInfo is queried above. */
+/* This layout is CK_KDF_TREE_GOST_PARAMS from Rutoken SDK pkcs11tc26_18.h. */
 typedef struct {
 	CK_ULONG ulLabelLength;
 	CK_BYTE_PTR pLabel;
@@ -807,25 +857,15 @@ typedef struct {
 	CK_ULONG ulOffset;
 } ProbeKdfTreeParams;
 
-static void probeDocumentedKdfsAndHmac(void)
+static CK_OBJECT_HANDLE createProbeSecret(const char* what, CK_KEY_TYPE type,
+					  const CK_BYTE* bytes, CK_ULONG length)
 {
-	static const Result generic32 = { CKK_GENERIC_SECRET, 32, CK_FALSE, -1, -1, 0, 0 };
-	static const struct { CK_MECHANISM_TYPE mechanism; const char* name; } hmacs[] = {
-		{ 0xD4321014UL, "HMAC-Streebog-256" },
-		{ 0xD4321015UL, "HMAC-Streebog-512" }
-	};
-	CK_BYTE keyBytes[32], seed[8] = { 1,2,3,4,5,6,7,8 };
-	CK_BYTE label[] = { 'k', 'd', 'f' };
-	CK_BYTE message[] = { 0x01,0x26,0xbd,0xb8,0x78,0x00,0xaf,0x21,
-		0x43,0x41,0x45,0x65,0x63,0x78,0x01,0x00 };
-	CK_BYTE mac[64];
 	CK_OBJECT_CLASS secret = CKO_SECRET_KEY;
-	CK_KEY_TYPE generic = CKK_GENERIC_SECRET;
 	CK_BBOOL no = CK_FALSE, yes = CK_TRUE;
-	CK_OBJECT_HANDLE base = CK_INVALID_HANDLE;
-	CK_ATTRIBUTE attributes[] = {
+	CK_OBJECT_HANDLE key = CK_INVALID_HANDLE;
+	CK_ATTRIBUTE attrs[12] = {
 		{ CKA_CLASS, &secret, sizeof(secret) },
-		{ CKA_KEY_TYPE, &generic, sizeof(generic) },
+		{ CKA_KEY_TYPE, &type, sizeof(type) },
 		{ CKA_TOKEN, &no, sizeof(no) },
 		{ CKA_PRIVATE, &no, sizeof(no) },
 		{ CKA_SENSITIVE, &no, sizeof(no) },
@@ -833,22 +873,61 @@ static void probeDocumentedKdfsAndHmac(void)
 		{ CKA_DERIVE, &yes, sizeof(yes) },
 		{ CKA_SIGN, &yes, sizeof(yes) },
 		{ CKA_VERIFY, &yes, sizeof(yes) },
-		{ CKA_VALUE, keyBytes, sizeof(keyBytes) },
+		{ CKA_VALUE, (CK_VOID_PTR)bytes, length },
 		{ CKA_LABEL, (CK_VOID_PTR)PROBE_LABEL, sizeof(PROBE_LABEL) - 1 }
 	};
-	ProbeKdfTreeParams tree = { sizeof(label), label, sizeof(seed), seed, 8, 256, 0 };
+	CK_ULONG count = 11;
+	CK_RV rv;
+	if (type == CKK_GOST28147)
+	{
+		attrs[count].type = CKA_GOST28147_PARAMS;
+		attrs[count].pValue = (CK_VOID_PTR)GOST28147_CP_A;
+		attrs[count++].ulValueLen = sizeof(GOST28147_CP_A);
+	}
+	rv = p11->C_CreateObject(session, attrs, count, &key);
+	showRv(what, rv);
+	return rv == CKR_OK ? key : CK_INVALID_HANDLE;
+}
+
+/* The two SDK SigVerGOST34.11-2012-{256,512}-HMAC.c samples generate a
+ * session CKK_GOST28147 key with these attributes; CKA_SIGN/CKA_VERIFY are
+ * omitted there, making their device defaults part of this measurement. */
+static CK_OBJECT_HANDLE generateSdkHmacKey(void)
+{
+	static const CK_BYTE id[] = { 'h','m','a','c','-','s','d','k' };
+	CK_OBJECT_CLASS secret = CKO_SECRET_KEY;
+	CK_KEY_TYPE gost = CKK_GOST28147;
+	CK_BBOOL no = CK_FALSE, yes = CK_TRUE;
+	CK_MECHANISM mechanism = { CKM_GOST28147_KEY_GEN, NULL_PTR, 0 };
+	CK_OBJECT_HANDLE key = CK_INVALID_HANDLE;
+	CK_ATTRIBUTE attrs[] = {
+		{ CKA_CLASS, &secret, sizeof(secret) },
+		{ CKA_LABEL, (CK_VOID_PTR)PROBE_LABEL, sizeof(PROBE_LABEL) - 1 },
+		{ CKA_ID, (CK_VOID_PTR)id, sizeof(id) },
+		{ CKA_KEY_TYPE, &gost, sizeof(gost) },
+		{ CKA_ENCRYPT, &yes, sizeof(yes) },
+		{ CKA_DECRYPT, &yes, sizeof(yes) },
+		{ CKA_TOKEN, &no, sizeof(no) },
+		{ CKA_PRIVATE, &yes, sizeof(yes) },
+		{ CKA_GOST28147_PARAMS, (CK_VOID_PTR)GOST28147_CP_A, sizeof(GOST28147_CP_A) }
+	};
+	CK_RV rv = p11->C_GenerateKey(session, &mechanism, attrs,
+		(CK_ULONG)(sizeof(attrs) / sizeof(attrs[0])), &key);
+	showRv("generate CKK_GOST28147 by the SDK HMAC sample template", rv);
+	return rv == CKR_OK ? key : CK_INVALID_HANDLE;
+}
+
+static void probeHmacOnKey(const char* keyName, CK_OBJECT_HANDLE base,
+			   const CK_BYTE* message, CK_ULONG messageLen)
+{
+	static const struct { CK_MECHANISM_TYPE mechanism; const char* name; } hmacs[] = {
+		{ 0xD4321014UL, "HMAC-Streebog-256" },
+		{ 0xD4321015UL, "HMAC-Streebog-512" }
+	};
+	CK_BYTE mac[64];
 	CK_RV rv;
 	size_t i;
-	section("Named KDFs and Streebog HMAC using a disposable generic session key");
-	for (i = 0; i < sizeof(keyBytes); ++i) keyBytes[i] = (CK_BYTE)i;
-	rv = p11->C_CreateObject(session, attributes,
-		(CK_ULONG)(sizeof(attributes) / sizeof(attributes[0])), &base);
-	showRv("create RFC 7836 generic session key 00..1f", rv);
-	if (rv != CKR_OK) return;
-	tryDerive("CKM_KDF_HMAC3411_2012_256, NULL parameter (format unspecified)",
-		MECH_KDF_HMAC_256, base, NULL, 0, &generic32, 0, NULL, 0);
-	tryDerive("CKM_KDF_TREE_GOSTR3411_2012_256, SDK struct, R=8 L=256 offset=0",
-		MECH_KDF_TREE_256, base, &tree, sizeof(tree), &generic32, 0, NULL, 0);
+	line("    HMAC key profile: %s", keyName);
 	for (i = 0; i < sizeof(hmacs) / sizeof(hmacs[0]); ++i)
 	{
 		CK_MECHANISM mech = { hmacs[i].mechanism, NULL_PTR, 0 };
@@ -856,7 +935,7 @@ static void probeDocumentedKdfsAndHmac(void)
 		rv = p11->C_SignInit(session, &mech, base);
 		showRv(hmacs[i].name, rv);
 		if (rv != CKR_OK) continue;
-		rv = p11->C_Sign(session, message, sizeof(message), mac, &macLen);
+		rv = p11->C_Sign(session, (CK_BYTE_PTR)message, messageLen, mac, &macLen);
 		showRv("C_Sign RFC 7836 sample message", rv);
 		if (rv == CKR_OK && macLen <= sizeof(mac))
 		{
@@ -865,10 +944,81 @@ static void probeDocumentedKdfsAndHmac(void)
 			showRv("C_VerifyInit with the same key", rv);
 			if (rv == CKR_OK)
 				showRv("C_Verify with the produced HMAC",
-					p11->C_Verify(session, message, sizeof(message), mac, macLen));
+					p11->C_Verify(session, (CK_BYTE_PTR)message, messageLen, mac, macLen));
 		}
 	}
-	destroy(base);
+}
+
+static void probeDocumentedKdfsAndHmac(void)
+{
+	static const Result generic16 = { CKK_GENERIC_SECRET, 16, CK_FALSE, -1, -1, 0, 0 };
+	static const Result generic32 = { CKK_GENERIC_SECRET, 32, CK_FALSE, -1, -1, 0, 0 };
+	static const Result generic64 = { CKK_GENERIC_SECRET, 64, CK_FALSE, -1, -1, 0, 0 };
+	CK_BYTE keyBytes[64], seed[8] = { 1,2,3,4,5,6,7,8 };
+	CK_BYTE label[] = { 'k', 'd', 'f' };
+	CK_BYTE message[] = { 0x01,0x26,0xbd,0xb8,0x78,0x00,0xaf,0x21,
+		0x43,0x41,0x45,0x65,0x63,0x78,0x01,0x00 };
+	ProbeKdfTreeParams tree = { sizeof(label), label, sizeof(seed), seed, 8, 256, 0 };
+	CK_OBJECT_HANDLE base, gost;
+	size_t i;
+	section("Named KDFs and Streebog HMAC: generic and GOST 28147 session keys");
+	for (i = 0; i < sizeof(keyBytes); ++i) keyBytes[i] = (CK_BYTE)i;
+	base = createProbeSecret("create RFC 7836 generic key 00..1f",
+		CKK_GENERIC_SECRET, keyBytes, 32);
+	if (base != CK_INVALID_HANDLE)
+	{
+		tryDerive("KDF_HMAC-256, NULL parameter, generic base key",
+			MECH_KDF_HMAC_256, base, NULL, 0, &generic32, 0, NULL, 0);
+		tryDerive("KDF_HMAC-256, raw 8-byte seed (format hypothesis)",
+			MECH_KDF_HMAC_256, base, seed, sizeof(seed), &generic32, 0, NULL, 0);
+		tryDerive("KDF_TREE-256, SDK struct, R=8 L=256 offset=0",
+			MECH_KDF_TREE_256, base, &tree, sizeof(tree), &generic32, 0, NULL, 0);
+		tree.ulOffset = 1;
+		tryDerive("KDF_TREE-256, SDK struct, R=8 L=256 offset=1",
+			MECH_KDF_TREE_256, base, &tree, sizeof(tree), &generic32, 0, NULL, 0);
+		tree.ulOffset = 0;
+		tree.ulL = 32;
+		tryDerive("KDF_TREE-256, SDK struct, R=8 L=32 offset=0",
+			MECH_KDF_TREE_256, base, &tree, sizeof(tree), &generic32, 0, NULL, 0);
+		tree.ulL = 256;
+		tryDerive("KDF_TREE-256, CKA_VALUE_LEN=16",
+			MECH_KDF_TREE_256, base, &tree, sizeof(tree), &generic16, 0, NULL, 0);
+		tryDerive("KDF_TREE-256, CKA_VALUE_LEN=64",
+			MECH_KDF_TREE_256, base, &tree, sizeof(tree), &generic64, 0, NULL, 0);
+		probeHmacOnKey("CKK_GENERIC_SECRET, 32 known bytes", base, message, sizeof(message));
+		destroy(base);
+	}
+	gost = createProbeSecret("create CKK_GOST28147 with RFC 7836 bytes and CKA_DERIVE",
+		CKK_GOST28147, keyBytes, 32);
+	if (gost != CK_INVALID_HANDLE)
+	{
+		tryDerive("KDF_HMAC-256, NULL parameter, GOST 28147 base key",
+			MECH_KDF_HMAC_256, gost, NULL, 0, &generic32, 0, NULL, 0);
+		tryDerive("KDF_TREE-256, SDK struct, GOST 28147 base key",
+			MECH_KDF_TREE_256, gost, &tree, sizeof(tree), &generic32, 0, NULL, 0);
+		probeHmacOnKey("CKK_GOST28147, 32 known bytes", gost, message, sizeof(message));
+		destroy(gost);
+	}
+	base = createProbeSecret("create short generic key, 1 byte", CKK_GENERIC_SECRET, keyBytes, 1);
+	if (base != CK_INVALID_HANDLE)
+	{
+		probeHmacOnKey("CKK_GENERIC_SECRET, 1 byte", base, message, sizeof(message));
+		destroy(base);
+	}
+	base = createProbeSecret("create long generic key, 64 bytes", CKK_GENERIC_SECRET, keyBytes, 64);
+	if (base != CK_INVALID_HANDLE)
+	{
+		probeHmacOnKey("CKK_GENERIC_SECRET, 64 bytes", base, message, sizeof(message));
+		destroy(base);
+	}
+	gost = generateSdkHmacKey();
+	if (gost != CK_INVALID_HANDLE)
+	{
+		describeKey(gost);
+		probeHmacOnKey("SDK-generated CKK_GOST28147; CKA_SIGN/VERIFY omitted", gost,
+			message, sizeof(message));
+		destroy(gost);
+	}
 }
 
 /* ---- main ---------------------------------------------------------------- */
