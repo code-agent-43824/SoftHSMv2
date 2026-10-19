@@ -5876,7 +5876,8 @@ CK_RV SoftHSM::MacSignInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMechani
 			break;
 #ifdef WITH_GOST_3411_2012
 		case CKM_GOSTR3411_12_256_HMAC:
-			if (keyType != CKK_GENERIC_SECRET) return CKR_KEY_TYPE_INCONSISTENT;
+			if (keyType != CKK_GENERIC_SECRET && keyType != CKK_GOST28147)
+				return CKR_KEY_TYPE_INCONSISTENT;
 			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
 				return CKR_MECHANISM_PARAM_INVALID;
 			algo = MacAlgo::HMAC_GOST2012_256;
@@ -5884,7 +5885,8 @@ CK_RV SoftHSM::MacSignInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMechani
 #endif
 #ifdef WITH_GOST_3411_2012_512
 		case CKM_GOSTR3411_12_512_HMAC:
-			if (keyType != CKK_GENERIC_SECRET) return CKR_KEY_TYPE_INCONSISTENT;
+			if (keyType != CKK_GENERIC_SECRET && keyType != CKK_GOST28147)
+				return CKR_KEY_TYPE_INCONSISTENT;
 			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
 				return CKR_MECHANISM_PARAM_INVALID;
 			algo = MacAlgo::HMAC_GOST2012_512;
@@ -7084,7 +7086,8 @@ CK_RV SoftHSM::MacVerifyInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMecha
 			break;
 #ifdef WITH_GOST_3411_2012
 		case CKM_GOSTR3411_12_256_HMAC:
-			if (keyType != CKK_GENERIC_SECRET) return CKR_KEY_TYPE_INCONSISTENT;
+			if (keyType != CKK_GENERIC_SECRET && keyType != CKK_GOST28147)
+				return CKR_KEY_TYPE_INCONSISTENT;
 			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
 				return CKR_MECHANISM_PARAM_INVALID;
 			algo = MacAlgo::HMAC_GOST2012_256;
@@ -7092,7 +7095,8 @@ CK_RV SoftHSM::MacVerifyInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMecha
 #endif
 #ifdef WITH_GOST_3411_2012_512
 		case CKM_GOSTR3411_12_512_HMAC:
-			if (keyType != CKK_GENERIC_SECRET) return CKR_KEY_TYPE_INCONSISTENT;
+			if (keyType != CKK_GENERIC_SECRET && keyType != CKK_GOST28147)
+				return CKR_KEY_TYPE_INCONSISTENT;
 			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
 				return CKR_MECHANISM_PARAM_INVALID;
 			algo = MacAlgo::HMAC_GOST2012_512;

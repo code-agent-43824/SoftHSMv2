@@ -5244,6 +5244,7 @@ static void verifyStreebogHMAC(Module& module, CK_SESSION_HANDLE session)
         "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
     const Bytes data = bytesFromHex("0126bdb87800af214341456563780100");
     const CK_OBJECT_HANDLE key = createGOSTSecret(module, session, CKK_GENERIC_SECRET, keyBytes);
+    const CK_OBJECT_HANDLE gostKey = createGOSTSecret(module, session, CKK_GOST28147, keyBytes);
     struct Vector { CK_MECHANISM_TYPE mechanism; const char* expected; };
     const Vector vectors[] = {
         {CKM_GOSTR3411_12_256_HMAC,
@@ -5258,6 +5259,9 @@ static void verifyStreebogHMAC(Module& module, CK_SESSION_HANDLE session)
         const Bytes actual = signOneShot(module, session, key, vector.mechanism, data);
         if (actual != expected) fail("Streebog HMAC differs from RFC 7836 Appendix B");
         verifyOneShot(module, session, key, vector.mechanism, data, expected);
+        const Bytes gostActual = signOneShot(module, session, gostKey, vector.mechanism, data);
+        if (gostActual != expected) fail("Streebog HMAC with a GOST 28147 key differs from RFC 7836");
+        verifyOneShot(module, session, gostKey, vector.mechanism, data, expected);
 
         CK_MECHANISM mechanism{vector.mechanism, nullptr, 0};
         callOk("C_SignInit", "Streebog HMAC multipart", [&] {
@@ -5316,7 +5320,10 @@ static void verifyStreebogHMAC(Module& module, CK_SESSION_HANDLE session)
     callOk("C_DestroyObject", "Streebog HMAC key", [&] {
         return module->C_DestroyObject(session, key);
     });
-    trace("REFERENCE", "Streebog HMAC-256/512 matched RFC 7836 in one-shot and multipart PKCS #11 calls");
+    callOk("C_DestroyObject", "Streebog HMAC GOST 28147 key", [&] {
+        return module->C_DestroyObject(session, gostKey);
+    });
+    trace("REFERENCE", "Streebog HMAC-256/512 matched RFC 7836 with generic and GOST 28147 keys");
 }
 
 // A digest of a large buffer, without the argument dump the shared helper
