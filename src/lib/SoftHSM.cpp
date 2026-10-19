@@ -15066,15 +15066,15 @@ CK_RV SoftHSM::deriveGOSTVKO
 	if (publicLen == 0) return CKR_PUBLIC_KEY_INVALID;
 	if ((publicLen != 64 && publicLen != 128) || parameterLen < 12 + publicLen)
 		return CKR_MECHANISM_PARAM_INVALID;
-	// The UKM is a little-endian number; the device was read with 4, 8, 16
-	// and 32 bytes of it, and other lengths stay refused until it is read
-	// with them too.
+	// The UKM is a little-endian number. The reference token accepted the
+	// sampled nonzero lengths throughout 1..32 and rejected 0 and 33 bytes.
 	const CK_ULONG ukmLen = readLength(8 + publicLen);
-	if ((ukmLen != 4 && ukmLen != 8 && ukmLen != 16 && ukmLen != 32) ||
+	if (ukmLen == 0 || ukmLen > 32 ||
 	    parameterLen != 12 + publicLen + ukmLen)
 		return CKR_MECHANISM_PARAM_INVALID;
-	// The diversification was read with an 8-byte UKM and a 256-bit key only.
-	if (kdf == CKD_CPDIVERSIFY_KDF && (ukmLen != 8 || publicLen != 64))
+	// CryptoPro diversification takes exactly eight UKM bytes with either
+	// base-key length, as the 19 October reference probe confirmed.
+	if (kdf == CKD_CPDIVERSIFY_KDF && ukmLen != 8)
 		return CKR_MECHANISM_PARAM_INVALID;
 
 	// The device creates no token object with this derive.
@@ -15094,9 +15094,12 @@ CK_RV SoftHSM::deriveGOSTVKO
 			CK_ULONG requestedValueLen = 0;
 			std::memcpy(&requestedValueLen, pTemplate[i].pValue,
 			            sizeof(requestedValueLen));
-			// A generic secret is 32 bytes whatever length is asked for,
-			// as on the device; for the GOST keys only 32 has been read.
-			if (keyType != CKK_GENERIC_SECRET && requestedValueLen != 32)
+			// The result is always 32 bytes. The reference token also ignores
+			// requests for 16 and 64 on CKK_GOST28147; the other GOST result
+			// types have only been read with 32.
+			if (keyType != CKK_GENERIC_SECRET && requestedValueLen != 32 &&
+			    !(keyType == CKK_GOST28147 &&
+			      (requestedValueLen == 16 || requestedValueLen == 64)))
 				return CKR_ATTRIBUTE_VALUE_INVALID;
 		}
 	}

@@ -2755,6 +2755,34 @@ static void verifyGOSTVKODerive(Module& module, CK_SESSION_HANDLE session)
             fail(std::string("CKM_GOSTR3410_12_DERIVE does not give ") + answer.what);
         destroyObject(module, session, key);
     }
+    // The 19 October hardware probe sampled the short and upper UKM lengths
+    // against a fresh disposable token pair and this published sample key.
+    // Agreement is symmetric, so the sample private key and the token's
+    // recorded public point must reproduce those device answers.
+    const Bytes newDevicePoint = bytesFromHex(
+        "36184b99458b0b1fafcd5fb828e0578d60a1aefd6b5b43b440e2b75b1a590f35"
+        "82a757e8ecc58ee6c89f7a9413467981a818c47d4643c361a592ea4fdc83341b");
+    const struct { Bytes ukm; Bytes value; const char* what; } shortUkmAnswers[] = {
+        {bytesFromHex("01"),
+         bytesFromHex("42ec0705d8a31c0f70f4cd88bb0b41a132138fbb7b6a1d1aa4148ebe4ec76ffb"),
+         "a one-byte UKM"},
+        {bytesFromHex("0102030405"),
+         bytesFromHex("22db149207648035b60a8bd49851db1b3d0af964bc1ba55cc800f165267af75c"),
+         "a five-byte UKM"},
+        {bytesFromHex("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"),
+         bytesFromHex("91558ef3b4caef9ebf0510d1ec878740d038bd7ffd0b2753f167eb8a2ed105a1"),
+         "a 31-byte UKM"},
+    };
+    for (const auto& answer : shortUkmAnswers)
+    {
+        check(vkoDerive(module, session, baseKey,
+                        vkoDeriveParameter(CKD_NULL, newDevicePoint, answer.ukm),
+                        pluginTemplate, pluginCount, key, answer.what),
+              CKR_OK, (std::string("C_DeriveKey(CKM_GOSTR3410_12_DERIVE, ") + answer.what + ")").c_str());
+        if (attribute(module, session, key, CKA_VALUE) != answer.value)
+            fail(std::string("CKM_GOSTR3410_12_DERIVE gives ") + answer.what + " another value");
+        destroyObject(module, session, key);
+    }
     // CKD_CPDIVERSIFY_KDF: the VKO result diversified by the UKM (RFC 4357,
     // 6.5) on CryptoPro-A - the device's answer, reproduced offline.
     check(vkoDerive(module, session, baseKey, vkoDeriveParameter(CKD_CPDIVERSIFY_KDF, devicePoint, ukm),
@@ -2873,8 +2901,7 @@ static void verifyGOSTVKODerive(Module& module, CK_SESSION_HANDLE session)
     for (CK_OBJECT_HANDLE object : {keyAB, keyBA, publicA, privateA, publicB, privateB})
         destroyObject(module, session, object);
 
-    // What the device was not read for is refused, not guessed; what it
-    // refuses gets its codes.
+    // Keep the negative cases to values the device actually refused.
     Bytes offCurve = ownPoint;
     offCurve[0] ^= 1;
     Bytes zeroLengthPoint = bytesFromHex("0100000000000000");
@@ -2887,10 +2914,11 @@ static void verifyGOSTVKODerive(Module& module, CK_SESSION_HANDLE session)
         {vkoDeriveParameter(CKD_NULL, ownPoint, Bytes()), 0, CKR_MECHANISM_PARAM_INVALID, "an empty UKM"},
         {vkoDeriveParameter(CKD_NULL, ownPoint, bytesFromHex("0000000000000000")), 0,
          CKR_MECHANISM_PARAM_INVALID, "a zero UKM"},
-        {vkoDeriveParameter(CKD_NULL, ownPoint, bytesFromHex("0102030405")), 0,
-         CKR_MECHANISM_PARAM_INVALID, "a 5-byte UKM, not read on the device"},
+        {vkoDeriveParameter(CKD_NULL, ownPoint,
+                            bytesFromHex("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2021")),
+         0, CKR_MECHANISM_PARAM_INVALID, "a 33-byte UKM"},
         {vkoDeriveParameter(CKD_CPDIVERSIFY_KDF, ownPoint, bytesFromHex("01020304")), 0,
-         CKR_MECHANISM_PARAM_INVALID, "CKD_CPDIVERSIFY_KDF with a 4-byte UKM, not read on the device"},
+         CKR_MECHANISM_PARAM_INVALID, "CKD_CPDIVERSIFY_KDF with a 4-byte UKM"},
         {vkoDeriveParameter(CKD_NULL, Bytes(ownPoint.begin(), ownPoint.begin() + 32), ukm), 0,
          CKR_MECHANISM_PARAM_INVALID, "a 32-byte point"},
         {vkoDeriveParameter(CKD_NULL, ownPoint, ukm), -1, CKR_MECHANISM_PARAM_INVALID,
@@ -2926,6 +2954,11 @@ static void verifyGOSTVKODerive(Module& module, CK_SESSION_HANDLE session)
             "e34459a6710069a1581494bb071b3eed7cda167cdc8fb2c0b56c926824b3abf7"
             "fc4ef4d15d19676eb71d549d82ede9f4694c8db4784d75754e88c1a65d39abd5"
             "d68e8cd8488bd133eabc96cd77f7834d3c48bc827c1a936bcaca4113dea634b8");
+        const Bytes newDevicePoint512 = bytesFromHex(
+            "2cdc06b7c58654ed1f6a042d1d08a6c631efae85d635b5c233ee72aa6b7c667ae55"
+            "abbbef928e3771ee4c3addb3144970171dd16aa02658ea7627d61d588de1cd807"
+            "6a77eb960098fcbbaed5ef69adf14c92dfb92d641c0dca66f4d6f76bffd5f1524"
+            "10f6bc8aecbfa042a73d551d80ead7afca20e9b7032cc12c43816bb9255");
         Bytes curve512C = bytesFromHex("06092a8503070102010203");
         Bytes digest512 = bytesFromHex("06082a85030701010203");
         CK_KEY_TYPE gost512Type = CKK_GOSTR3410_512;
@@ -2955,26 +2988,36 @@ static void verifyGOSTVKODerive(Module& module, CK_SESSION_HANDLE session)
               CKR_ARGUMENTS_BAD, "C_DeriveKey(CKM_GOSTR3410_12_DERIVE, 512-bit key, 64-byte point)");
         if (key != CK_INVALID_HANDLE) fail("a refused CKM_GOSTR3410_12_DERIVE returned a key");
         check(vkoDerive(module, session, baseKey512,
-                        vkoDeriveParameter(CKD_CPDIVERSIFY_KDF, devicePoint512, ukm), pluginTemplate,
-                        pluginCount, key, "CKD_CPDIVERSIFY_KDF with a 512-bit key, not read on the device"),
-              CKR_MECHANISM_PARAM_INVALID, "C_DeriveKey(CKM_GOSTR3410_12_DERIVE, 512-bit key, CPDIVERSIFY)");
-        if (key != CK_INVALID_HANDLE) fail("a refused CKM_GOSTR3410_12_DERIVE returned a key");
+                        vkoDeriveParameter(CKD_CPDIVERSIFY_KDF, newDevicePoint512, ukm), pluginTemplate,
+                        pluginCount, key, "CKD_CPDIVERSIFY_KDF with a 512-bit key"),
+              CKR_OK, "C_DeriveKey(CKM_GOSTR3410_12_DERIVE, 512-bit key, CPDIVERSIFY)");
+        if (attribute(module, session, key, CKA_VALUE) !=
+            bytesFromHex("a459ce9466f85d2c3635ab80e6e4b62306930099b1998425634d6db01ff847e7"))
+            fail("CKD_CPDIVERSIFY_KDF with a 512-bit key does not match the device answer");
+        destroyObject(module, session, key);
         destroyObject(module, session, baseKey512);
     }
-    CK_ULONG wrongLength = 64;
+    CK_ULONG requestedLength = 64;
     CK_ATTRIBUTE longTemplate[] = {
         {CKA_CLASS, &secretClass, sizeof(secretClass)},
         {CKA_KEY_TYPE, &gost28147, sizeof(gost28147)},
         {CKA_TOKEN, &no, sizeof(no)},
-        {CKA_VALUE_LEN, &wrongLength, sizeof(wrongLength)}
+        {CKA_VALUE_LEN, &requestedLength, sizeof(requestedLength)}
     };
-    check(vkoDerive(module, session, baseKey, vkoDeriveParameter(CKD_NULL, ownPoint, ukm),
-                    longTemplate, 4, key, "CKA_VALUE_LEN 64"),
-          CKR_ATTRIBUTE_VALUE_INVALID, "C_DeriveKey(CKM_GOSTR3410_12_DERIVE, CKA_VALUE_LEN 64)");
+    for (CK_ULONG length : {16UL, 64UL})
+    {
+        requestedLength = length;
+        check(vkoDerive(module, session, baseKey, vkoDeriveParameter(CKD_NULL, ownPoint, ukm),
+                        longTemplate, 4, key, "CKA_VALUE_LEN on a GOST 28147 result"),
+              CKR_OK, "C_DeriveKey(CKM_GOSTR3410_12_DERIVE, CKA_VALUE_LEN 16/64)");
+        if (attribute(module, session, key, CKA_VALUE) != expected)
+            fail("CKM_GOSTR3410_12_DERIVE obeyed an ignored GOST 28147 result length");
+        destroyObject(module, session, key);
+    }
     destroyObject(module, session, baseKey);
     trace("REFERENCE", "CKM_GOSTR3410_12_DERIVE matched the gost-engine VKO answer and the reference "
                        "Rutoken's answers, made its result as the device does, agreed from both sides "
-                       "and refused every form the device was not read for");
+                       "and reproduced the additional VKO answers measured on 19 October");
 }
 
 // KEG on a 512-bit GOST R 34.10-2012 key, against the worked example published
