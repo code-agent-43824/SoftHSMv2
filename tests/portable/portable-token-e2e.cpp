@@ -717,6 +717,7 @@ static std::string keyTypeName(CK_KEY_TYPE value)
     if (value == CKK_RSA) return "CKK_RSA";
     if (value == CKK_GOSTR3410) return "CKK_GOSTR3410";
     if (value == CKK_MAGMA_TWIN_KEY) return "CKK_MAGMA_TWIN_KEY";
+    if (value == CKK_KUZNECHIK_TWIN_KEY) return "CKK_KUZNECHIK_TWIN_KEY";
     if (value == CKK_GOSTR3410_512) return "CKK_GOSTR3410_512";
     return "CKK_<unknown>(" + hexNumber(value) + ")";
 }
@@ -2568,6 +2569,17 @@ static void verifyGOSTKEG(Module& module, CK_SESSION_HANDLE session)
     requireBooleanAttribute(module, session, twinKey, CKA_LOCAL, CK_FALSE);
     destroyObject(module, session, twinKey);
 
+    twinType = CKK_KUZNECHIK_TWIN_KEY;
+    twinKey = CK_INVALID_HANDLE;
+    callOk("C_DeriveKey", "CKM_GOST_KEG with Kuznechik twin-key result",
+           [&] { return module->C_DeriveKey(session, &mechanism, baseKey, outputTemplate,
+                                             sizeof(outputTemplate) / sizeof(outputTemplate[0]), &twinKey); });
+    if (ulongAttribute(module, session, twinKey, CKA_KEY_TYPE) != twinType ||
+        attribute(module, session, twinKey, CKA_VALUE) != expected)
+        fail("Kuznechik twin-key KEG did not match the independent 256-bit vector");
+    destroyObject(module, session, twinKey);
+    twinType = CKK_MAGMA_TWIN_KEY;
+
     CK_ATTRIBUTE pluginTemplate[] = {
         {CKA_CLASS, &secretClass, sizeof(secretClass)},
         {CKA_KEY_TYPE, &twinType, sizeof(twinType)},
@@ -3114,6 +3126,17 @@ static void verifyGOSTKEG512(Module& module, CK_SESSION_HANDLE session)
         ulongAttribute(module, session, twinKey, CKA_VALUE_LEN) != 64)
         fail("512-bit CKM_GOST_KEG created an object with unexpected key type or size");
     destroyObject(module, session, twinKey);
+
+    twinType = CKK_KUZNECHIK_TWIN_KEY;
+    twinKey = CK_INVALID_HANDLE;
+    callOk("C_DeriveKey", "512-bit CKM_GOST_KEG with Kuznechik twin-key result",
+           [&] { return module->C_DeriveKey(session, &mechanism, baseKey, outputTemplate,
+                                             sizeof(outputTemplate) / sizeof(outputTemplate[0]), &twinKey); });
+    if (ulongAttribute(module, session, twinKey, CKA_KEY_TYPE) != twinType ||
+        attribute(module, session, twinKey, CKA_VALUE) != expected)
+        fail("Kuznechik twin-key KEG did not match the published 512-bit ETALON");
+    destroyObject(module, session, twinKey);
+    twinType = CKK_MAGMA_TWIN_KEY;
 
     // The shape the Rutoken Plugin actually sends: three attributes, nothing
     // said about sensitivity. The value still has to read back.

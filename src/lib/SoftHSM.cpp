@@ -10472,6 +10472,7 @@ CK_RV SoftHSM::C_DeriveKey
 	    keyType != CKK_AES
 #ifdef WITH_GOST_3410_2012_256
 	    && keyType != CKK_MAGMA_TWIN_KEY
+	    && keyType != CKK_KUZNECHIK_TWIN_KEY
 	    && keyType != CKK_GOST28147
 	    && keyType != CKK_MAGMA
 	    && keyType != CKK_KUZNECHIK
@@ -10479,7 +10480,8 @@ CK_RV SoftHSM::C_DeriveKey
 	   )
 		return CKR_TEMPLATE_INCONSISTENT;
 #ifdef WITH_GOST_3410_2012_256
-	if (keyType == CKK_MAGMA_TWIN_KEY && pMechanism->mechanism != CKM_GOST_KEG)
+	if ((keyType == CKK_MAGMA_TWIN_KEY || keyType == CKK_KUZNECHIK_TWIN_KEY) &&
+	    pMechanism->mechanism != CKM_GOST_KEG)
 		return CKR_TEMPLATE_INCONSISTENT;
 	// The VKO derive gives a GOST 28147-89, Magma, Kuznechik or generic
 	// secret key, all with the same 32-byte value, as the reference Rutoken
@@ -10521,7 +10523,7 @@ CK_RV SoftHSM::C_DeriveKey
 #ifdef WITH_GOST_3410_2012_256
 	if (pMechanism->mechanism == CKM_GOST_KEG)
 	{
-		if (keyType != CKK_MAGMA_TWIN_KEY)
+		if (keyType != CKK_MAGMA_TWIN_KEY && keyType != CKK_KUZNECHIK_TWIN_KEY)
 			return CKR_TEMPLATE_INCONSISTENT;
 		// KEG takes a GOST R 34.10-2012 private key of either length. The
 		// published TC26 extension names both as base key types, and a token
@@ -10537,7 +10539,7 @@ CK_RV SoftHSM::C_DeriveKey
 		    !baseIsGOST)
 			return CKR_KEY_TYPE_INCONSISTENT;
 		return this->deriveGOSTKEG(hSession, pMechanism, hBaseKey, pTemplate,
-		                           ulCount, phKey, isOnToken, isPrivate);
+		                           ulCount, phKey, keyType, isOnToken, isPrivate);
 	}
 	if (pMechanism->mechanism == CKM_GOSTR3410_12_DERIVE)
 		return this->deriveGOSTVKO(hSession, pMechanism, hBaseKey, pTemplate,
@@ -14958,6 +14960,7 @@ CK_RV SoftHSM::deriveGOSTKEG
 	CK_ATTRIBUTE_PTR pTemplate,
 	CK_ULONG ulCount,
 	CK_OBJECT_HANDLE_PTR phKey,
+	CK_KEY_TYPE keyType,
 	CK_BBOOL isOnToken,
 	CK_BBOOL isPrivate)
 {
@@ -15025,7 +15028,7 @@ CK_RV SoftHSM::deriveGOSTKEG
 	privateKey.setD(ByteString());
 
 	rv = storeDerivedGOSTSecret(hSession, pTemplate, ulCount, phKey, isOnToken, isPrivate,
-	                            CKK_MAGMA_TWIN_KEY, twinKey, true, baseKey, token, true);
+	                            keyType, twinKey, true, baseKey, token, true);
 	twinKey.wipe();
 	return rv;
 }

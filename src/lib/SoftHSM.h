@@ -481,6 +481,7 @@ private:
 		CK_ATTRIBUTE_PTR pTemplate,
 		CK_ULONG ulCount,
 		CK_OBJECT_HANDLE_PTR phKey,
+		CK_KEY_TYPE keyType,
 		CK_BBOOL isOnToken,
 		CK_BBOOL isPrivate
 	);
