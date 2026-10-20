@@ -17,10 +17,11 @@ public:
 	virtual size_t getBlockSize() const { return 8; }
 	virtual bool checkMaximumBytes(unsigned long) { return true; }
 private:
-	bool init(const SymmetricKey*, SymMode::Type, const ByteString&, bool);
+	bool init(const SymmetricKey*, SymMode::Type, const ByteString&, bool, bool);
 	bool finish(ByteString&, bool);
 	bool processECB(GOST28147&, ByteString&, bool);
 	bool processCFB(GOST28147&, ByteString&, bool);
+	bool processCBC(GOST28147&, ByteString&, bool);
 	ByteString input;
 	ByteString parameters;
 };

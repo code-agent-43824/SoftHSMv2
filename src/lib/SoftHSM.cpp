@@ -1701,6 +1701,7 @@ void SoftHSM::prepareSupportedMechanisms(std::map<std::string, CK_MECHANISM_TYPE
 	t["CKM_GOSTR3410_512_KEY_PAIR_GEN"] = CKM_GOSTR3410_512_KEY_PAIR_GEN;
 	t["CKM_GOSTR3410_512"] = CKM_GOSTR3410_512;
 	t["CKM_GOSTR3410_WITH_GOSTR3411_12_512"] = CKM_GOSTR3410_WITH_GOSTR3411_12_512;
+	t["CKM_VKO_GOSTR3410_2012_512"] = CKM_VKO_GOSTR3410_2012_512;
 #endif
 #ifdef WITH_GOST_3410_2012_256
 	t["CKM_GOST_KEG"] = CKM_GOST_KEG;
@@ -1858,7 +1859,7 @@ namespace
 		{ CKM_GOSTR3410_WITH_GOSTR3411_12_512, 0, 0, CKF_HW | CKF_SIGN | CKF_VERIFY },
 		{ CKM_GOST28147_KEY_WRAP, 0, 0, CKF_HW | CKF_WRAP | CKF_UNWRAP },
 		{ CKM_GOST28147_ECB, 0, 0, CKF_HW | CKF_ENCRYPT | CKF_DECRYPT },
-		{ 0x8000000BUL, 0, 0, CKF_HW | CKF_ENCRYPT | CKF_DECRYPT },
+		{ CKM_VENDOR_GOST28147_CBC_FSS, 0, 0, CKF_HW | CKF_ENCRYPT | CKF_DECRYPT },
 		{ CKM_GOST28147, 0, 0, CKF_HW | CKF_ENCRYPT | CKF_DECRYPT },
 		{ CKM_GOST28147_KEY_GEN, 0, 0, CKF_HW | CKF_GENERATE },
 		{ CKM_GOST28147_MAC, 0, 0, CKF_HW | CKF_SIGN | CKF_VERIFY },
@@ -2428,6 +2429,12 @@ CK_RV SoftHSM::C_GetMechanismInfo(CK_SLOT_ID slotID, CK_MECHANISM_TYPE type, CK_
 			pInfo->ulMinKeySize = 32;
 			pInfo->ulMaxKeySize = 32;
 			pInfo->flags = CKF_ENCRYPT | CKF_DECRYPT;
+			break;
+		case CKM_VENDOR_GOST28147_CBC_FSS:
+			if (!fakeRutokenECP) return CKR_MECHANISM_INVALID;
+			pInfo->ulMinKeySize = 0;
+			pInfo->ulMaxKeySize = 0;
+			pInfo->flags = CKF_HW | CKF_ENCRYPT | CKF_DECRYPT;
 			break;
 		case CKM_GOST28147_MAC:
 		case CKM_KUZNECHIK_MAC:
@@ -3764,6 +3771,7 @@ static bool isSymMechanism(CK_MECHANISM_PTR pMechanism)
 		case CKM_AES_GCM:
 		case CKM_GOST28147_ECB:
 		case CKM_GOST28147:
+		case CKM_VENDOR_GOST28147_CBC_FSS:
 		case CKM_KUZNECHIK_ECB:
 		case CKM_MAGMA_ECB:
 		case CKM_KUZNECHIK_CTR_ACPKM:
@@ -3914,6 +3922,17 @@ CK_RV SoftHSM::SymEncryptInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMech
 			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
 				return CKR_MECHANISM_PARAM_INVALID;
 			algo = SymAlgo::GOST28147; mode = SymMode::ECB; break;
+		case CKM_VENDOR_GOST28147_CBC_FSS:
+			if (!fakeRutokenECP) return CKR_MECHANISM_INVALID;
+			if (keyType != CKK_GOST28147) return CKR_KEY_TYPE_INCONSISTENT;
+			if ((pMechanism->pParameter == NULL_PTR && pMechanism->ulParameterLen != 0) ||
+			    (pMechanism->pParameter != NULL_PTR && pMechanism->ulParameterLen != 8))
+				return CKR_MECHANISM_PARAM_INVALID;
+			algo = SymAlgo::GOST28147; mode = SymMode::CBC; padding = true;
+			iv.wipe(8);
+			if (pMechanism->pParameter != NULL_PTR)
+				memcpy(iv.byte_str(), pMechanism->pParameter, 8);
+			break;
 		case CKM_GOST28147:
 			if (keyType != CKK_GOST28147) return CKR_KEY_TYPE_INCONSISTENT;
 			if (pMechanism->pParameter == NULL_PTR || pMechanism->ulParameterLen != 8)
@@ -4716,6 +4735,17 @@ CK_RV SoftHSM::SymDecryptInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMech
 			if (pMechanism->pParameter != NULL_PTR || pMechanism->ulParameterLen != 0)
 				return CKR_MECHANISM_PARAM_INVALID;
 			algo = SymAlgo::GOST28147; mode = SymMode::ECB; break;
+		case CKM_VENDOR_GOST28147_CBC_FSS:
+			if (!fakeRutokenECP) return CKR_MECHANISM_INVALID;
+			if (keyType != CKK_GOST28147) return CKR_KEY_TYPE_INCONSISTENT;
+			if ((pMechanism->pParameter == NULL_PTR && pMechanism->ulParameterLen != 0) ||
+			    (pMechanism->pParameter != NULL_PTR && pMechanism->ulParameterLen != 8))
+				return CKR_MECHANISM_PARAM_INVALID;
+			algo = SymAlgo::GOST28147; mode = SymMode::CBC; padding = true;
+			iv.wipe(8);
+			if (pMechanism->pParameter != NULL_PTR)
+				memcpy(iv.byte_str(), pMechanism->pParameter, 8);
+			break;
 		case CKM_GOST28147:
 			if (keyType != CKK_GOST28147) return CKR_KEY_TYPE_INCONSISTENT;
 			if (pMechanism->pParameter == NULL_PTR || pMechanism->ulParameterLen != 8)

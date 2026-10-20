@@ -1247,6 +1247,7 @@ extern "C" {
 #define CKM_GOST28147                           (0x1222UL)
 #define CKM_GOST28147_MAC                       (0x1223UL)
 #define CKM_GOST28147_KEY_WRAP                  (0x1224UL)
+#define CKM_VENDOR_GOST28147_CBC_FSS            (0x8000000BUL)
 #define CKM_CHACHA20_KEY_GEN                    (0x1225UL)
 #define CKM_CHACHA20                            (0x1226UL)
 #define CKM_POLY1305_KEY_GEN                    (0x1227UL)

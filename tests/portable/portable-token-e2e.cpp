@@ -6145,6 +6145,37 @@ static void verifyRutokenGOST28147Generation(Module& module, CK_SESSION_HANDLE s
     destroyObject(module, session, explicitKey);
 }
 
+static void verifyRutokenCBCFSS(Module& module, CK_SESSION_HANDLE session)
+{
+    const Bytes keyValue = bytesFromHex(
+        "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
+    const Bytes plain = bytesFromHex("000102030405060708090a0b0c0d0e0f");
+    const CK_OBJECT_HANDLE key = createGOSTSecret(module, session, CKK_GOST28147, keyValue);
+    Bytes iv = bytesFromHex("0102030405060708");
+    struct Vector { CK_BYTE_PTR parameter; CK_ULONG length; const char* expected; };
+    const Vector vectors[] = {
+        {nullptr, 0, "ca208afd71eb39d43c7a9e728b0c62b01f9ccf2b0fa0c680"},
+        {iv.data(), static_cast<CK_ULONG>(iv.size()),
+         "be1de5b448738583db410f54efa02a3772cfe3b97d4b5ce0"}
+    };
+    for (const Vector& vector : vectors)
+    {
+        CK_MECHANISM mechanism{CKM_VENDOR_GOST28147_CBC_FSS,
+                               vector.parameter, vector.length};
+        const Bytes cipher = encryptOneShot(module, session, key, mechanism, plain);
+        if (cipher != bytesFromHex(vector.expected))
+            fail("CBC-FSS differs from the complete real Rutoken ciphertext");
+        if (decryptOneShot(module, session, key, mechanism, cipher) != plain)
+            fail("CBC-FSS did not recover the device's plaintext");
+    }
+    Bytes iv16(16, 0);
+    CK_MECHANISM invalid{CKM_VENDOR_GOST28147_CBC_FSS, iv16.data(), 16};
+    check(invoke("C_EncryptInit", "CBC-FSS rejects 16-byte IV", [&] {
+        return module->C_EncryptInit(session, &invalid, key);
+    }), CKR_MECHANISM_PARAM_INVALID, "CBC-FSS with 16-byte IV");
+    destroyObject(module, session, key);
+}
+
 static void verifyRutokenProfile(const fs::path& modulePath)
 {
     Module module(modulePath);
@@ -6463,6 +6494,7 @@ static void verifyRutokenProfile(const fs::path& modulePath)
         {
             login(module, session, CKU_USER, userPin);
             verifyRutokenGOST28147Generation(module, session);
+            verifyRutokenCBCFSS(module, session);
             verifyGOSTSymmetric(module, session);
             verifyForcedSensitiveDefaults(module, session);
             logout(module, session, "CKU_USER");
