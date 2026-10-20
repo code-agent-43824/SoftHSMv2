@@ -3421,6 +3421,15 @@ CK_RV SoftHSM::C_GetAttributeValue(CK_SESSION_HANDLE hSession, CK_OBJECT_HANDLE 
 	OSObject *object = (OSObject *)handleManager->getObject(hObject);
 	if (object == NULL_PTR || !object->isValid()) return CKR_OBJECT_HANDLE_INVALID;
 
+	// A generated GOST 28147 key without an explicit parameter OID uses the
+	// CryptoPro-A cipher default. Rutoken does not report an OID attribute for
+	// that case, even though this store materializes an empty default value.
+	const bool absentGeneratedGostParams = fakeRutokenECP &&
+		object->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED) == CKK_GOST28147 &&
+		object->getUnsignedLongValue(CKA_KEY_GEN_MECHANISM, CK_UNAVAILABLE_INFORMATION) ==
+			CKM_GOST28147_KEY_GEN &&
+		object->getByteStringValue(CKA_GOST28147_PARAMS).size() == 0;
+
 	CK_BBOOL isOnToken = object->getBooleanValue(CKA_TOKEN, false);
 	CK_BBOOL isPrivate = object->getBooleanValue(CKA_PRIVATE, true);
 	// Check read user credentials
@@ -3445,6 +3454,15 @@ CK_RV SoftHSM::C_GetAttributeValue(CK_SESSION_HANDLE hSession, CK_OBJECT_HANDLE 
 	// Ask the P11Object to fill the template with attribute values.
 	rv = p11object->loadTemplate(token, pTemplate,ulCount);
 	delete p11object;
+	if (absentGeneratedGostParams)
+	{
+		for (CK_ULONG i = 0; i < ulCount; ++i)
+		{
+			if (pTemplate[i].type != CKA_GOST28147_PARAMS) continue;
+			pTemplate[i].ulValueLen = CK_UNAVAILABLE_INFORMATION;
+			if (rv != CKR_ATTRIBUTE_SENSITIVE) rv = CKR_ATTRIBUTE_TYPE_INVALID;
+		}
+	}
 	return rv;
 }
 
@@ -8365,6 +8383,15 @@ CK_RV SoftHSM::C_GenerateKey(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMecha
 		{
 			rv = checkGOST28147ParamSet(pTemplate, ulCount);
 			if (rv != CKR_OK) return rv;
+			// Keep the ordinary module's required generation parameter; the
+			// Rutoken profile accepts the minimal template without this OID.
+			if (!fakeRutokenECP)
+			{
+				bool hasParameters = false;
+				for (CK_ULONG i = 0; i < ulCount; ++i)
+					if (pTemplate[i].type == CKA_GOST28147_PARAMS) hasParameters = true;
+				if (!hasParameters) return CKR_TEMPLATE_INCOMPLETE;
+			}
 		}
 		return this->generateGeneric(hSession, pTemplate, ulCount, phKey,
 			isOnToken, isPrivate, keyType, pMechanism->mechanism, 32);
@@ -11466,15 +11493,34 @@ CK_RV SoftHSM::generateGeneric
 			bool bOK = true;
 
 			// Common Attributes
-			bOK = bOK && osobject->setAttribute(CKA_LOCAL,true);
+			const bool rutokenGostGeneration = fakeRutokenECP &&
+				generatedKeyType == CKK_GOST28147;
+			bOK = bOK && osobject->setAttribute(CKA_LOCAL,
+				rutokenGostGeneration ? isOnToken == CK_TRUE : true);
 			CK_ULONG ulKeyGenMechanism = (CK_ULONG)keyGenMechanism;
 			bOK = bOK && osobject->setAttribute(CKA_KEY_GEN_MECHANISM,ulKeyGenMechanism);
 
 			// Common Secret Key Attributes
 			bool bAlwaysSensitive = osobject->getBooleanValue(CKA_SENSITIVE, false);
-			bOK = bOK && osobject->setAttribute(CKA_ALWAYS_SENSITIVE,bAlwaysSensitive);
+			bOK = bOK && osobject->setAttribute(CKA_ALWAYS_SENSITIVE,
+				rutokenGostGeneration ? false : bAlwaysSensitive);
 			bool bNeverExtractable = osobject->getBooleanValue(CKA_EXTRACTABLE, false) == false;
-			bOK = bOK && osobject->setAttribute(CKA_NEVER_EXTRACTABLE, bNeverExtractable);
+			bOK = bOK && osobject->setAttribute(CKA_NEVER_EXTRACTABLE,
+				rutokenGostGeneration ? false : bNeverExtractable);
+			if (rutokenGostGeneration)
+			{
+				// The device supplies these defaults but accepts explicit rights.
+				bool hasDerive = false, hasWrap = false, hasUnwrap = false;
+				for (CK_ULONG i = 0; i < ulCount; ++i)
+				{
+					hasDerive |= pTemplate[i].type == CKA_DERIVE;
+					hasWrap |= pTemplate[i].type == CKA_WRAP;
+					hasUnwrap |= pTemplate[i].type == CKA_UNWRAP;
+				}
+				if (!hasDerive) bOK = bOK && osobject->setAttribute(CKA_DERIVE, true);
+				if (!hasWrap) bOK = bOK && osobject->setAttribute(CKA_WRAP, false);
+				if (!hasUnwrap) bOK = bOK && osobject->setAttribute(CKA_UNWRAP, false);
+			}
 
 			// Generic Secret Key Attributes
 			ByteString value;

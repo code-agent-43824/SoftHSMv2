@@ -1972,7 +1972,7 @@ bool P11GOSTSecretKeyObj::init(OSObject *inobject)
 	// Create attributes
 	P11Attribute* attrValue = new P11AttrValue(osobject,P11Attribute::ck1|P11Attribute::ck4|P11Attribute::ck6|P11Attribute::ck7);
 	P11Attribute* attrGost28147Params = keytype == CKK_GOST28147 ?
-		new P11AttrGost28147Params(osobject,P11Attribute::ck1|P11Attribute::ck3|P11Attribute::ck5) : NULL;
+		new P11AttrGost28147Params(osobject,P11Attribute::ck1|P11Attribute::ck5) : NULL;
 
 	// Initialize the attributes
 	const bool valueInitialized = attrValue->init();

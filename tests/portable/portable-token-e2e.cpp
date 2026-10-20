@@ -5744,6 +5744,24 @@ static void verifyGOST28147OnPrivateKeys(Module& module, CK_SESSION_HANDLE sessi
 static void verifyGOSTSymmetric(Module& module, CK_SESSION_HANDLE session)
 {
     verifyStreebogHMAC(module, session);
+    CK_INFO library{};
+    callOk("C_GetInfo", "check GOST 28147 generation policy", [&] {
+        return module->C_GetInfo(&library);
+    });
+    if (paddedText(library.manufacturerID, sizeof(library.manufacturerID)) != "Aktiv Co.")
+    {
+        CK_OBJECT_CLASS secretClass = CKO_SECRET_KEY;
+        CK_KEY_TYPE gostType = CKK_GOST28147;
+        CK_MECHANISM mechanism{CKM_GOST28147_KEY_GEN, nullptr, 0};
+        CK_ATTRIBUTE noOid[] = {
+            {CKA_CLASS, &secretClass, sizeof(secretClass)},
+            {CKA_KEY_TYPE, &gostType, sizeof(gostType)}
+        };
+        CK_OBJECT_HANDLE key = CK_INVALID_HANDLE;
+        check(invoke("C_GenerateKey", "ordinary module requires GOST 28147 OID", [&] {
+            return module->C_GenerateKey(session, &mechanism, noOid, 2, &key);
+        }), CKR_TEMPLATE_INCOMPLETE, "ordinary GOST 28147 generation without OID");
+    }
     generateGOSTSecret(module, session, CKM_GOST28147_KEY_GEN, CKK_GOST28147);
     generateGOSTSecret(module, session, CKM_KUZNECHIK_KEY_GEN, CKK_KUZNECHIK);
     generateGOSTSecret(module, session, CKM_MAGMA_KEY_GEN, CKK_MAGMA);
@@ -6008,6 +6026,70 @@ static void verifyGOSTSymmetric(Module& module, CK_SESSION_HANDLE session)
           CKR_WRAPPED_KEY_INVALID, "C_UnwrapKey(GOST 28147 tampered MAC)");
 
     trace("REFERENCE", "GOST 28147, Kuznechik and Magma PKCS #11 encryption, MGM and KExp15 verified");
+}
+
+static void verifyRutokenGOST28147Generation(Module& module, CK_SESSION_HANDLE session)
+{
+    CK_OBJECT_CLASS secretClass = CKO_SECRET_KEY;
+    CK_KEY_TYPE gostType = CKK_GOST28147;
+    CK_BBOOL onToken = CK_FALSE, yes = CK_TRUE, no = CK_FALSE;
+    CK_MECHANISM mechanism{CKM_GOST28147_KEY_GEN, nullptr, 0};
+    CK_ATTRIBUTE minimal[] = {
+        {CKA_CLASS, &secretClass, sizeof(secretClass)},
+        {CKA_KEY_TYPE, &gostType, sizeof(gostType)},
+        {CKA_TOKEN, &onToken, sizeof(onToken)}
+    };
+    auto generate = [&]() {
+        CK_OBJECT_HANDLE key = CK_INVALID_HANDLE;
+        callOk("C_GenerateKey", "Rutoken GOST 28147 key without parameter OID", [&] {
+            return module->C_GenerateKey(session, &mechanism, minimal, 3, &key);
+        });
+        return key;
+    };
+    auto checkDefaults = [&](CK_OBJECT_HANDLE key, CK_BBOOL expectedLocal) {
+        requireBooleanAttribute(module, session, key, CKA_DERIVE, CK_TRUE);
+        requireBooleanAttribute(module, session, key, CKA_WRAP, CK_FALSE);
+        requireBooleanAttribute(module, session, key, CKA_UNWRAP, CK_FALSE);
+        requireBooleanAttribute(module, session, key, CKA_LOCAL, expectedLocal);
+        requireBooleanAttribute(module, session, key, CKA_ALWAYS_SENSITIVE, CK_FALSE);
+        requireBooleanAttribute(module, session, key, CKA_NEVER_EXTRACTABLE, CK_FALSE);
+        CK_ATTRIBUTE absent{CKA_GOST28147_PARAMS, nullptr, 0};
+        check(invoke("C_GetAttributeValue", "generated key has no explicit GOST 28147 OID", [&] {
+            return module->C_GetAttributeValue(session, key, &absent, 1);
+        }), CKR_ATTRIBUTE_TYPE_INVALID, "absent generated GOST 28147 parameter OID");
+        if (absent.ulValueLen != CK_UNAVAILABLE_INFORMATION)
+            fail("absent GOST 28147 parameter OID returned a length");
+    };
+
+    CK_OBJECT_HANDLE sessionKey = generate();
+    checkDefaults(sessionKey, CK_FALSE);
+    destroyObject(module, session, sessionKey);
+    onToken = CK_TRUE;
+    CK_OBJECT_HANDLE tokenKey = generate();
+    checkDefaults(tokenKey, CK_TRUE);
+    destroyObject(module, session, tokenKey);
+
+    onToken = CK_FALSE;
+    CK_ATTRIBUTE overrides[] = {
+        {CKA_CLASS, &secretClass, sizeof(secretClass)},
+        {CKA_KEY_TYPE, &gostType, sizeof(gostType)},
+        {CKA_TOKEN, &onToken, sizeof(onToken)},
+        {CKA_DERIVE, &no, sizeof(no)},
+        {CKA_WRAP, &yes, sizeof(yes)},
+        {CKA_UNWRAP, &yes, sizeof(yes)},
+        {CKA_SENSITIVE, &no, sizeof(no)},
+        {CKA_EXTRACTABLE, &yes, sizeof(yes)}
+    };
+    CK_OBJECT_HANDLE explicitKey = CK_INVALID_HANDLE;
+    callOk("C_GenerateKey", "Rutoken GOST 28147 with explicit rights", [&] {
+        return module->C_GenerateKey(session, &mechanism, overrides, 8, &explicitKey);
+    });
+    requireBooleanAttribute(module, session, explicitKey, CKA_DERIVE, CK_FALSE);
+    requireBooleanAttribute(module, session, explicitKey, CKA_WRAP, CK_TRUE);
+    requireBooleanAttribute(module, session, explicitKey, CKA_UNWRAP, CK_TRUE);
+    requireBooleanAttribute(module, session, explicitKey, CKA_SENSITIVE, CK_FALSE);
+    requireBooleanAttribute(module, session, explicitKey, CKA_EXTRACTABLE, CK_TRUE);
+    destroyObject(module, session, explicitKey);
 }
 
 static void verifyRutokenProfile(const fs::path& modulePath)
@@ -6327,6 +6409,7 @@ static void verifyRutokenProfile(const fs::path& modulePath)
         if (!userPin.empty())
         {
             login(module, session, CKU_USER, userPin);
+            verifyRutokenGOST28147Generation(module, session);
             verifyGOSTSymmetric(module, session);
             verifyForcedSensitiveDefaults(module, session);
             logout(module, session, "CKU_USER");
