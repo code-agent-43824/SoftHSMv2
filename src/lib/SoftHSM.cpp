@@ -1849,7 +1849,7 @@ namespace
 		{ CKM_GOSTR3410_512_KEY_PAIR_GEN, 0, 0, CKF_HW | CKF_GENERATE_KEY_PAIR },
 		{ CKM_GOSTR3410_512, 0, 0, CKF_HW | CKF_SIGN | CKF_VERIFY },
 		{ CKM_GOSTR3410_12_DERIVE, 0, 0, CKF_HW | CKF_DERIVE },
-		{ 0xD4321038UL, 0, 0, CKF_HW | CKF_DERIVE },
+		{ CKM_VKO_GOSTR3410_2012_512, 0, 0, CKF_HW | CKF_DERIVE },
 		{ CKM_GOSTR3411, 0, 0, CKF_HW | CKF_DIGEST },
 		{ CKM_GOSTR3411_12_256, 0, 0, CKF_HW | CKF_DIGEST },
 		{ CKM_GOSTR3411_12_512, 0, 0, CKF_HW | CKF_DIGEST },
@@ -2594,6 +2594,13 @@ CK_RV SoftHSM::C_GetMechanismInfo(CK_SLOT_ID slotID, CK_MECHANISM_TYPE type, CK_
 			pInfo->ulMaxKeySize = 0;
 			pInfo->flags = CKF_DERIVE;
 			break;
+#ifdef WITH_GOST_3410_2012_512
+		case CKM_VKO_GOSTR3410_2012_512:
+			pInfo->ulMinKeySize = 0;
+			pInfo->ulMaxKeySize = 0;
+			pInfo->flags = CKF_DERIVE;
+			break;
+#endif
 #endif
 #ifdef WITH_GOST_3411_2012
 		case CKM_GOSTR3411_2012_256:
@@ -10399,6 +10406,9 @@ CK_RV SoftHSM::C_DeriveKey
 #ifdef WITH_GOST_3410_2012_256
 		case CKM_GOST_KEG:
 		case CKM_GOSTR3410_12_DERIVE:
+#ifdef WITH_GOST_3410_2012_512
+		case CKM_VKO_GOSTR3410_2012_512:
+#endif
 #endif
 #if defined(WITH_ECC) || defined(WITH_EDDSA)
 		case CKM_ECDH1_DERIVE:
@@ -10508,7 +10518,8 @@ CK_RV SoftHSM::C_DeriveKey
 		return CKR_TEMPLATE_INCONSISTENT;
 #ifdef WITH_GOST_3410_2012_256
 	if ((keyType == CKK_MAGMA_TWIN_KEY || keyType == CKK_KUZNECHIK_TWIN_KEY) &&
-	    pMechanism->mechanism != CKM_GOST_KEG)
+	    pMechanism->mechanism != CKM_GOST_KEG &&
+	    pMechanism->mechanism != CKM_VKO_GOSTR3410_2012_512)
 		return CKR_TEMPLATE_INCONSISTENT;
 	// The VKO derive gives a GOST 28147-89, Magma, Kuznechik or generic
 	// secret key, all with the same 32-byte value, as the reference Rutoken
@@ -10548,13 +10559,13 @@ CK_RV SoftHSM::C_DeriveKey
 	}
 
 #ifdef WITH_GOST_3410_2012_256
-	if (pMechanism->mechanism == CKM_GOST_KEG)
+	if (pMechanism->mechanism == CKM_GOST_KEG ||
+	    pMechanism->mechanism == CKM_VKO_GOSTR3410_2012_512)
 	{
 		if (keyType != CKK_MAGMA_TWIN_KEY && keyType != CKK_KUZNECHIK_TWIN_KEY)
 			return CKR_TEMPLATE_INCONSISTENT;
-		// KEG takes a GOST R 34.10-2012 private key of either length. The
-		// published TC26 extension names both as base key types, and a token
-		// holding a 512-bit certificate cannot decrypt without the second.
+		// KEG takes either GOST R 34.10-2012 private-key size; the standalone
+		// VKO-512 mechanism takes only the 512-bit size.
 		const CK_KEY_TYPE baseType =
 			key->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED);
 		const bool baseIsGOST = baseType == CKK_GOSTR3410
@@ -10564,6 +10575,9 @@ CK_RV SoftHSM::C_DeriveKey
 		                        ;
 		if (key->getUnsignedLongValue(CKA_CLASS, CKO_VENDOR_DEFINED) != CKO_PRIVATE_KEY ||
 		    !baseIsGOST)
+			return CKR_KEY_TYPE_INCONSISTENT;
+		if (pMechanism->mechanism == CKM_VKO_GOSTR3410_2012_512 &&
+		    baseType != CKK_GOSTR3410_512)
 			return CKR_KEY_TYPE_INCONSISTENT;
 		return this->deriveGOSTKEG(hSession, pMechanism, hBaseKey, pTemplate,
 		                           ulCount, phKey, keyType, isOnToken, isPrivate);
@@ -15021,9 +15035,12 @@ CK_RV SoftHSM::deriveGOSTKEG
 	// key, 128 for a 512-bit one. Which of the two is required is decided by
 	// the base key below, so that a 64-byte point cannot be passed with a
 	// 512-bit key or the other way round.
+	const bool standaloneVKO512 = pMechanism->mechanism == CKM_VKO_GOSTR3410_2012_512;
 	if (params->kdf != CKD_NULL ||
-	    params->ulSharedDataLen != 32 || params->pSharedData == NULL_PTR ||
-	    (params->ulPublicDataLen != 64 && params->ulPublicDataLen != 128) ||
+	    params->ulSharedDataLen != (standaloneVKO512 ? 8UL : 32UL) ||
+	    params->pSharedData == NULL_PTR ||
+	    (standaloneVKO512 ? params->ulPublicDataLen != 128 :
+		(params->ulPublicDataLen != 64 && params->ulPublicDataLen != 128)) ||
 	    params->pPublicData == NULL_PTR)
 		return CKR_MECHANISM_PARAM_INVALID;
 
@@ -15065,8 +15082,11 @@ CK_RV SoftHSM::deriveGOSTKEG
 	ByteString publicValue(params->pPublicData, params->ulPublicDataLen);
 	ByteString ukmSource(params->pSharedData, params->ulSharedDataLen);
 	ByteString twinKey;
-	if (!BotanGOST2012KEG::derive(privateKey.getEC(), privateKey.getD(),
-	                              publicValue, ukmSource, twinKey))
+	if (!(standaloneVKO512 ?
+	      BotanGOST2012KEG::vko512(privateKey.getEC(), privateKey.getD(),
+	                               publicValue, ukmSource, twinKey) :
+	      BotanGOST2012KEG::derive(privateKey.getEC(), privateKey.getD(),
+	                               publicValue, ukmSource, twinKey)))
 	{
 		privateKey.setD(ByteString());
 		return CKR_MECHANISM_PARAM_INVALID;

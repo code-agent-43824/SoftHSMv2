@@ -3138,6 +3138,59 @@ static void verifyGOSTKEG512(Module& module, CK_SESSION_HANDLE session)
     destroyObject(module, session, twinKey);
     twinType = CKK_MAGMA_TWIN_KEY;
 
+    // Standalone VKO-512 takes an eight-byte little-endian UKM. KEG-512
+    // takes 32 source bytes and interprets the first 16 as big-endian.
+    // Choose equivalent integers, then cross-check the two call shapes;
+    // the KEG path above is anchored to the published TC26 ETALON.
+    Bytes vkoUkm = bytesFromHex("0102030405060708");
+    Bytes equivalentKegUkm(32, 0);
+    for (size_t i = 0; i < vkoUkm.size(); ++i)
+        equivalentKegUkm[8 + i] = vkoUkm[7 - i];
+    CK_ECDH1_DERIVE_PARAMS equivalentKegParams{
+        CKD_NULL, static_cast<CK_ULONG>(equivalentKegUkm.size()),
+        equivalentKegUkm.data(), static_cast<CK_ULONG>(publicValue.size()),
+        publicValue.data()};
+    CK_MECHANISM equivalentKegMechanism{
+        CKM_GOST_KEG, &equivalentKegParams, sizeof(equivalentKegParams)};
+    twinKey = CK_INVALID_HANDLE;
+    callOk("C_DeriveKey", "KEG-512 with UKM integer equivalent to standalone VKO-512", [&] {
+        return module->C_DeriveKey(session, &equivalentKegMechanism, baseKey,
+                                   outputTemplate, 7, &twinKey);
+    });
+    const Bytes equivalentExpected = attribute(module, session, twinKey, CKA_VALUE);
+    destroyObject(module, session, twinKey);
+    CK_ECDH1_DERIVE_PARAMS vkoParams{
+        CKD_NULL, static_cast<CK_ULONG>(vkoUkm.size()), vkoUkm.data(),
+        static_cast<CK_ULONG>(publicValue.size()), publicValue.data()};
+    CK_MECHANISM vkoMechanism{
+        CKM_VKO_GOSTR3410_2012_512, &vkoParams, sizeof(vkoParams)};
+    for (CK_KEY_TYPE resultType : {CKK_MAGMA_TWIN_KEY, CKK_KUZNECHIK_TWIN_KEY})
+    {
+        twinType = resultType;
+        twinKey = CK_INVALID_HANDLE;
+        callOk("C_DeriveKey", "standalone VKO-512, eight-byte UKM", [&] {
+            return module->C_DeriveKey(session, &vkoMechanism, baseKey,
+                                       outputTemplate, 7, &twinKey);
+        });
+        if (ulongAttribute(module, session, twinKey, CKA_KEY_TYPE) != resultType ||
+            attribute(module, session, twinKey, CKA_VALUE) != equivalentExpected)
+            fail("standalone VKO-512 differs from equivalent published KEG-512 calculation");
+        destroyObject(module, session, twinKey);
+    }
+    twinType = CKK_MAGMA_TWIN_KEY;
+    vkoParams.ulSharedDataLen = 32;
+    twinKey = CK_INVALID_HANDLE;
+    check(invoke("C_DeriveKey", "standalone VKO-512 rejects KEG's 32-byte UKM", [&] {
+        return module->C_DeriveKey(session, &vkoMechanism, baseKey,
+                                   outputTemplate, 7, &twinKey);
+    }), CKR_MECHANISM_PARAM_INVALID, "standalone VKO-512 with KEG UKM length");
+    vkoParams.ulSharedDataLen = static_cast<CK_ULONG>(vkoUkm.size());
+    vkoParams.ulPublicDataLen = 64;
+    check(invoke("C_DeriveKey", "standalone VKO-512 rejects 256-bit peer point", [&] {
+        return module->C_DeriveKey(session, &vkoMechanism, baseKey,
+                                   outputTemplate, 7, &twinKey);
+    }), CKR_MECHANISM_PARAM_INVALID, "standalone VKO-512 with short peer point");
+
     // The shape the Rutoken Plugin actually sends: three attributes, nothing
     // said about sensitivity. The value still has to read back.
     CK_ATTRIBUTE pluginTemplate[] = {

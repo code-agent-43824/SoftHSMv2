@@ -338,6 +338,45 @@ bool BotanGOST2012KEG::vko256(const ByteString& encodedCurveOID,
 	return false;
 }
 
+bool BotanGOST2012KEG::vko512(const ByteString& encodedCurveOID,
+	                          const ByteString& privateValue,
+	                          const ByteString& publicValue,
+	                          const ByteString& ukm,
+	                          ByteString& key)
+{
+	key.wipe();
+	if (privateValue.size() != 64 || publicValue.size() != 128 || ukm.size() != 8)
+		return false;
+	try
+	{
+		std::vector<uint8_t> ukmBigEndian(8);
+		for (size_t i = 0; i < 8; ++i)
+			ukmBigEndian[i] = ukm.const_byte_str()[7 - i];
+		const Botan::BigInt ukmValue(ukmBigEndian.data(), ukmBigEndian.size());
+		if (ukmValue.is_zero()) return false;
+
+		Botan::secure_vector<uint8_t> vkoInput;
+		if (!agreementPoint(encodedCurveOID, privateValue, publicValue, ukmValue, vkoInput))
+			return false;
+		const Botan::secure_vector<uint8_t> digest =
+			streebog("Streebog-512", vkoInput.data(), vkoInput.size());
+		if (digest.size() != 64) return false;
+		key.resize(64);
+		std::memcpy(key.byte_str(), digest.data(), 64);
+		return true;
+	}
+	catch (const std::exception& exception)
+	{
+		ERROR_MSG("GOST VKO-512 failed: %s", exception.what());
+	}
+	catch (...)
+	{
+		ERROR_MSG("GOST VKO-512 failed");
+	}
+	key.wipe();
+	return false;
+}
+
 bool BotanGOST2012KEG::isPeerPointValid(const ByteString& encodedCurveOID,
 	                                    const ByteString& publicValue)
 {
