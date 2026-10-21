@@ -24,9 +24,9 @@
  *   9. a base key without CKA_DERIVE, a public key as the base key, and the
  *      same parameter under CKM_GOSTR3410_DERIVE (0x1204);
  *  10. test the SDK's VKO KDF selector and compare HMAC/KDF key types;
- *  11. in --interactive mode, run the extended selector, direct KDF,
+ *  11. in --interactive or --batch mode, run the extended selector, direct KDF,
  *      standalone VKO, key-attribute and vendor-operation matrices;
- *  12. interactive follow-up: exact SDK legacy VKO-2001, twin-key KDF
+ *  12. full follow-up: exact SDK legacy VKO-2001, twin-key KDF
  *      candidates, short generic-key threshold, every slot's versions,
  *      VKO-512 boundaries, CBC-FSS lengths/multipart and journal IDs;
  *  13. clean-up.
@@ -40,7 +40,7 @@
  *   cc -std=c11 -O2 -Wall -Wextra -Werror -I src/lib/pkcs11 \
  *      tests/portable/rutoken-derive-probe.c -ldl -o rutoken-derive-probe
  *
- * Running the full interactive matrix: see README-final-probe.txt.
+ * Running the full matrix: see README-final-probe.txt.
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -91,6 +91,7 @@ static struct {
 	const char* userPin;
 	const char* output;
 	int interactive;
+	int batch;
 	int slotGiven;
 	CK_SLOT_ID slot;
 } opt;
@@ -2308,6 +2309,13 @@ static int chooseSlot(const CK_SLOT_ID* slots, CK_ULONG count)
 		theSlot = opt.slot;
 		return 1;
 	}
+	if (opt.batch && count > 1)
+	{
+		fprintf(terminal, "Multiple tokens are present; --batch requires --slot N. Available slots:");
+		for (i = 0; i < count; ++i) fprintf(terminal, " %lu", (unsigned long)slots[i]);
+		fprintf(terminal, "\n");
+		return 0;
+	}
 	if (!opt.interactive || count == 1) { theSlot = slots[0]; return 1; }
 	fprintf(terminal, "Available tokens:\n");
 	for (i = 0; i < count; ++i)
@@ -2344,19 +2352,32 @@ int main(int argc, char** argv)
 	{
 		if (argv[i][0] != '-' && opt.module == NULL) opt.module = argv[i];
 		else if (strcmp(argv[i], "--interactive") == 0) opt.interactive = 1;
+		else if (strcmp(argv[i], "--batch") == 0) opt.batch = 1;
 		else if (strcmp(argv[i], "--log") == 0) opt.output = argValue(argc, argv, &i);
 		else if (strcmp(argv[i], "--user-pin") == 0) opt.userPin = argValue(argc, argv, &i);
 		else if (strcmp(argv[i], "--user-pin-env") == 0) opt.userPin = getenv(argValue(argc, argv, &i));
 		else if (strcmp(argv[i], "--slot") == 0)
 		{
-			opt.slot = strtoul(argValue(argc, argv, &i), NULL, 0);
+			const char* value = argValue(argc, argv, &i);
+			char* end;
+			unsigned long slot;
+			errno = 0;
+			slot = strtoul(value, &end, 0);
+			if (errno != 0 || end == value || *end != '\0' || (CK_SLOT_ID)slot != slot)
+			{ fprintf(stderr, "invalid slot number: %s\n", value); return 2; }
+			opt.slot = (CK_SLOT_ID)slot;
 			opt.slotGiven = 1;
 		}
 		else { fprintf(stderr, "unknown argument: %s\n", argv[i]); return 2; }
 	}
-	if (!opt.interactive && opt.output != NULL)
+	if (opt.interactive && opt.batch)
 	{
-		fprintf(stderr, "--log requires --interactive\n");
+		fprintf(stderr, "choose either --interactive or --batch\n");
+		return 2;
+	}
+	if (!opt.interactive && !opt.batch && opt.output != NULL)
+	{
+		fprintf(stderr, "--log requires --interactive or --batch\n");
 		return 2;
 	}
 	if (opt.interactive)
@@ -2376,16 +2397,33 @@ int main(int argc, char** argv)
 			opt.module = modulePath;
 		}
 	}
+	if (opt.batch)
+	{
+		int fd = dup(STDOUT_FILENO);
+		if (fd >= 0) terminal = fdopen(fd, "w");
+		if (terminal == NULL)
+		{
+			if (fd >= 0) close(fd);
+			fprintf(stderr, "--batch needs writable standard output\n");
+			return 2;
+		}
+	}
 	if (opt.module == NULL || (!opt.interactive && opt.userPin == NULL))
 	{
 		fprintf(stderr,
 			"usage: %s <path to librtpkcs11ecp.so> [options]\n"
 			"  --interactive          prompt for module, slot and hidden PIN; write one log\n"
-			"  --log FILE             log path for --interactive (must not exist)\n"
+			"  --batch                run all sections without a terminal; write one log\n"
+			"  --log FILE             log path for --interactive or --batch (must not exist)\n"
 			"  --user-pin PIN         the user PIN (required unless --user-pin-env is set)\n"
 			"  --user-pin-env NAME    take the user PIN from the environment\n"
-			"  --slot N               the slot (default: the first with a token)\n",
+			"  --slot N               the slot (required in batch mode with multiple tokens)\n",
 			argv[0]);
+		return 2;
+	}
+	if (opt.batch && opt.module[0] != '/')
+	{
+		fprintf(stderr, "--batch needs an absolute PKCS #11 module path\n");
 		return 2;
 	}
 	if (!loadLibrary()) return 1;
@@ -2394,10 +2432,13 @@ int main(int argc, char** argv)
 	rv = p11->C_GetSlotList(CK_TRUE, slots, &slotCount);
 	if (rv != CKR_OK || slotCount == 0) { fprintf(stderr, "no token present (0x%lx)\n", (unsigned long)rv); return 1; }
 	if (!chooseSlot(slots, slotCount)) return 1;
-	if (opt.interactive)
+	if (opt.interactive || opt.batch)
 	{
-		if (opt.userPin == NULL && !promptPin()) { fprintf(stderr, "PIN input failed\n"); return 1; }
-		if (opt.userPin == NULL) opt.userPin = promptedPin;
+		if (opt.interactive && opt.userPin == NULL)
+		{
+			if (!promptPin()) { fprintf(stderr, "PIN input failed\n"); return 1; }
+			opt.userPin = promptedPin;
+		}
 		if (!startLog()) { fprintf(stderr, "cannot start log\n"); return 1; }
 	}
 	line("rutoken-derive-probe: CKM_GOSTR3410_12_DERIVE on slot %lu", (unsigned long)theSlot);
@@ -2425,7 +2466,7 @@ int main(int argc, char** argv)
 	probe512();
 	probeBaseKeys();
 	probeDocumentedKdfsAndHmac();
-	if (opt.interactive)
+	if (opt.interactive || opt.batch)
 	{
 		probeSelectorKdf();
 		probeKdfMatrix();
