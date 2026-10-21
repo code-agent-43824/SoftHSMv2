@@ -26,7 +26,10 @@
  *  10. test the SDK's VKO KDF selector and compare HMAC/KDF key types;
  *  11. in --interactive mode, run the extended selector, direct KDF,
  *      standalone VKO, key-attribute and vendor-operation matrices;
- *  12. clean-up.
+ *  12. interactive follow-up: exact SDK legacy VKO-2001, twin-key KDF
+ *      candidates, short generic-key threshold, every slot's versions,
+ *      VKO-512 boundaries, CBC-FSS lengths/multipart and journal IDs;
+ *  13. clean-up.
  *
  * It needs only the user PIN. It does not format the token, uses no SO PIN,
  * makes no wrong PIN attempt, and destroys every object it created (they all
@@ -34,10 +37,10 @@
  *
  * Building it:
  *
- *   cc -std=c11 -O2 -Wall -Wextra -I src/lib/pkcs11 \
+ *   cc -std=c11 -O2 -Wall -Wextra -Werror -I src/lib/pkcs11 \
  *      tests/portable/rutoken-derive-probe.c -ldl -o rutoken-derive-probe
  *
- * Running it: see README-derive-probe.txt.
+ * Running the full interactive matrix: see README-final-probe.txt.
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -55,6 +58,7 @@
 #include <unistd.h>
 
 #include "cryptoki.h"
+#include "rutoken.h"
 
 #define MAX_SLOTS 64
 #define MAX_OBJECTS 1024
@@ -72,6 +76,7 @@
 static const char PROBE_LABEL[] = "CryptoMost derive probe";
 
 static CK_FUNCTION_LIST_PTR p11 = NULL_PTR;
+static CK_FUNCTION_LIST_EXTENDED_PTR ex = NULL_PTR;
 static void* libraryHandle = NULL;
 static CK_SLOT_ID theSlot = 0;
 static CK_SESSION_HANDLE session = CK_INVALID_HANDLE;
@@ -98,6 +103,8 @@ static const CK_BYTE CURVE_TC26_A[]  = { 0x06,0x09,0x2a,0x85,0x03,0x07,0x01,0x02
 static const CK_BYTE CURVE_512_C[]   = { 0x06,0x09,0x2a,0x85,0x03,0x07,0x01,0x02,0x01,0x02,0x03 };
 static const CK_BYTE DIGEST_256[]    = { 0x06,0x08,0x2a,0x85,0x03,0x07,0x01,0x01,0x02,0x02 };
 static const CK_BYTE DIGEST_512[]    = { 0x06,0x08,0x2a,0x85,0x03,0x07,0x01,0x01,0x02,0x03 };
+/* SDK CreateGOST34.10-2001.c: CryptoPro GOST R 34.11-94 parameter set. */
+static const CK_BYTE DIGEST_1994[]   = { 0x06,0x07,0x2a,0x85,0x03,0x02,0x02,0x1e,0x01 };
 /* id-Gost28147-89-CryptoPro-A-ParamSet, 1.2.643.2.2.31.1 */
 static const CK_BYTE GOST28147_CP_A[] = { 0x06,0x07,0x2a,0x85,0x03,0x02,0x02,0x1f,0x01 };
 static const CK_BYTE GOST28147_CP_B[] = { 0x06,0x07,0x2a,0x85,0x03,0x02,0x02,0x1f,0x02 };
@@ -232,6 +239,8 @@ static const char* rvName(CK_RV rv)
 	case CKR_ATTRIBUTE_VALUE_INVALID: return "CKR_ATTRIBUTE_VALUE_INVALID";
 	case CKR_DATA_INVALID: return "CKR_DATA_INVALID";
 	case CKR_DATA_LEN_RANGE: return "CKR_DATA_LEN_RANGE";
+	case CKR_ENCRYPTED_DATA_INVALID: return "CKR_ENCRYPTED_DATA_INVALID";
+	case CKR_ENCRYPTED_DATA_LEN_RANGE: return "CKR_ENCRYPTED_DATA_LEN_RANGE";
 	case CKR_DEVICE_ERROR: return "CKR_DEVICE_ERROR";
 	case CKR_DEVICE_MEMORY: return "CKR_DEVICE_MEMORY";
 	case CKR_FUNCTION_NOT_SUPPORTED: return "CKR_FUNCTION_NOT_SUPPORTED";
@@ -251,6 +260,7 @@ static const char* rvName(CK_RV rv)
 	case CKR_TEMPLATE_INCOMPLETE: return "CKR_TEMPLATE_INCOMPLETE";
 	case CKR_TEMPLATE_INCONSISTENT: return "CKR_TEMPLATE_INCONSISTENT";
 	case CKR_TOKEN_WRITE_PROTECTED: return "CKR_TOKEN_WRITE_PROTECTED";
+	case CKR_TOKEN_NOT_PRESENT: return "CKR_TOKEN_NOT_PRESENT";
 	case CKR_WRAPPED_KEY_INVALID: return "CKR_WRAPPED_KEY_INVALID";
 	case CKR_WRAPPED_KEY_LEN_RANGE: return "CKR_WRAPPED_KEY_LEN_RANGE";
 	case CKR_USER_NOT_LOGGED_IN: return "CKR_USER_NOT_LOGGED_IN";
@@ -1638,6 +1648,16 @@ static void probeVendorMechanisms(void)
 		key, iv8, sizeof(iv8), synthetic, 64, CKK_GENERIC_SECRET);
 	tryVendorImport("secure import, no unwrapping key, synthetic blob -> GOST28147",
 		CK_INVALID_HANDLE, NULL, 0, synthetic, 32, CKK_GOST28147);
+	tryVendorImport("secure import, NULL parameter, synthetic 16-byte blob -> GOST28147",
+		key, NULL, 0, synthetic, 16, CKK_GOST28147);
+	tryVendorImport("secure import, NULL parameter, synthetic 24-byte blob -> GOST28147",
+		key, NULL, 0, synthetic, 24, CKK_GOST28147);
+	tryVendorImport("secure import, NULL parameter, synthetic 40-byte blob -> GOST28147",
+		key, NULL, 0, synthetic, 40, CKK_GOST28147);
+	tryVendorImport("secure import, 16-byte parameter, synthetic 64-byte blob -> GOST28147",
+		key, iv16, sizeof(iv16), synthetic, 64, CKK_GOST28147);
+	tryVendorImport("secure import, 8-byte IV, synthetic 64-byte blob -> GOST28147",
+		key, iv8, sizeof(iv8), synthetic, 64, CKK_GOST28147);
 	target = createVendorTestKey();
 	rv = p11->C_WrapKey(session, &wrap, key,
 		target == CK_INVALID_HANDLE ? key : target, wrapped, &wrappedLen);
@@ -1654,16 +1674,620 @@ static void probeVendorMechanisms(void)
 	destroy(key);
 }
 
+/* The earlier legacy-derive checks used GOST-2012 keys. The official
+ * CreateGOST34.10-2001.c and VKO-GOST34.10-2001.c samples instead use this
+ * CryptoPro-A curve with the GOST R 34.11-94 digest OID. */
+static CK_RV genPair2001(const char* id, CK_OBJECT_HANDLE* pub, CK_OBJECT_HANDLE* priv)
+{
+	CK_OBJECT_CLASS pubClass = CKO_PUBLIC_KEY, privClass = CKO_PRIVATE_KEY;
+	CK_KEY_TYPE type = CKK_GOSTR3410;
+	CK_BBOOL yes = CK_TRUE, no = CK_FALSE;
+	CK_MECHANISM mech = { CKM_GOSTR3410_KEY_PAIR_GEN, NULL_PTR, 0 };
+	CK_ATTRIBUTE publicAttrs[] = {
+		{ CKA_CLASS, &pubClass, sizeof(pubClass) },
+		{ CKA_KEY_TYPE, &type, sizeof(type) },
+		{ CKA_TOKEN, &yes, sizeof(yes) },
+		{ CKA_PRIVATE, &no, sizeof(no) },
+		{ CKA_LABEL, (CK_VOID_PTR)PROBE_LABEL, sizeof(PROBE_LABEL) - 1 },
+		{ CKA_ID, (CK_VOID_PTR)id, (CK_ULONG)strlen(id) },
+		{ CKA_GOSTR3410_PARAMS, (CK_VOID_PTR)CURVE_CP_A, sizeof(CURVE_CP_A) },
+		{ CKA_GOSTR3411_PARAMS, (CK_VOID_PTR)DIGEST_1994, sizeof(DIGEST_1994) }
+	};
+	CK_ATTRIBUTE privateAttrs[] = {
+		{ CKA_CLASS, &privClass, sizeof(privClass) },
+		{ CKA_KEY_TYPE, &type, sizeof(type) },
+		{ CKA_TOKEN, &yes, sizeof(yes) },
+		{ CKA_PRIVATE, &yes, sizeof(yes) },
+		{ CKA_DERIVE, &yes, sizeof(yes) },
+		{ CKA_LABEL, (CK_VOID_PTR)PROBE_LABEL, sizeof(PROBE_LABEL) - 1 },
+		{ CKA_ID, (CK_VOID_PTR)id, (CK_ULONG)strlen(id) },
+		{ CKA_GOSTR3410_PARAMS, (CK_VOID_PTR)CURVE_CP_A, sizeof(CURVE_CP_A) },
+		{ CKA_GOSTR3411_PARAMS, (CK_VOID_PTR)DIGEST_1994, sizeof(DIGEST_1994) }
+	};
+	*pub = *priv = CK_INVALID_HANDLE;
+	return p11->C_GenerateKeyPair(session, &mech, publicAttrs,
+		sizeof(publicAttrs) / sizeof(publicAttrs[0]), privateAttrs,
+		sizeof(privateAttrs) / sizeof(privateAttrs[0]), pub, priv);
+}
+
+static void probeSlotVersions(void)
+{
+	CK_SLOT_ID slots[MAX_SLOTS];
+	CK_ULONG count = MAX_SLOTS, i;
+	CK_RV rv;
+	section("Every slot: reader versions, flags and token presence");
+	rv = p11->C_GetSlotList(CK_FALSE, slots, &count);
+	showRv("C_GetSlotList(tokenPresent=FALSE)", rv);
+	if (rv != CKR_OK) return;
+	line("    slot count = %lu", (unsigned long)count);
+	for (i = 0; i < count && i < MAX_SLOTS; ++i)
+	{
+		CK_SLOT_INFO info;
+		CK_TOKEN_INFO token;
+		rv = p11->C_GetSlotInfo(slots[i], &info);
+		line("    slot %lu C_GetSlotInfo rv=%s (0x%lx)",
+			(unsigned long)slots[i], rvName(rv), (unsigned long)rv);
+		if (rv == CKR_OK)
+			line("      description='%.64s' manufacturer='%.32s' flags=0x%lx hardware=%u.%u firmware=%u.%u",
+				info.slotDescription, info.manufacturerID, (unsigned long)info.flags,
+				(unsigned)info.hardwareVersion.major, (unsigned)info.hardwareVersion.minor,
+				(unsigned)info.firmwareVersion.major, (unsigned)info.firmwareVersion.minor);
+		rv = p11->C_GetTokenInfo(slots[i], &token);
+		line("      C_GetTokenInfo rv=%s (0x%lx)%s", rvName(rv), (unsigned long)rv,
+			rv == CKR_OK ? " token present" : "");
+	}
+	if (count > MAX_SLOTS) line("    slot list truncated to %d entries", MAX_SLOTS);
+}
+
+static void probeGenericBoundary(void)
+{
+	CK_BYTE value[40];
+	CK_ULONG n;
+	CK_OBJECT_HANDLE key;
+	CK_OBJECT_CLASS cls = CKO_SECRET_KEY;
+	CK_KEY_TYPE type = CKK_GENERIC_SECRET;
+	CK_BBOOL no = CK_FALSE;
+	CK_MECHANISM mech = { CKM_GENERIC_SECRET_KEY_GEN, NULL_PTR, 0 };
+	CK_ATTRIBUTE attrs[] = {
+		{ CKA_CLASS, &cls, sizeof(cls) },
+		{ CKA_KEY_TYPE, &type, sizeof(type) },
+		{ CKA_TOKEN, &no, sizeof(no) },
+		{ CKA_VALUE_LEN, &n, sizeof(n) },
+		{ CKA_LABEL, (CK_VOID_PTR)PROBE_LABEL, sizeof(PROBE_LABEL) - 1 }
+	};
+	CK_RV rv;
+	char name[96];
+	section("Exact short generic-secret boundary: C_CreateObject and C_GenerateKey");
+	for (n = 0; n <= 34; ++n)
+	{
+		CK_ULONG j;
+		for (j = 0; j < n; ++j) value[j] = (CK_BYTE)j;
+		snprintf(name, sizeof(name), "C_CreateObject generic secret length %lu", (unsigned long)n);
+		key = createProbeSecret(name, CKK_GENERIC_SECRET, value, n);
+		destroy(key);
+		key = CK_INVALID_HANDLE;
+		rv = p11->C_GenerateKey(session, &mech, attrs,
+			sizeof(attrs) / sizeof(attrs[0]), &key);
+		snprintf(name, sizeof(name), "C_GenerateKey generic secret length %lu", (unsigned long)n);
+		showRv(name, rv);
+		destroy(key);
+	}
+}
+
+static void probeLegacySdk2001(void)
+{
+	static const CK_BYTE ukm16[16] = {
+		1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16
+	};
+	CK_OBJECT_HANDLE pubA = CK_INVALID_HANDLE, privA = CK_INVALID_HANDLE;
+	CK_OBJECT_HANDLE pubB = CK_INVALID_HANDLE, privB = CK_INVALID_HANDLE;
+	CK_BYTE pointA[128], pointB[128], outAB[64], outBA[64];
+	CK_GOSTR3410_DERIVE_PARAMS params;
+	CK_RV rv;
+	long lenA, lenB, resultAB, resultBA;
+	Result generic = { CKK_GENERIC_SECRET, 32, CK_FALSE, -1, -1, 0, 0 };
+	section("Exact SDK VKO-GOST34.10-2001: two GOST-2001 key pairs and structured parameter");
+	rv = genPair2001("final-2001-a", &pubA, &privA);
+	showRv("generate first SDK GOST-2001 key pair (94 digest OID)", rv);
+	if (rv != CKR_OK) goto done;
+	rv = genPair2001("final-2001-b", &pubB, &privB);
+	showRv("generate second SDK GOST-2001 key pair (94 digest OID)", rv);
+	if (rv != CKR_OK) goto done;
+	lenA = publicPoint(pubA, pointA, sizeof(pointA));
+	lenB = publicPoint(pubB, pointB, sizeof(pointB));
+	if (lenA != 64 || lenB != 64) { line("    public point length differs from SDK 64 bytes"); goto done; }
+	hexLine("GOST-2001 public A", pointA, 64);
+	hexLine("GOST-2001 public B", pointB, 64);
+	params.kdf = CKD_CPDIVERSIFY_KDF;
+	params.pPublicData = pointB;
+	params.ulPublicDataLen = 64;
+	params.pUKM = (CK_BYTE_PTR)UKM_1;
+	params.ulUKMLen = 8;
+	resultAB = tryDerive("SDK-2001 CPDIVERSIFY: A with B point, GOST28147 result",
+		MECH_GOSTR3410_DERIVE, privA, &params, sizeof(params),
+		&PLUGIN_RESULT, 1, outAB, sizeof(outAB));
+	params.pPublicData = pointA;
+	resultBA = tryDerive("SDK-2001 CPDIVERSIFY: B with A point, GOST28147 result",
+		MECH_GOSTR3410_DERIVE, privB, &params, sizeof(params),
+		&PLUGIN_RESULT, 1, outBA, sizeof(outBA));
+	if (resultAB > 0 && (size_t)resultAB <= sizeof(outAB) && resultAB == resultBA)
+		line("      SDK-2001 agreement equal: %s",
+			memcmp(outAB, outBA, (size_t)resultAB) == 0 ? "YES" : "NO");
+	params.pPublicData = pointB;
+	tryFullKdfResult("SDK-2001 CPDIVERSIFY: exact eight-attribute result",
+		MECH_GOSTR3410_DERIVE, privA, &params, sizeof(params), CKK_GOST28147, -1);
+	params.kdf = CKD_NULL;
+	tryDerive("SDK-2001 CKD_NULL", MECH_GOSTR3410_DERIVE, privA,
+		&params, sizeof(params), &PLUGIN_RESULT, 0, NULL, 0);
+	params.kdf = CKD_CPDIVERSIFY_KDF;
+	params.pUKM = (CK_BYTE_PTR)ukm16;
+	params.ulUKMLen = 16;
+	tryDerive("SDK-2001 CPDIVERSIFY, 16-byte UKM", MECH_GOSTR3410_DERIVE,
+		privA, &params, sizeof(params), &PLUGIN_RESULT, 0, NULL, 0);
+	params.pUKM = (CK_BYTE_PTR)UKM_1;
+	params.ulUKMLen = 8;
+	tryDerive("SDK-2001 CPDIVERSIFY, generic result", MECH_GOSTR3410_DERIVE,
+		privA, &params, sizeof(params), &generic, 0, NULL, 0);
+done:
+	destroy(pubB); destroy(privB); destroy(pubA); destroy(privA);
+}
+
+static CK_OBJECT_HANDLE createKnownTwin(CK_KEY_TYPE type, const CK_BYTE* value)
+{
+	CK_OBJECT_CLASS cls = CKO_SECRET_KEY;
+	CK_BBOOL no = CK_FALSE, yes = CK_TRUE;
+	CK_OBJECT_HANDLE key = CK_INVALID_HANDLE;
+	CK_ATTRIBUTE attrs[] = {
+		{ CKA_CLASS, &cls, sizeof(cls) },
+		{ CKA_KEY_TYPE, &type, sizeof(type) },
+		{ CKA_TOKEN, &no, sizeof(no) },
+		{ CKA_PRIVATE, &no, sizeof(no) },
+		{ CKA_SENSITIVE, &no, sizeof(no) },
+		{ CKA_EXTRACTABLE, &yes, sizeof(yes) },
+		{ CKA_DERIVE, &yes, sizeof(yes) },
+		{ CKA_VALUE, (CK_VOID_PTR)value, 64 },
+		{ CKA_LABEL, (CK_VOID_PTR)PROBE_LABEL, sizeof(PROBE_LABEL) - 1 }
+	};
+	CK_RV rv = p11->C_CreateObject(session, attrs,
+		sizeof(attrs) / sizeof(attrs[0]), &key);
+	showRv(type == CKK_MAGMA_TWIN_KEY ? "create known Magma twin-key, CKA_DERIVE TRUE" :
+		"create known Kuznechik twin-key, CKA_DERIVE TRUE", rv);
+	return rv == CKR_OK ? key : CK_INVALID_HANDLE;
+}
+
+static void probeTwinKdf(void)
+{
+	CK_BYTE known[64], seed[32];
+	CK_OBJECT_HANDLE pub = CK_INVALID_HANDLE, priv = CK_INVALID_HANDLE;
+	CK_OBJECT_HANDLE key = CK_INVALID_HANDLE;
+	CK_ECDH1_DERIVE_PARAMS keg;
+	CK_KEY_DERIVATION_STRING_DATA stringParam;
+	Result twin = { CKK_MAGMA_TWIN_KEY, 64, CK_FALSE, -1, -1, 0, 1 };
+	Result gost = { CKK_GOST28147, -1, CK_FALSE, -1, -1, 0, 0 };
+	CK_RV rv;
+	CK_ULONG i;
+	section("Direct KDFs on known 64-byte twin keys and a KEG-produced twin key");
+	for (i = 0; i < 64; ++i) known[i] = (CK_BYTE)i;
+	for (i = 0; i < 32; ++i) seed[i] = (CK_BYTE)(i + 1);
+	stringParam = (CK_KEY_DERIVATION_STRING_DATA){ seed, 32 };
+	key = createKnownTwin(CKK_MAGMA_TWIN_KEY, known);
+	if (key != CK_INVALID_HANDLE)
+	{
+		probeKdfOnBase("known Magma twin 64", key);
+		tryDerive("KDF_HMAC CK_KEY_DERIVATION_STRING_DATA on Magma twin",
+			MECH_KDF_HMAC_256, key, &stringParam, sizeof(stringParam),
+			&gost, 0, NULL, 0);
+		destroy(key);
+	}
+	key = createKnownTwin(CKK_KUZNECHIK_TWIN_KEY, known);
+	if (key != CK_INVALID_HANDLE)
+	{
+		probeKdfOnBase("known Kuznechik twin 64", key);
+		destroy(key);
+	}
+	key = createProbeSecret("create known generic 64-byte KDF base",
+		CKK_GENERIC_SECRET, known, 64);
+	if (key != CK_INVALID_HANDLE)
+	{
+		probeKdfOnBase("known generic 64", key);
+		destroy(key);
+	}
+	rv = genPair("final-kdf-512", 512, CURVE_512_C, sizeof(CURVE_512_C),
+		CK_TRUE, &pub, &priv);
+	showRv("generate GOST-2012/512 pair for real KEG twin KDF base", rv);
+	if (rv != CKR_OK) goto done;
+	keg.kdf = CKD_NULL;
+	keg.ulSharedDataLen = 32;
+	keg.pSharedData = seed;
+	keg.ulPublicDataLen = sizeof(SAMPLE_512_POINT);
+	keg.pPublicData = (CK_BYTE_PTR)SAMPLE_512_POINT;
+	rv = derive(MECH_GOST_KEG, priv, &keg, sizeof(keg), &twin, &key);
+	showRv("KEG-512 -> Magma twin with CKA_DERIVE TRUE", rv);
+	if (rv != CKR_OK)
+	{
+		twin.deriveAttribute = 0;
+		rv = derive(MECH_GOST_KEG, priv, &keg, sizeof(keg), &twin, &key);
+		showRv("KEG-512 -> Magma twin, omitted CKA_DERIVE", rv);
+	}
+	if (rv == CKR_OK && key != CK_INVALID_HANDLE)
+	{
+		describeKey(key);
+		probeKdfOnBase("KEG-produced Magma twin 64", key);
+		tryDerive("KDF_HMAC CK_KEY_DERIVATION_STRING_DATA on KEG twin",
+			MECH_KDF_HMAC_256, key, &stringParam, sizeof(stringParam),
+			&gost, 0, NULL, 0);
+		destroy(key);
+	}
+done:
+	destroy(pub); destroy(priv);
+}
+
+static void probeVko512Bounds(void)
+{
+	static const CK_ULONG lengths[] = { 0, 1, 4, 7, 8, 9, 16, 32 };
+	CK_BYTE ukm[32], zero[32] = { 0 };
+	CK_ECDH1_DERIVE_PARAMS params;
+	CK_OBJECT_HANDLE pub = CK_INVALID_HANDLE, priv = CK_INVALID_HANDLE;
+	Result twin = { CKK_MAGMA_TWIN_KEY, 64, CK_FALSE, -1, -1, 0, 0 };
+	CK_RV rv;
+	CK_ULONG i;
+	char name[100];
+	section("Standalone VKO-512: UKM, zero, result length and base-key boundaries");
+	for (i = 0; i < 32; ++i) ukm[i] = (CK_BYTE)(i + 1);
+	rv = genPair("final-vko512", 512, CURVE_512_C, sizeof(CURVE_512_C),
+		CK_TRUE, &pub, &priv);
+	showRv("generate disposable 512-bit VKO base", rv);
+	if (rv != CKR_OK) return;
+	params.kdf = CKD_NULL;
+	params.pSharedData = ukm;
+	params.ulPublicDataLen = sizeof(SAMPLE_512_POINT);
+	params.pPublicData = (CK_BYTE_PTR)SAMPLE_512_POINT;
+	for (i = 0; i < sizeof(lengths) / sizeof(lengths[0]); ++i)
+	{
+		params.ulSharedDataLen = lengths[i];
+		snprintf(name, sizeof(name), "standalone VKO-512 UKM length %lu",
+			(unsigned long)lengths[i]);
+		tryDerive(name, MECH_VKO_512, priv, &params, sizeof(params),
+			&twin, 0, NULL, 0);
+	}
+	params.pSharedData = zero;
+	params.ulSharedDataLen = 8;
+	tryDerive("standalone VKO-512 zero 8-byte UKM", MECH_VKO_512,
+		priv, &params, sizeof(params), &twin, 0, NULL, 0);
+	params.pSharedData = ukm;
+	params.kdf = MECH_KDF_GOST_256;
+	tryDerive("standalone VKO-512 non-NULL KDF selector", MECH_VKO_512,
+		priv, &params, sizeof(params), &twin, 0, NULL, 0);
+	params.kdf = CKD_NULL;
+	twin.valueLen = 32;
+	tryDerive("standalone VKO-512 CKA_VALUE_LEN=32", MECH_VKO_512,
+		priv, &params, sizeof(params), &twin, 0, NULL, 0);
+	twin.valueLen = 64;
+	twin.token = CK_TRUE;
+	tryDerive("standalone VKO-512 token result", MECH_VKO_512,
+		priv, &params, sizeof(params), &twin, 0, NULL, 0);
+	twin.token = CK_FALSE;
+	if (basePriv != CK_INVALID_HANDLE)
+		tryDerive("standalone VKO-512 with 256-bit base key", MECH_VKO_512,
+			basePriv, &params, sizeof(params), &twin, 0, NULL, 0);
+	destroy(pub); destroy(priv);
+}
+
+static void probeFssOneShot(CK_ULONG inputLen, const void* iv, CK_ULONG ivLen)
+{
+	CK_SESSION_HANDLE saved = session, temporary = CK_INVALID_HANDLE;
+	CK_OBJECT_HANDLE key;
+	CK_MECHANISM mech = { MECH_VENDOR_CBC_FSS, (CK_VOID_PTR)iv, ivLen };
+	CK_BYTE input[512], cipher[544], plain[544];
+	CK_ULONG i, cipherLen = sizeof(cipher), plainLen = sizeof(plain);
+	CK_RV rv;
+	char name[100];
+	rv = p11->C_OpenSession(theSlot, CKF_SERIAL_SESSION | CKF_RW_SESSION,
+		NULL_PTR, NULL_PTR, &temporary);
+	if (rv != CKR_OK) { showRv("open CBC-FSS length-test session", rv); return; }
+	session = temporary;
+	key = createVendorTestKey();
+	if (key == CK_INVALID_HANDLE) goto done;
+	for (i = 0; i < inputLen; ++i) input[i] = (CK_BYTE)i;
+	rv = p11->C_EncryptInit(session, &mech, key);
+	snprintf(name, sizeof(name), "CBC-FSS %lu-byte plaintext, IV length %lu: EncryptInit",
+		(unsigned long)inputLen, (unsigned long)ivLen);
+	showRv(name, rv);
+	if (rv != CKR_OK) goto clean_key;
+	rv = p11->C_Encrypt(session, input, inputLen, cipher, &cipherLen);
+	showRv("CBC-FSS C_Encrypt", rv);
+	if (rv != CKR_OK || cipherLen > sizeof(cipher)) goto clean_key;
+	hexLine("CBC-FSS ciphertext", cipher, cipherLen);
+	rv = p11->C_DecryptInit(session, &mech, key);
+	showRv("CBC-FSS C_DecryptInit", rv);
+	if (rv != CKR_OK) goto clean_key;
+	rv = p11->C_Decrypt(session, cipher, cipherLen, plain, &plainLen);
+	showRv("CBC-FSS C_Decrypt", rv);
+	if (rv == CKR_OK && plainLen <= sizeof(plain))
+		line("      CBC-FSS round trip equal: %s (plaintext %lu bytes)",
+			plainLen == inputLen && memcmp(plain, input, (size_t)inputLen) == 0 ?
+			"YES" : "NO", (unsigned long)plainLen);
+clean_key:
+	destroy(key);
+done:
+	p11->C_CloseSession(temporary);
+	session = saved;
+}
+
+static void probeFssMultipart(void)
+{
+	CK_SESSION_HANDLE saved = session, temporary = CK_INVALID_HANDLE;
+	CK_OBJECT_HANDLE key;
+	CK_BYTE iv[8] = { 1,2,3,4,5,6,7,8 };
+	CK_BYTE input[40], cipher[96], plain[96];
+	CK_ULONG i, n, total = 0, recovered = 0;
+	CK_MECHANISM mech = { MECH_VENDOR_CBC_FSS, iv, sizeof(iv) };
+	CK_RV rv;
+	rv = p11->C_OpenSession(theSlot, CKF_SERIAL_SESSION | CKF_RW_SESSION,
+		NULL_PTR, NULL_PTR, &temporary);
+	showRv("open isolated CBC-FSS multipart session", rv);
+	if (rv != CKR_OK) return;
+	session = temporary;
+	key = createVendorTestKey();
+	if (key == CK_INVALID_HANDLE) goto done;
+	for (i = 0; i < sizeof(input); ++i) input[i] = (CK_BYTE)(i + 1);
+	rv = p11->C_EncryptInit(session, &mech, key);
+	showRv("CBC-FSS multipart C_EncryptInit", rv);
+	if (rv != CKR_OK) goto clean_key;
+	n = sizeof(cipher) - total;
+	rv = p11->C_EncryptUpdate(session, input, 3, cipher + total, &n);
+	showRv("CBC-FSS C_EncryptUpdate 3 bytes", rv);
+	if (rv != CKR_OK || n > sizeof(cipher) - total) goto clean_key;
+	total += n;
+	n = sizeof(cipher) - total;
+	rv = p11->C_EncryptUpdate(session, input + 3, 13, cipher + total, &n);
+	showRv("CBC-FSS C_EncryptUpdate 13 bytes", rv);
+	if (rv != CKR_OK || n > sizeof(cipher) - total) goto clean_key;
+	total += n;
+	n = sizeof(cipher) - total;
+	rv = p11->C_EncryptUpdate(session, input + 16, 24, cipher + total, &n);
+	showRv("CBC-FSS C_EncryptUpdate 24 bytes", rv);
+	if (rv != CKR_OK || n > sizeof(cipher) - total) goto clean_key;
+	total += n;
+	n = sizeof(cipher) - total;
+	rv = p11->C_EncryptFinal(session, cipher + total, &n);
+	showRv("CBC-FSS C_EncryptFinal", rv);
+	if (rv != CKR_OK || n > sizeof(cipher) - total) goto clean_key;
+	total += n;
+	hexLine("CBC-FSS multipart ciphertext", cipher, total);
+	rv = p11->C_DecryptInit(session, &mech, key);
+	showRv("CBC-FSS multipart C_DecryptInit", rv);
+	if (rv != CKR_OK) goto clean_key;
+	n = sizeof(plain) - recovered;
+	rv = p11->C_DecryptUpdate(session, cipher, 5, plain + recovered, &n);
+	showRv("CBC-FSS C_DecryptUpdate 5 bytes", rv);
+	if (rv != CKR_OK || n > sizeof(plain) - recovered) goto clean_key;
+	recovered += n;
+	n = sizeof(plain) - recovered;
+	rv = p11->C_DecryptUpdate(session, cipher + 5, total - 5, plain + recovered, &n);
+	showRv("CBC-FSS C_DecryptUpdate remainder", rv);
+	if (rv != CKR_OK || n > sizeof(plain) - recovered) goto clean_key;
+	recovered += n;
+	n = sizeof(plain) - recovered;
+	rv = p11->C_DecryptFinal(session, plain + recovered, &n);
+	showRv("CBC-FSS C_DecryptFinal", rv);
+	if (rv != CKR_OK || n > sizeof(plain) - recovered) goto clean_key;
+	recovered += n;
+	line("      CBC-FSS multipart round trip equal: %s",
+		recovered == sizeof(input) && memcmp(plain, input, sizeof(input)) == 0 ?
+		"YES" : "NO");
+clean_key:
+	destroy(key);
+done:
+	p11->C_CloseSession(temporary);
+	session = saved;
+}
+
+static void probeFssBufferAndErrors(void)
+{
+	static const CK_ULONG invalidLengths[] = { 0, 1, 7, 8, 9, 16 };
+	CK_SESSION_HANDLE saved = session, temporary = CK_INVALID_HANDLE;
+	CK_OBJECT_HANDLE key;
+	CK_BYTE iv[8] = { 1,2,3,4,5,6,7,8 };
+	CK_BYTE input[16], cipher[64], output[64];
+	CK_ULONG i, needed = 0, cipherLen, outLen;
+	CK_MECHANISM mech = { MECH_VENDOR_CBC_FSS, iv, sizeof(iv) };
+	CK_RV rv;
+	char name[96];
+	rv = p11->C_OpenSession(theSlot, CKF_SERIAL_SESSION | CKF_RW_SESSION,
+		NULL_PTR, NULL_PTR, &temporary);
+	showRv("open isolated CBC-FSS error-test session", rv);
+	if (rv != CKR_OK) return;
+	session = temporary;
+	key = createVendorTestKey();
+	if (key == CK_INVALID_HANDLE) goto done;
+	for (i = 0; i < sizeof(input); ++i) input[i] = (CK_BYTE)i;
+	rv = p11->C_EncryptInit(session, &mech, key);
+	showRv("CBC-FSS length-query EncryptInit", rv);
+	if (rv != CKR_OK) goto clean_key;
+	rv = p11->C_Encrypt(session, input, sizeof(input), NULL_PTR, &needed);
+	showRv("CBC-FSS C_Encrypt output-length query", rv);
+	line("      required ciphertext length: %lu", (unsigned long)needed);
+	if (rv != CKR_OK || needed == 0 || needed > sizeof(cipher)) goto clean_key;
+	cipherLen = needed - 1;
+	rv = p11->C_Encrypt(session, input, sizeof(input), cipher, &cipherLen);
+	showRv("CBC-FSS C_Encrypt one-byte-short output buffer", rv);
+	line("      reported required length after short buffer: %lu", (unsigned long)cipherLen);
+	if (rv == CKR_BUFFER_TOO_SMALL)
+	{
+		cipherLen = sizeof(cipher);
+		rv = p11->C_Encrypt(session, input, sizeof(input), cipher, &cipherLen);
+		showRv("CBC-FSS C_Encrypt after short buffer", rv);
+	}
+	if (rv != CKR_OK || cipherLen > sizeof(cipher)) goto clean_key;
+	hexLine("CBC-FSS valid ciphertext for padding tests", cipher, cipherLen);
+	for (i = 0; i < sizeof(invalidLengths) / sizeof(invalidLengths[0]); ++i)
+	{
+		CK_BYTE bad[64] = { 0 };
+		CK_ULONG len = invalidLengths[i];
+		outLen = sizeof(output);
+		rv = p11->C_DecryptInit(session, &mech, key);
+		if (rv != CKR_OK) { showRv("CBC-FSS invalid-ciphertext DecryptInit", rv); break; }
+		snprintf(name, sizeof(name), "CBC-FSS decrypt synthetic ciphertext length %lu",
+			(unsigned long)len);
+		rv = p11->C_Decrypt(session, bad, len, output, &outLen);
+		showRv(name, rv);
+		if (rv == CKR_OK && outLen <= sizeof(output)) hexLine("decrypted synthetic", output, outLen);
+	}
+	cipher[cipherLen - 1] ^= 1;
+	outLen = sizeof(output);
+	rv = p11->C_DecryptInit(session, &mech, key);
+	showRv("CBC-FSS tampered ciphertext DecryptInit", rv);
+	if (rv == CKR_OK)
+	{
+		rv = p11->C_Decrypt(session, cipher, cipherLen, output, &outLen);
+		showRv("CBC-FSS decrypt ciphertext with flipped last byte", rv);
+		if (rv == CKR_OK && outLen <= sizeof(output)) hexLine("tampered plaintext", output, outLen);
+	}
+clean_key:
+	destroy(key);
+done:
+	p11->C_CloseSession(temporary);
+	session = saved;
+}
+
+static void probeFssExtended(void)
+{
+	static const CK_ULONG lengths[] = { 0, 1, 7, 8, 9, 15, 16, 17, 31, 32, 127, 128, 256 };
+	CK_BYTE iv[8] = { 1,2,3,4,5,6,7,8 };
+	CK_ULONG i;
+	section("CBC-FSS length boundaries, long messages and multipart");
+	for (i = 0; i < sizeof(lengths) / sizeof(lengths[0]); ++i)
+		probeFssOneShot(lengths[i], iv, sizeof(iv));
+	probeFssOneShot(31, NULL, 0);
+	probeFssMultipart();
+	probeFssBufferAndErrors();
+}
+
+static CK_RV genPairForJournal(const char* id, int modern,
+	CK_OBJECT_HANDLE* pub, CK_OBJECT_HANDLE* priv)
+{
+	CK_OBJECT_CLASS pubClass = CKO_PUBLIC_KEY, privClass = CKO_PRIVATE_KEY;
+	CK_KEY_TYPE type = CKK_GOSTR3410;
+	CK_BBOOL yes = CK_TRUE, no = CK_FALSE;
+	const CK_BYTE* curve = modern ? CURVE_TC26_A : CURVE_CP_A;
+	CK_ULONG curveLen = modern ? sizeof(CURVE_TC26_A) : sizeof(CURVE_CP_A);
+	const CK_BYTE* digest = modern ? DIGEST_256 : DIGEST_1994;
+	CK_ULONG digestLen = modern ? sizeof(DIGEST_256) : sizeof(DIGEST_1994);
+	CK_MECHANISM mech = { CKM_GOSTR3410_KEY_PAIR_GEN, NULL_PTR, 0 };
+	CK_ATTRIBUTE publicAttrs[] = {
+		{ CKA_CLASS, &pubClass, sizeof(pubClass) },
+		{ CKA_KEY_TYPE, &type, sizeof(type) },
+		{ CKA_TOKEN, &yes, sizeof(yes) },
+		{ CKA_PRIVATE, &no, sizeof(no) },
+		{ CKA_VERIFY, &yes, sizeof(yes) },
+		{ CKA_LABEL, (CK_VOID_PTR)PROBE_LABEL, sizeof(PROBE_LABEL) - 1 },
+		{ CKA_ID, (CK_VOID_PTR)id, (CK_ULONG)strlen(id) },
+		{ CKA_GOSTR3410_PARAMS, (CK_VOID_PTR)curve, curveLen },
+		{ CKA_GOSTR3411_PARAMS, (CK_VOID_PTR)digest, digestLen }
+	};
+	CK_ATTRIBUTE privateAttrs[] = {
+		{ CKA_CLASS, &privClass, sizeof(privClass) },
+		{ CKA_KEY_TYPE, &type, sizeof(type) },
+		{ CKA_TOKEN, &yes, sizeof(yes) },
+		{ CKA_PRIVATE, &yes, sizeof(yes) },
+		{ CKA_SIGN, &yes, sizeof(yes) },
+		{ CKA_LABEL, (CK_VOID_PTR)PROBE_LABEL, sizeof(PROBE_LABEL) - 1 },
+		{ CKA_ID, (CK_VOID_PTR)id, (CK_ULONG)strlen(id) },
+		{ CKA_GOSTR3410_PARAMS, (CK_VOID_PTR)curve, curveLen },
+		{ CKA_GOSTR3411_PARAMS, (CK_VOID_PTR)digest, digestLen }
+	};
+	*pub = *priv = CK_INVALID_HANDLE;
+	return p11->C_GenerateKeyPair(session, &mech, publicAttrs,
+		sizeof(publicAttrs) / sizeof(publicAttrs[0]), privateAttrs,
+		sizeof(privateAttrs) / sizeof(privateAttrs[0]), pub, priv);
+}
+
+static void readProbeJournal(const char* when)
+{
+	CK_BYTE* buf;
+	CK_ULONG length = 0, capacity;
+	CK_RV rv;
+	if (ex == NULL_PTR || ex->C_EX_GetJournal == NULL_PTR) return;
+	rv = ex->C_EX_GetJournal(theSlot, NULL_PTR, &length);
+	showRv(when, rv);
+	if (rv != CKR_OK) return;
+	line("      journal length query: %lu bytes", (unsigned long)length);
+	if (length > 65536) { line("      journal exceeds 65536-byte probe limit"); return; }
+	capacity = length;
+	buf = malloc(length ? (size_t)length : 1);
+	if (buf == NULL) { line("      cannot allocate journal buffer"); return; }
+	rv = ex->C_EX_GetJournal(theSlot, buf, &length);
+	showRv("C_EX_GetJournal content", rv);
+	if (rv == CKR_OK && length <= capacity) hexLine("journal TLV", buf, length);
+	free(buf);
+}
+
+static void signForJournal(const char* what, CK_OBJECT_HANDLE key)
+{
+	CK_BYTE digest[32], signature[128];
+	CK_ULONG length = sizeof(signature), i;
+	CK_MECHANISM mech = { CKM_GOSTR3410, NULL_PTR, 0 };
+	CK_RV rv;
+	for (i = 0; i < sizeof(digest); ++i) digest[i] = (CK_BYTE)(i + 1);
+	rv = p11->C_SignInit(session, &mech, key);
+	showRv(what, rv);
+	if (rv == CKR_OK)
+	{
+		rv = p11->C_Sign(session, digest, sizeof(digest), signature, &length);
+		showRv("C_Sign fixed 32-byte digest", rv);
+		if (rv == CKR_OK && length <= sizeof(signature))
+			hexLine("signature", signature, length);
+	}
+	readProbeJournal(what);
+}
+
+static void probeJournalIds(void)
+{
+	CK_OBJECT_HANDLE pubA = CK_INVALID_HANDLE, privA = CK_INVALID_HANDLE;
+	CK_OBJECT_HANDLE pubB = CK_INVALID_HANDLE, privB = CK_INVALID_HANDLE;
+	CK_RV rv;
+	section("Journal tag 85: same key twice, then another key with a different CKA_ID");
+	if (ex == NULL_PTR || ex->C_EX_GetJournal == NULL_PTR)
+	{ line("    extended journal function unavailable"); return; }
+	readProbeJournal("journal before new signatures");
+	rv = genPairForJournal("final-journal-A", 0, &pubA, &privA);
+	showRv("generate legacy journal key A, ID 'final-journal-A'", rv);
+	if (rv != CKR_OK)
+	{
+		rv = genPairForJournal("final-journal-A", 1, &pubA, &privA);
+		showRv("generate modern journal key A, ID 'final-journal-A'", rv);
+	}
+	if (rv != CKR_OK) goto done;
+	rv = genPairForJournal("final-journal-B", 0, &pubB, &privB);
+	showRv("generate legacy journal key B, ID 'final-journal-B'", rv);
+	if (rv != CKR_OK)
+	{
+		rv = genPairForJournal("final-journal-B", 1, &pubB, &privB);
+		showRv("generate modern journal key B, ID 'final-journal-B'", rv);
+	}
+	if (rv != CKR_OK) goto done;
+	signForJournal("journal: sign A first time", privA);
+	signForJournal("journal: sign A second time", privA);
+	signForJournal("journal: sign B", privB);
+done:
+	destroy(pubB); destroy(privB); destroy(pubA); destroy(privA);
+}
+
 /* ---- main ---------------------------------------------------------------- */
 
 static int loadLibrary(void)
 {
 	CK_C_GetFunctionList getList;
+	CK_C_EX_GetFunctionListExtended getExtended;
 	libraryHandle = dlopen(opt.module, RTLD_NOW);
 	if (libraryHandle == NULL) { fprintf(stderr, "dlopen: %s\n", dlerror()); return 0; }
 	getList = (CK_C_GetFunctionList)dlsym(libraryHandle, "C_GetFunctionList");
 	if (getList == NULL || getList(&p11) != CKR_OK || p11 == NULL_PTR)
 	{ fprintf(stderr, "C_GetFunctionList missing or failed\n"); return 0; }
+	getExtended = (CK_C_EX_GetFunctionListExtended)
+		dlsym(libraryHandle, "C_EX_GetFunctionListExtended");
+	if (getExtended != NULL && getExtended(&ex) != CKR_OK) ex = NULL_PTR;
 	return 1;
 }
 
@@ -1808,6 +2432,13 @@ int main(int argc, char** argv)
 		probeStandaloneVkoAndLegacy();
 		probeGeneratedKeyAttributes();
 		probeVendorMechanisms();
+		probeSlotVersions();
+		probeGenericBoundary();
+		probeLegacySdk2001();
+		probeTwinKdf();
+		probeVko512Bounds();
+		probeFssExtended();
+		probeJournalIds();
 	}
 
 	section("Clean-up");
