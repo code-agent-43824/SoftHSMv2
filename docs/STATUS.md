@@ -22,8 +22,11 @@
 Generic-secret и атрибуты KEG оставлены, legacy VKO-2001 отложен после
 биометрии и Flash. CI `39750598052` на `f6a56af2` прошёл; в его логе
 новые VKO-вызовы, ГОСТ и `DEVICE-PARITY`. Релиз `39751019772` собрал и
-проверил пять Linux/Windows платформ, но macOS universal был отменён после
-15 минут ожидания runner. Публикация не началась, последний релиз — `.91`.
+проверил пять Linux/Windows платформ; при полном повторе прошла и macOS
+сборка с Intel verifier, но Apple Silicon verifier отменён после ожидания
+runner. Ещё два повтора завершились `startup_failure` без jobs. Ручной
+релиз `39803644991` повторно проверил Linux/Windows, но macOS сборка не
+получила runner. Публикация не началась, последний релиз — `.91`.
 Linux x64 workflow-артефакт скачан: SHA-256 `libsofthsm2.so` —
 `2ba232746836d54f9921132916c27931ebd0772e376c370f759b42bd9be6f2f7`;
 на нём локальные `prepare` и `rutoken-profile` прошли.
