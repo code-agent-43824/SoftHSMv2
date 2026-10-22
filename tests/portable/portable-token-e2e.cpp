@@ -3138,8 +3138,8 @@ static void verifyGOSTKEG512(Module& module, CK_SESSION_HANDLE session)
     destroyObject(module, session, twinKey);
     twinType = CKK_MAGMA_TWIN_KEY;
 
-    // Standalone VKO-512 takes an eight-byte little-endian UKM. KEG-512
-    // takes 32 source bytes and interprets the first 16 as big-endian.
+    // Standalone VKO-512 takes a little-endian UKM. KEG-512 takes 32 source
+    // bytes and interprets the first 16 as big-endian.
     // Choose equivalent integers, then cross-check the two call shapes;
     // the KEG path above is anchored to the published TC26 ETALON.
     Bytes vkoUkm = bytesFromHex("0102030405060708");
@@ -3178,13 +3178,77 @@ static void verifyGOSTKEG512(Module& module, CK_SESSION_HANDLE session)
         destroyObject(module, session, twinKey);
     }
     twinType = CKK_MAGMA_TWIN_KEY;
-    vkoParams.ulSharedDataLen = 32;
+    for (size_t length : {1u, 4u, 7u, 8u, 9u, 16u, 32u})
+    {
+        Bytes sampledUkm(length);
+        for (size_t i = 0; i < length; ++i)
+            sampledUkm[i] = static_cast<unsigned char>(i + 1);
+        vkoParams.pSharedData = sampledUkm.data();
+        vkoParams.ulSharedDataLen = static_cast<CK_ULONG>(length);
+        twinKey = CK_INVALID_HANDLE;
+        callOk("C_DeriveKey", "standalone VKO-512 with measured UKM length " +
+               std::to_string(length), [&] {
+            return module->C_DeriveKey(session, &vkoMechanism, baseKey,
+                                       outputTemplate, 7, &twinKey);
+        });
+        if (ulongAttribute(module, session, twinKey, CKA_VALUE_LEN) != 64 ||
+            attribute(module, session, twinKey, CKA_VALUE).size() != 64)
+            fail("standalone VKO-512 returned the wrong twin-key length");
+        destroyObject(module, session, twinKey);
+    }
+    Bytes zeroExtendedUkm(32, 0);
+    std::copy(vkoUkm.begin(), vkoUkm.end(), zeroExtendedUkm.begin());
+    vkoParams.pSharedData = zeroExtendedUkm.data();
+    vkoParams.ulSharedDataLen = static_cast<CK_ULONG>(zeroExtendedUkm.size());
     twinKey = CK_INVALID_HANDLE;
-    check(invoke("C_DeriveKey", "standalone VKO-512 rejects KEG's 32-byte UKM", [&] {
+    callOk("C_DeriveKey", "standalone VKO-512 with zero-extended UKM", [&] {
         return module->C_DeriveKey(session, &vkoMechanism, baseKey,
                                    outputTemplate, 7, &twinKey);
-    }), CKR_MECHANISM_PARAM_INVALID, "standalone VKO-512 with KEG UKM length");
+    });
+    if (attribute(module, session, twinKey, CKA_VALUE) != equivalentExpected)
+        fail("standalone VKO-512 did not use all UKM bytes as a little-endian integer");
+    destroyObject(module, session, twinKey);
+
+    vkoParams.pSharedData = vkoUkm.data();
+    vkoParams.ulSharedDataLen = 0;
+    twinKey = CK_INVALID_HANDLE;
+    check(invoke("C_DeriveKey", "standalone VKO-512 rejects empty UKM", [&] {
+        return module->C_DeriveKey(session, &vkoMechanism, baseKey,
+                                   outputTemplate, 7, &twinKey);
+    }), CKR_MECHANISM_PARAM_INVALID, "standalone VKO-512 with empty UKM");
+
+    Bytes zeroUkm(8, 0);
+    vkoParams.pSharedData = zeroUkm.data();
+    vkoParams.ulSharedDataLen = static_cast<CK_ULONG>(zeroUkm.size());
+    check(invoke("C_DeriveKey", "standalone VKO-512 rejects zero UKM", [&] {
+        return module->C_DeriveKey(session, &vkoMechanism, baseKey,
+                                   outputTemplate, 7, &twinKey);
+    }), CKR_MECHANISM_PARAM_INVALID, "standalone VKO-512 with zero UKM");
+
+    vkoParams.pSharedData = vkoUkm.data();
     vkoParams.ulSharedDataLen = static_cast<CK_ULONG>(vkoUkm.size());
+    valueLen = 32;
+    twinKey = CK_INVALID_HANDLE;
+    callOk("C_DeriveKey", "standalone VKO-512 ignores requested 32-byte result", [&] {
+        return module->C_DeriveKey(session, &vkoMechanism, baseKey,
+                                   outputTemplate, 7, &twinKey);
+    });
+    if (ulongAttribute(module, session, twinKey, CKA_VALUE_LEN) != 64 ||
+        attribute(module, session, twinKey, CKA_VALUE) != equivalentExpected)
+        fail("standalone VKO-512 obeyed an ignored 32-byte result length");
+    destroyObject(module, session, twinKey);
+    valueLen = 64;
+
+    outputTemplate[2].pValue = &yes;
+    twinKey = CK_INVALID_HANDLE;
+    check(invoke("C_DeriveKey", "standalone VKO-512 rejects token result", [&] {
+        return module->C_DeriveKey(session, &vkoMechanism, baseKey,
+                                   outputTemplate, 7, &twinKey);
+    }), CKR_TEMPLATE_INCONSISTENT, "standalone VKO-512 with token result");
+    if (twinKey != CK_INVALID_HANDLE)
+        fail("standalone VKO-512 returned a handle for a refused token key");
+    outputTemplate[2].pValue = &no;
+
     vkoParams.ulPublicDataLen = 64;
     check(invoke("C_DeriveKey", "standalone VKO-512 rejects 256-bit peer point", [&] {
         return module->C_DeriveKey(session, &vkoMechanism, baseKey,

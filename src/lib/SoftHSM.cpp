@@ -15067,12 +15067,17 @@ CK_RV SoftHSM::deriveGOSTKEG
 	// 512-bit key or the other way round.
 	const bool standaloneVKO512 = pMechanism->mechanism == CKM_VKO_GOSTR3410_2012_512;
 	if (params->kdf != CKD_NULL ||
-	    params->ulSharedDataLen != (standaloneVKO512 ? 8UL : 32UL) ||
+	    (standaloneVKO512 ?
+	     (params->ulSharedDataLen == 0 || params->ulSharedDataLen > 32) :
+	     params->ulSharedDataLen != 32) ||
 	    params->pSharedData == NULL_PTR ||
 	    (standaloneVKO512 ? params->ulPublicDataLen != 128 :
 		(params->ulPublicDataLen != 64 && params->ulPublicDataLen != 128)) ||
 	    params->pPublicData == NULL_PTR)
 		return CKR_MECHANISM_PARAM_INVALID;
+	// The standalone mechanism returns session twin keys on the reference token.
+	if (standaloneVKO512 && isOnToken)
+		return CKR_TEMPLATE_INCONSISTENT;
 
 	for (CK_ULONG i = 0; i < ulCount; ++i)
 	{
@@ -15086,7 +15091,8 @@ CK_RV SoftHSM::deriveGOSTKEG
 			CK_ULONG requestedValueLen = 0;
 			std::memcpy(&requestedValueLen, pTemplate[i].pValue,
 			            sizeof(requestedValueLen));
-			if (requestedValueLen != 64)
+			if (requestedValueLen != 64 &&
+			    !(standaloneVKO512 && requestedValueLen == 32))
 				return CKR_ATTRIBUTE_VALUE_INVALID;
 		}
 	}

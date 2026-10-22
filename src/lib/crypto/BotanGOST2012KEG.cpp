@@ -345,13 +345,16 @@ bool BotanGOST2012KEG::vko512(const ByteString& encodedCurveOID,
 	                          ByteString& key)
 {
 	key.wipe();
-	if (privateValue.size() != 64 || publicValue.size() != 128 || ukm.size() != 8)
+	if (privateValue.size() != 64 || publicValue.size() != 128 ||
+	    ukm.size() == 0 || ukm.size() > 32)
 		return false;
 	try
 	{
-		std::vector<uint8_t> ukmBigEndian(8);
-		for (size_t i = 0; i < 8; ++i)
-			ukmBigEndian[i] = ukm.const_byte_str()[7 - i];
+		// Rutoken accepted sampled lengths 1, 4, 7, 8, 9, 16 and 32.
+		// The whole buffer is the little-endian multiplier.
+		std::vector<uint8_t> ukmBigEndian(ukm.size());
+		for (size_t i = 0; i < ukm.size(); ++i)
+			ukmBigEndian[i] = ukm.const_byte_str()[ukm.size() - 1 - i];
 		const Botan::BigInt ukmValue(ukmBigEndian.data(), ukmBigEndian.size());
 		if (ukmValue.is_zero()) return false;
 
