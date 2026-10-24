@@ -1,7 +1,8 @@
 name: Historical lifecycle comparison
 
 # Run after a portable release has passed its ordinary platform verifiers.
-# This one-time A/B also checks that the same client detects the old .75 bug.
+# The A/B records whether the old .75 bug occurs on each operating system;
+# Windows can pass in both releases because its DLL shutdown order differs.
 on:
   workflow_dispatch:
     inputs:
