@@ -1,0 +1,47 @@
+name: Historical lifecycle comparison
+
+# Run after a portable release has passed its ordinary platform verifiers.
+# This one-time A/B also checks that the same client detects the old .75 bug.
+on:
+  workflow_dispatch:
+    inputs:
+      fixed_tag:
+        description: Published release to compare with v2.7.0-portable.75
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    name: ${{ matrix.runner }} ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-15, platform: macos, arch: universal }
+          - { runner: macos-15-intel, platform: macos, arch: universal }
+          - { runner: windows-2025, platform: windows, arch: x64 }
+          - { runner: windows-2025, platform: windows, arch: x86 }
+          - { runner: windows-11-arm, platform: windows, arch: arm64 }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Compare old and fixed modules with the same lifecycle client
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LIFECYCLE_FIXED_TAG: ${{ inputs.fixed_tag }}
+          LIFECYCLE_PLATFORM: ${{ matrix.platform }}
+          LIFECYCLE_ARCH: ${{ matrix.arch }}
+        run: python tests/portable/check-lifecycle-baseline.py
+      - name: Save both lifecycle logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: lifecycle-${{ matrix.runner }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/lifecycle-compare/logs/*.log
+          if-no-files-found: ignore
