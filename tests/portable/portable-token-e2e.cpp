@@ -2736,6 +2736,46 @@ static void verifyGOSTVKODerive(Module& module, CK_SESSION_HANDLE session)
         fail("CKM_GOSTR3410_12_DERIVE reads the UKM in the wrong byte order");
     destroyObject(module, session, key);
 
+    // The device's disposable key in the 20 October probe agreed with this
+    // published sample private key. Its public point makes the selector's
+    // hardware answer reproducible without the device's private material.
+    const Bytes gapDevicePoint = bytesFromHex(
+        "c5c2f517ab77d8cc2c36486d8ae9f434da7ea12bc980a30a4507e1d54caab88"
+        "8ecbf894f858368497fac1e1a63721a34a9deb3280fdd511083d61cbd22fa5848");
+    check(vkoDerive(module, session, baseKey,
+                    vkoDeriveParameter(CKD_KDF_GOSTR3411_2012_256, gapDevicePoint, ukm),
+                    pluginTemplate, pluginCount, key, "device KDF selector vector"),
+          CKR_OK, "C_DeriveKey(VKO, KDF selector)");
+    if (attribute(module, session, key, CKA_VALUE) !=
+        bytesFromHex("f75f34b26cf79f2dd35ea8e41bfa72bfa279b7ad9bf3fe309a31cabd982c7c06"))
+        fail("VKO KDF selector differs from the reference Rutoken");
+    destroyObject(module, session, key);
+    const Bytes longUkm = bytesFromHex("0102030405060708090a0b0c0d0e0f10");
+    check(vkoDerive(module, session, baseKey,
+                    vkoDeriveParameter(CKD_KDF_GOSTR3411_2012_256, gapDevicePoint, longUkm),
+                    pluginTemplate, pluginCount, key, "selector with 16-byte UKM"),
+          CKR_OK, "C_DeriveKey(VKO selector, 16-byte UKM)");
+    if (attribute(module, session, key, CKA_VALUE) !=
+        bytesFromHex("c4b7c4509cb1f3273584959dc44e15b702d51f9ea26344deb07a979ceadb5262"))
+        fail("VKO KDF selector with 16-byte UKM differs from the device");
+    destroyObject(module, session, key);
+    const Bytes shortUkm = bytesFromHex("01");
+    check(vkoDerive(module, session, baseKey,
+                    vkoDeriveParameter(CKD_KDF_GOSTR3411_2012_256, gapDevicePoint, shortUkm),
+                    pluginTemplate, pluginCount, key, "selector with short UKM"),
+          CKR_MECHANISM_PARAM_INVALID, "C_DeriveKey(VKO selector, short UKM)");
+    const Bytes zeroUkm(8, 0);
+    check(vkoDerive(module, session, baseKey,
+                    vkoDeriveParameter(CKD_KDF_GOSTR3411_2012_256, gapDevicePoint, zeroUkm),
+                    pluginTemplate, pluginCount, key, "selector with zero UKM"),
+          CKR_MECHANISM_PARAM_INVALID, "C_DeriveKey(VKO selector, zero UKM)");
+    Bytes wrongPointLength = vkoDeriveParameter(CKD_KDF_GOSTR3411_2012_256,
+                                                 gapDevicePoint, ukm);
+    wrongPointLength[4] = 65;
+    check(vkoDerive(module, session, baseKey, wrongPointLength,
+                    pluginTemplate, pluginCount, key, "selector with 65-byte point"),
+          CKR_PUBLIC_KEY_INVALID, "C_DeriveKey(VKO selector, wrong point length)");
+
     // The reference Rutoken's own answers. The probe derived with the
     // token's key and this sample key's point; VKO is symmetric, so this
     // sample key with the token's point must give the same values, and
@@ -4270,7 +4310,8 @@ static void verifySilentTemplateKeyIsReadable(Module& module, CK_SESSION_HANDLE 
 
 static CK_OBJECT_HANDLE createGOSTSecret(Module& module, CK_SESSION_HANDLE session,
                                          CK_KEY_TYPE type, const Bytes& value,
-                                         bool wrap, bool unwrap);
+                                         bool wrap = false, bool unwrap = false,
+                                         bool derive = false, bool privateObject = false);
 
 // RUTOKEN_FORCE_SENSITIVE, on by default under the profile. A private key a
 // real Rutoken generates does not hand back its own material; this module's
@@ -5284,7 +5325,8 @@ static void verifyRutokenExtension(Module& module, const CK_TOKEN_INFO& token)
 
 static CK_OBJECT_HANDLE createGOSTSecret(Module& module, CK_SESSION_HANDLE session,
                                          CK_KEY_TYPE type, const Bytes& value,
-                                         bool wrap = false, bool unwrap = false)
+                                         bool wrap, bool unwrap, bool derive,
+                                         bool privateObject)
 {
     CK_OBJECT_CLASS keyClass = CKO_SECRET_KEY;
     CK_BBOOL no = CK_FALSE, yes = CK_TRUE;
@@ -5292,7 +5334,7 @@ static CK_OBJECT_HANDLE createGOSTSecret(Module& module, CK_SESSION_HANDLE sessi
         {CKA_CLASS, &keyClass, sizeof(keyClass)},
         {CKA_KEY_TYPE, &type, sizeof(type)},
         {CKA_TOKEN, &no, sizeof(no)},
-        {CKA_PRIVATE, &no, sizeof(no)},
+        {CKA_PRIVATE, privateObject ? &yes : &no, sizeof(no)},
         {CKA_VALUE, const_cast<unsigned char*>(value.data()), static_cast<CK_ULONG>(value.size())},
         {CKA_ENCRYPT, &yes, sizeof(yes)},
         {CKA_DECRYPT, &yes, sizeof(yes)},
@@ -5300,6 +5342,7 @@ static CK_OBJECT_HANDLE createGOSTSecret(Module& module, CK_SESSION_HANDLE sessi
         {CKA_VERIFY, &yes, sizeof(yes)},
         {CKA_WRAP, wrap ? &yes : &no, sizeof(yes)},
         {CKA_UNWRAP, unwrap ? &yes : &no, sizeof(yes)},
+        {CKA_DERIVE, derive ? &yes : &no, sizeof(yes)},
         {CKA_EXTRACTABLE, &yes, sizeof(yes)}
     };
     Bytes gostParameters;
@@ -5507,6 +5550,140 @@ static void verifyStreebogHMAC(Module& module, CK_SESSION_HANDLE session)
         return module->C_DestroyObject(session, gostKey);
     });
     trace("REFERENCE", "Streebog HMAC-256/512 matched RFC 7836 with generic and GOST 28147 keys");
+}
+
+// Direct Rutoken KDF mechanisms, distinct from the KDF_TREE inside KEG.
+static void verifyGOSTKDF(Module& module, CK_SESSION_HANDLE session)
+{
+    const Bytes baseValue = bytesFromHex(
+        "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
+    const Bytes hmacInput = bytesFromHex("0126bdb87800af214341456563780100");
+    const Bytes hmacExpected = bytesFromHex(
+        "a1aa5f7de402d7b3d323f2991c8d4534013137010a83754fd0af6d7cd4922ed9");
+    const Bytes treeExpected = bytesFromHex(
+        "22b6837845c6bef65ea71672b265831086d3c76aebe6dae91cad51d83f79d16b"
+        "074c9330599d7f8d712fca54392f4ddde93751206b3584c8f43f9e6dc51531f9");
+    CK_OBJECT_CLASS secretClass = CKO_SECRET_KEY;
+    CK_BBOOL no = CK_FALSE;
+    CK_KEY_TYPE type = CKK_GOST28147;
+    CK_ATTRIBUTE resultTemplate[] = {
+        {CKA_CLASS, &secretClass, sizeof(secretClass)},
+        {CKA_KEY_TYPE, &type, sizeof(type)},
+        {CKA_TOKEN, &no, sizeof(no)},
+        {CKA_PRIVATE, &no, sizeof(no)}
+    };
+    const CK_ULONG resultCount = sizeof(resultTemplate) / sizeof(resultTemplate[0]);
+    CK_MECHANISM hmac{CKM_KDF_HMAC3411_2012_256,
+                      const_cast<unsigned char*>(hmacInput.data()),
+                      static_cast<CK_ULONG>(hmacInput.size())};
+    CK_OBJECT_HANDLE key = CK_INVALID_HANDLE;
+    auto derive = [&](CK_MECHANISM& mechanism, CK_OBJECT_HANDLE base, const char* what) {
+        key = CK_INVALID_HANDLE;
+        return invoke("C_DeriveKey", what, [&] {
+            return module->C_DeriveKey(session, &mechanism, base, resultTemplate,
+                                      resultCount, &key);
+        });
+    };
+    for (CK_KEY_TYPE baseType : {CKK_GOST28147, CKK_MAGMA, CKK_KUZNECHIK})
+    {
+        const CK_OBJECT_HANDLE base = createGOSTSecret(module, session, baseType,
+                                                        baseValue, false, false, true);
+        type = baseType;
+        check(derive(hmac, base, "KDF HMAC RFC 7836 vector"), CKR_OK,
+              "C_DeriveKey(KDF HMAC)");
+        if (attribute(module, session, key, CKA_VALUE) != hmacExpected)
+            fail("KDF HMAC differs from RFC 7836 Appendix B");
+        destroyObject(module, session, key);
+
+        CK_MECHANISM badHmac{CKM_KDF_HMAC3411_2012_256, nullptr, 0};
+        check(derive(badHmac, base, "KDF HMAC missing parameter"),
+              CKR_MECHANISM_PARAM_INVALID, "C_DeriveKey(KDF HMAC missing parameter)");
+        type = baseType == CKK_GOST28147 ? CKK_MAGMA : CKK_GOST28147;
+        check(derive(hmac, base, "KDF HMAC wrong result type"),
+              CKR_TEMPLATE_INCONSISTENT, "C_DeriveKey(KDF HMAC wrong type)");
+        type = baseType;
+        destroyObject(module, session, base);
+    }
+
+    type = CKK_GOST28147;
+    const CK_OBJECT_HANDLE privateBase = createGOSTSecret(
+        module, session, CKK_GOST28147, baseValue, false, false, true, true);
+    check(derive(hmac, privateBase, "KDF HMAC encrypted base key"), CKR_OK,
+          "C_DeriveKey(KDF HMAC private base)");
+    if (attribute(module, session, key, CKA_VALUE) != hmacExpected)
+        fail("KDF HMAC did not decrypt the private base key correctly");
+    destroyObject(module, session, key);
+    destroyObject(module, session, privateBase);
+    const CK_OBJECT_HANDLE forbiddenBase = createGOSTSecret(
+        module, session, CKK_GOST28147, baseValue);
+    check(derive(hmac, forbiddenBase, "KDF HMAC base without CKA_DERIVE"),
+          CKR_KEY_FUNCTION_NOT_PERMITTED, "C_DeriveKey(KDF HMAC no derive permission)");
+    destroyObject(module, session, forbiddenBase);
+    const CK_OBJECT_HANDLE genericBase = createGOSTSecret(
+        module, session, CKK_GENERIC_SECRET, baseValue, false, false, true);
+    check(derive(hmac, genericBase, "KDF HMAC generic base"),
+          CKR_KEY_TYPE_INCONSISTENT, "C_DeriveKey(KDF HMAC generic base)");
+    destroyObject(module, session, genericBase);
+
+    const CK_OBJECT_HANDLE magma = createGOSTSecret(module, session, CKK_MAGMA,
+                                                      baseValue, false, false, true);
+    Bytes label = bytesFromHex("26bdb878"), seed = bytesFromHex("af21434145656378");
+    struct TreeParams {
+        CK_ULONG ulLabelLength;
+        CK_BYTE_PTR pLabel;
+        CK_ULONG ulSeedLength;
+        CK_BYTE_PTR pSeed;
+        CK_ULONG ulR;
+        CK_ULONG ulL;
+        CK_ULONG ulOffset;
+    } treeParams{static_cast<CK_ULONG>(label.size()), label.data(),
+                 static_cast<CK_ULONG>(seed.size()), seed.data(), 1, 64, 0};
+    CK_MECHANISM tree{CKM_KDF_TREE_GOSTR3411_2012_256, &treeParams, sizeof(treeParams)};
+    type = CKK_MAGMA_TWIN_KEY;
+    check(derive(tree, magma, "KDF TREE vendor 64-byte vector"), CKR_OK,
+          "C_DeriveKey(KDF TREE twin key)");
+    if (attribute(module, session, key, CKA_VALUE) != treeExpected)
+        fail("KDF TREE differs from the vendor's 64-byte vector");
+    destroyObject(module, session, key);
+
+    CK_BBOOL yes = CK_TRUE;
+    resultTemplate[2].pValue = &yes;
+    check(derive(tree, magma, "KDF TREE token result without hardware feature"),
+          CKR_TEMPLATE_INCONSISTENT, "C_DeriveKey(KDF TREE token result)");
+    resultTemplate[2].pValue = &no;
+
+    type = CKK_MAGMA;
+    treeParams.ulOffset = 17;
+    check(derive(tree, magma, "KDF TREE offset 17"), CKR_OK,
+          "C_DeriveKey(KDF TREE offset)");
+    if (attribute(module, session, key, CKA_VALUE) !=
+        Bytes(treeExpected.begin() + 17, treeExpected.begin() + 49))
+        fail("KDF TREE byte offset selected the wrong block window");
+    destroyObject(module, session, key);
+    treeParams.ulL = 32;
+    check(derive(tree, magma, "KDF TREE length shorter than offset plus key"),
+          CKR_MECHANISM_PARAM_INVALID, "C_DeriveKey(KDF TREE short L)");
+    treeParams.ulOffset = 0;
+    treeParams.ulR = 0;
+    check(derive(tree, magma, "KDF TREE invalid counter width"),
+          CKR_MECHANISM_PARAM_INVALID, "C_DeriveKey(KDF TREE invalid R)");
+    destroyObject(module, session, magma);
+    const CK_OBJECT_HANDLE gostBase = createGOSTSecret(
+        module, session, CKK_GOST28147, baseValue, false, false, true);
+    type = CKK_GOST28147;
+    treeParams.ulR = 1;
+    treeParams.ulL = 64;
+    check(derive(tree, gostBase, "KDF TREE GOST 28147 result"), CKR_OK,
+          "C_DeriveKey(KDF TREE GOST 28147)");
+    if (attribute(module, session, key, CKA_VALUE) !=
+        Bytes(treeExpected.begin(), treeExpected.begin() + 32))
+        fail("KDF TREE GOST 28147 result differs from the vendor vector");
+    if (attribute(module, session, key, CKA_GOST28147_PARAMS) !=
+        bytesFromHex("06072a850302021f01"))
+        fail("KDF TREE did not carry the GOST 28147 parameter set");
+    destroyObject(module, session, key);
+    destroyObject(module, session, gostBase);
+    trace("REFERENCE", "direct HMAC-KDF and KDF_TREE matched RFC/vendor vectors and rejected invalid calls");
 }
 
 // A digest of a large buffer, without the argument dump the shared helper
@@ -5861,6 +6038,7 @@ static void verifyGOST28147OnPrivateKeys(Module& module, CK_SESSION_HANDLE sessi
 static void verifyGOSTSymmetric(Module& module, CK_SESSION_HANDLE session)
 {
     verifyStreebogHMAC(module, session);
+    verifyGOSTKDF(module, session);
     CK_INFO library{};
     callOk("C_GetInfo", "check GOST 28147 generation policy", [&] {
         return module->C_GetInfo(&library);
@@ -6495,11 +6673,11 @@ static void verifyRutokenProfile(const fs::path& modulePath)
          CKF_HW | CKF_SIGN | CKF_VERIFY | CKF_EC_F_P | CKF_EC_NAMEDCURVE | CKF_EC_UNCOMPRESS},
         {CKM_ECDSA_SHA512, 256, 256,
          CKF_HW | CKF_SIGN | CKF_VERIFY | CKF_EC_F_P | CKF_EC_NAMEDCURVE | CKF_EC_UNCOMPRESS},
-        {0xD4321028UL, 0, 0,
+        {CKM_KDF_HMAC3411_2012_256, 0, 0,
          CKF_HW | CKF_DERIVE},
         {CKM_CONCATENATE_BASE_AND_KEY, 0, 0,
          CKF_HW | CKF_DERIVE},
-        {0xD432102AUL, 0, 0,
+        {CKM_KDF_TREE_GOSTR3411_2012_256, 0, 0,
          CKF_HW | CKF_DERIVE},
         {CKM_GOST_KEG, 0, 0,
          CKF_HW | CKF_DERIVE},

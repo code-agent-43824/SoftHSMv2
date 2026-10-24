@@ -70,6 +70,7 @@
 #include "BotanGOSTCurves.h"
 #include "BotanGOST2012KeyGenerator.h"
 #include "BotanGOST2012Signer.h"
+#include <botan/mac.h>
 #endif
 #ifdef WITH_ML_DSA
 #include "MLDSAParameters.h"
@@ -105,6 +106,8 @@
 #include <stdlib.h>
 #include <algorithm>
 #include <stdexcept>
+#include <cstdint>
+#include <limits>
 
 #ifdef _WIN32
 #include <process.h>
@@ -1706,6 +1709,8 @@ void SoftHSM::prepareSupportedMechanisms(std::map<std::string, CK_MECHANISM_TYPE
 #ifdef WITH_GOST_3410_2012_256
 	t["CKM_GOST_KEG"] = CKM_GOST_KEG;
 	t["CKM_GOSTR3410_12_DERIVE"] = CKM_GOSTR3410_12_DERIVE;
+	t["CKM_KDF_HMAC3411_2012_256"] = CKM_KDF_HMAC3411_2012_256;
+	t["CKM_KDF_TREE_GOSTR3411_2012_256"] = CKM_KDF_TREE_GOSTR3411_2012_256;
 #endif
 #ifdef WITH_GOST_3411_2012
 	t["CKM_GOSTR3411_2012_256"] = CKM_GOSTR3411_2012_256;
@@ -1883,9 +1888,9 @@ namespace
 		{ CKM_ECDSA_SHA256, 256, 256, CKF_HW | CKF_SIGN | CKF_VERIFY | FAKE_RUTOKEN_EC },
 		{ CKM_ECDSA_SHA384, 256, 256, CKF_HW | CKF_SIGN | CKF_VERIFY | FAKE_RUTOKEN_EC },
 		{ CKM_ECDSA_SHA512, 256, 256, CKF_HW | CKF_SIGN | CKF_VERIFY | FAKE_RUTOKEN_EC },
-		{ 0xD4321028UL, 0, 0, CKF_HW | CKF_DERIVE },
+		{ CKM_KDF_HMAC3411_2012_256, 0, 0, CKF_HW | CKF_DERIVE },
 		{ CKM_CONCATENATE_BASE_AND_KEY, 0, 0, CKF_HW | CKF_DERIVE },
-		{ 0xD432102AUL, 0, 0, CKF_HW | CKF_DERIVE },
+		{ CKM_KDF_TREE_GOSTR3411_2012_256, 0, 0, CKF_HW | CKF_DERIVE },
 		{ CKM_GOST_KEG, 0, 0, CKF_HW | CKF_DERIVE },
 		{ CKM_ECDH1_DERIVE, 255, 512, CKF_HW | CKF_DERIVE | FAKE_RUTOKEN_EC },
 		{ 0xD432102BUL, 0, 0, CKF_HW | CKF_WRAP | CKF_UNWRAP },
@@ -2592,6 +2597,8 @@ CK_RV SoftHSM::C_GetMechanismInfo(CK_SLOT_ID slotID, CK_MECHANISM_TYPE type, CK_
 #endif
 #ifdef WITH_GOST_3410_2012_256
 		case CKM_GOST_KEG:
+		case CKM_KDF_HMAC3411_2012_256:
+		case CKM_KDF_TREE_GOSTR3411_2012_256:
 			pInfo->ulMinKeySize = 0;
 			pInfo->ulMaxKeySize = 0;
 			pInfo->flags = CKF_DERIVE;
@@ -10436,6 +10443,8 @@ CK_RV SoftHSM::C_DeriveKey
 #ifdef WITH_GOST_3410_2012_256
 		case CKM_GOST_KEG:
 		case CKM_GOSTR3410_12_DERIVE:
+		case CKM_KDF_HMAC3411_2012_256:
+		case CKM_KDF_TREE_GOSTR3411_2012_256:
 #ifdef WITH_GOST_3410_2012_512
 		case CKM_VKO_GOSTR3410_2012_512:
 #endif
@@ -10498,6 +10507,14 @@ CK_RV SoftHSM::C_DeriveKey
 		    !baseIsGOST)
 			return CKR_KEY_TYPE_INCONSISTENT;
 	}
+	if (pMechanism->mechanism == CKM_KDF_HMAC3411_2012_256 ||
+	    pMechanism->mechanism == CKM_KDF_TREE_GOSTR3411_2012_256)
+	{
+		const CK_KEY_TYPE baseType = key->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED);
+		if (key->getUnsignedLongValue(CKA_CLASS, CKO_VENDOR_DEFINED) != CKO_SECRET_KEY ||
+		    (baseType != CKK_GOST28147 && baseType != CKK_MAGMA && baseType != CKK_KUZNECHIK))
+			return CKR_KEY_TYPE_INCONSISTENT;
+	}
 #endif
 
 	// Check if key can be used for derive
@@ -10549,7 +10566,8 @@ CK_RV SoftHSM::C_DeriveKey
 #ifdef WITH_GOST_3410_2012_256
 	if ((keyType == CKK_MAGMA_TWIN_KEY || keyType == CKK_KUZNECHIK_TWIN_KEY) &&
 	    pMechanism->mechanism != CKM_GOST_KEG &&
-	    pMechanism->mechanism != CKM_VKO_GOSTR3410_2012_512)
+	    pMechanism->mechanism != CKM_VKO_GOSTR3410_2012_512 &&
+	    pMechanism->mechanism != CKM_KDF_TREE_GOSTR3411_2012_256)
 		return CKR_TEMPLATE_INCONSISTENT;
 	// The VKO derive gives a GOST 28147-89, Magma, Kuznechik or generic
 	// secret key, all with the same 32-byte value, as the reference Rutoken
@@ -10557,7 +10575,9 @@ CK_RV SoftHSM::C_DeriveKey
 	// three come out of no other derive.
 	const bool gostSymmetricResult = keyType == CKK_GOST28147 ||
 	                                 keyType == CKK_MAGMA || keyType == CKK_KUZNECHIK;
-	if (gostSymmetricResult && pMechanism->mechanism != CKM_GOSTR3410_12_DERIVE)
+	if (gostSymmetricResult && pMechanism->mechanism != CKM_GOSTR3410_12_DERIVE &&
+	    pMechanism->mechanism != CKM_KDF_HMAC3411_2012_256 &&
+	    pMechanism->mechanism != CKM_KDF_TREE_GOSTR3411_2012_256)
 		return CKR_TEMPLATE_INCONSISTENT;
 	if (pMechanism->mechanism == CKM_GOSTR3410_12_DERIVE &&
 	    !gostSymmetricResult && keyType != CKK_GENERIC_SECRET)
@@ -10614,6 +10634,10 @@ CK_RV SoftHSM::C_DeriveKey
 	}
 	if (pMechanism->mechanism == CKM_GOSTR3410_12_DERIVE)
 		return this->deriveGOSTVKO(hSession, pMechanism, hBaseKey, pTemplate,
+		                           ulCount, phKey, keyType, isOnToken, isPrivate);
+	if (pMechanism->mechanism == CKM_KDF_HMAC3411_2012_256 ||
+	    pMechanism->mechanism == CKM_KDF_TREE_GOSTR3411_2012_256)
+		return this->deriveGOSTKDF(hSession, pMechanism, hBaseKey, pTemplate,
 		                           ulCount, phKey, keyType, isOnToken, isPrivate);
 #endif
 
@@ -15042,6 +15066,44 @@ CK_RV SoftHSM::generateGOST2012
 #endif
 
 #ifdef WITH_GOST_3410_2012_256
+namespace
+{
+// The Rutoken SDK structure is passed by value as the mechanism parameter.
+// Keep the layout here so callers can use the SDK's own declaration.
+struct GOSTKDFTreeParams
+{
+	CK_ULONG ulLabelLength;
+	CK_BYTE_PTR pLabel;
+	CK_ULONG ulSeedLength;
+	CK_BYTE_PTR pSeed;
+	CK_ULONG ulR;
+	CK_ULONG ulL;
+	CK_ULONG ulOffset;
+};
+
+bool hmacStreebog256KDF(const ByteString& key, const unsigned char* data,
+	                    size_t length, ByteString& result)
+{
+	result.wipe();
+	try
+	{
+		std::unique_ptr<Botan::MessageAuthenticationCode> mac =
+			Botan::MessageAuthenticationCode::create_or_throw("HMAC(Streebog-256)");
+		mac->set_key(key.const_byte_str(), key.size());
+		mac->update(data, length);
+		const Botan::secure_vector<uint8_t> digest = mac->final();
+		if (digest.size() != 32) return false;
+		result = ByteString(digest.data(), digest.size());
+		return true;
+	}
+	catch (const std::exception& exception)
+	{
+		ERROR_MSG("GOST KDF HMAC failed: %s", exception.what());
+	}
+	return false;
+}
+}
+
 // Derive a Magma twin key with Rutoken's KEG construction.
 CK_RV SoftHSM::deriveGOSTKEG
 (CK_SESSION_HANDLE hSession,
@@ -15164,12 +15226,16 @@ CK_RV SoftHSM::deriveGOSTVKO
 	// CKD_NULL is the bare VKO; CKD_CPDIVERSIFY_KDF then diversifies its
 	// result by the UKM (RFC 4357, 6.5), as the device does.
 	const CK_ULONG kdf = readLength(0);
-	if (kdf != CKD_NULL && kdf != CKD_CPDIVERSIFY_KDF) return CKR_MECHANISM_PARAM_INVALID;
+	if (kdf != CKD_NULL && kdf != CKD_CPDIVERSIFY_KDF &&
+	    kdf != CKD_KDF_GOSTR3411_2012_256) return CKR_MECHANISM_PARAM_INVALID;
 	const CK_ULONG publicLen = readLength(4);
 	// The device reads a CK_GOSTR3410_DERIVE_PARAMS structure as this buffer,
 	// finds a point length of zero and answers CKR_PUBLIC_KEY_INVALID.
 	if (publicLen == 0) return CKR_PUBLIC_KEY_INVALID;
-	if ((publicLen != 64 && publicLen != 128) || parameterLen < 12 + publicLen)
+	if (publicLen != 64 && publicLen != 128)
+		return kdf == CKD_KDF_GOSTR3411_2012_256 ? CKR_PUBLIC_KEY_INVALID :
+		       CKR_MECHANISM_PARAM_INVALID;
+	if (parameterLen < 12 + publicLen)
 		return CKR_MECHANISM_PARAM_INVALID;
 	// The UKM is a little-endian number. The reference token accepted the
 	// sampled nonzero lengths throughout 1..32 and rejected 0 and 33 bytes.
@@ -15180,6 +15246,8 @@ CK_RV SoftHSM::deriveGOSTVKO
 	// CryptoPro diversification takes exactly eight UKM bytes with either
 	// base-key length, as the 19 October reference probe confirmed.
 	if (kdf == CKD_CPDIVERSIFY_KDF && ukmLen != 8)
+		return CKR_MECHANISM_PARAM_INVALID;
+	if (kdf == CKD_KDF_GOSTR3411_2012_256 && ukmLen != 8 && ukmLen != 16)
 		return CKR_MECHANISM_PARAM_INVALID;
 
 	// The device creates no token object with this derive.
@@ -15233,6 +15301,23 @@ CK_RV SoftHSM::deriveGOSTVKO
 		return CKR_DEVICE_ERROR;
 	}
 	ByteString ukm(parameter + 12 + publicLen, ukmLen);
+	if (kdf == CKD_KDF_GOSTR3411_2012_256)
+	{
+		// The 256-bit branch is independently checked against the device.
+		// The supplied specification calls the 512-bit branch a hypothesis.
+		if (publicLen != 64)
+		{
+			privateKey.setD(ByteString());
+			return CKR_MECHANISM_PARAM_INVALID;
+		}
+		bool nonzero = false;
+		for (size_t i = 0; i < ukm.size(); ++i) nonzero |= ukm.const_byte_str()[i] != 0;
+		if (!nonzero)
+		{
+			privateKey.setD(ByteString());
+			return CKR_MECHANISM_PARAM_INVALID;
+		}
+	}
 	ByteString key;
 	if (!BotanGOST2012KEG::vko256(privateKey.getEC(), privateKey.getD(),
 	                              publicValue, ukm, key))
@@ -15251,6 +15336,22 @@ CK_RV SoftHSM::deriveGOSTVKO
 			key.wipe();
 			return CKR_FUNCTION_FAILED;
 		}
+	}
+	else if (kdf == CKD_KDF_GOSTR3411_2012_256)
+	{
+		static const unsigned char label[] = { 0x26, 0xbd, 0xb8, 0x78 };
+		std::vector<unsigned char> message = { 0x01 };
+		message.insert(message.end(), label, label + sizeof(label));
+		message.push_back(0x00);
+		message.insert(message.end(), ukm.const_byte_str(), ukm.const_byte_str() + ukm.size());
+		message.push_back(0x01);
+		message.push_back(0x00);
+		ByteString diversified;
+		const bool ok = hmacStreebog256KDF(key, message.data(), message.size(), diversified);
+		key.wipe();
+		if (!ok) return CKR_FUNCTION_FAILED;
+		key = diversified;
+		diversified.wipe();
 	}
 
 	// What the device puts into a GOST 28147-89 key the template leaves
@@ -15273,6 +15374,172 @@ CK_RV SoftHSM::deriveGOSTVKO
 	                            phKey, isOnToken, isPrivate, keyType, key,
 	                            keyType == CKK_GENERIC_SECRET, baseKey, token, false);
 	key.wipe();
+	return rv;
+}
+
+// Direct HMAC-KDF and KDF_TREE over an existing GOST symmetric secret key.
+CK_RV SoftHSM::deriveGOSTKDF
+(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMechanism,
+	CK_OBJECT_HANDLE hBaseKey, CK_ATTRIBUTE_PTR pTemplate,
+	CK_ULONG ulCount, CK_OBJECT_HANDLE_PTR phKey, CK_KEY_TYPE keyType,
+	CK_BBOOL isOnToken, CK_BBOOL isPrivate)
+{
+	*phKey = CK_INVALID_HANDLE;
+	const bool tree = pMechanism->mechanism == CKM_KDF_TREE_GOSTR3411_2012_256;
+	Session* session = (Session*)handleManager->getSession(hSession);
+	if (session == NULL) return CKR_SESSION_HANDLE_INVALID;
+	Token* token = session->getToken();
+	if (token == NULL) return CKR_GENERAL_ERROR;
+	OSObject* baseKey = (OSObject*)handleManager->getObject(hBaseKey);
+	if (baseKey == NULL || !baseKey->isValid()) return CKR_KEY_HANDLE_INVALID;
+	const CK_KEY_TYPE baseType = baseKey->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED);
+	const bool twin = tree &&
+		((baseType == CKK_MAGMA && keyType == CKK_MAGMA_TWIN_KEY) ||
+		 (baseType == CKK_KUZNECHIK && keyType == CKK_KUZNECHIK_TWIN_KEY));
+	if (keyType != baseType && !twin) return CKR_TEMPLATE_INCONSISTENT;
+	// The software token exposes no hardware KDF_TREE feature bit.
+	if (isOnToken) return CKR_TEMPLATE_INCONSISTENT;
+	const CK_ULONG resultLen = twin ? 64 : 32;
+	for (CK_ULONG i = 0; i < ulCount; ++i)
+	{
+		if (pTemplate[i].type == CKA_VALUE) return CKR_ATTRIBUTE_READ_ONLY;
+		if (pTemplate[i].type == CKA_VALUE_LEN)
+		{
+			if (pTemplate[i].pValue == NULL_PTR ||
+			    pTemplate[i].ulValueLen != sizeof(CK_ULONG))
+				return CKR_ATTRIBUTE_VALUE_INVALID;
+			CK_ULONG requested = 0;
+			std::memcpy(&requested, pTemplate[i].pValue, sizeof(requested));
+			if (requested != resultLen) return CKR_ATTRIBUTE_VALUE_INVALID;
+		}
+	}
+
+	std::vector<unsigned char> message;
+	GOSTKDFTreeParams params;
+	if (tree)
+	{
+		if (pMechanism->pParameter == NULL_PTR ||
+		    pMechanism->ulParameterLen != sizeof(params))
+			return CKR_MECHANISM_PARAM_INVALID;
+		std::memcpy(&params, pMechanism->pParameter, sizeof(params));
+		if (params.pLabel == NULL_PTR || params.pSeed == NULL_PTR ||
+		    params.ulLabelLength == 0 || params.ulSeedLength == 0 ||
+		    params.ulR < 1 || params.ulR > 4 ||
+		    params.ulL > std::numeric_limits<CK_ULONG>::max() / 8 ||
+		    params.ulOffset > params.ulL || resultLen > params.ulL - params.ulOffset)
+			return CKR_MECHANISM_PARAM_INVALID;
+		const uint64_t maxCounter = (uint64_t(1) << (8 * params.ulR)) - 1;
+		if (uint64_t(params.ulL) * 8 > maxCounter * 32 ||
+		    uint64_t(params.ulOffset) / 32 + 1 > maxCounter ||
+		    params.ulSeedLength > std::numeric_limits<size_t>::max() - 16 ||
+		    params.ulLabelLength > std::numeric_limits<size_t>::max() - 16 - params.ulSeedLength)
+			return CKR_MECHANISM_PARAM_INVALID;
+	}
+	else
+	{
+		if (pMechanism->pParameter == NULL_PTR || pMechanism->ulParameterLen < 4)
+			return CKR_MECHANISM_PARAM_INVALID;
+		const unsigned char* bytes = (const unsigned char*)pMechanism->pParameter;
+		const size_t length = pMechanism->ulParameterLen;
+		if (bytes[0] != 0x01 || bytes[length - 2] != 0x01 || bytes[length - 1] != 0x00)
+			return CKR_MECHANISM_PARAM_INVALID;
+		message.assign(bytes, bytes + length);
+	}
+
+	ByteString baseValue;
+	if (baseKey->getBooleanValue(CKA_PRIVATE, false))
+	{
+		if (!token->decrypt(baseKey->getByteStringValue(CKA_VALUE), baseValue))
+			return CKR_GENERAL_ERROR;
+	}
+	else
+		baseValue = baseKey->getByteStringValue(CKA_VALUE);
+	if (baseValue.size() != 32)
+	{
+		baseValue.wipe();
+		return CKR_KEY_SIZE_RANGE;
+	}
+
+	ByteString result;
+	if (!tree)
+	{
+		if (!hmacStreebog256KDF(baseValue, message.data(), message.size(), result))
+		{
+			baseValue.wipe();
+			return CKR_FUNCTION_FAILED;
+		}
+	}
+	else
+	{
+		// L is measured in bytes; the PRF input encodes L*8 as a minimal
+		// big-endian bit count. Offset slices the concatenated 32-byte blocks.
+		uint64_t bits = uint64_t(params.ulL) * 8;
+		std::vector<unsigned char> bitLength;
+		while (bits != 0)
+		{
+			bitLength.insert(bitLength.begin(), (unsigned char)(bits & 0xff));
+			bits >>= 8;
+		}
+		uint64_t blockIndex = uint64_t(params.ulOffset) / 32 + 1;
+		const size_t blockOffset = params.ulOffset % 32;
+		while (result.size() < resultLen)
+		{
+			message.clear();
+			for (CK_ULONG j = params.ulR; j != 0; --j)
+				message.push_back((unsigned char)(blockIndex >> (8 * (j - 1))));
+			message.insert(message.end(), params.pLabel, params.pLabel + params.ulLabelLength);
+			message.push_back(0x00);
+			message.insert(message.end(), params.pSeed, params.pSeed + params.ulSeedLength);
+			message.insert(message.end(), bitLength.begin(), bitLength.end());
+			ByteString block;
+			if (!hmacStreebog256KDF(baseValue, message.data(), message.size(), block))
+			{
+				baseValue.wipe();
+				result.wipe();
+				return CKR_FUNCTION_FAILED;
+			}
+			const size_t skip = result.size() == 0 ? blockOffset : 0;
+			const size_t take = std::min<size_t>(32 - skip, resultLen - result.size());
+			result += ByteString(block.const_byte_str() + skip, take);
+			block.wipe();
+			++blockIndex;
+		}
+	}
+	baseValue.wipe();
+	std::vector<CK_ATTRIBUTE> attributes(pTemplate, pTemplate + ulCount);
+	CK_BBOOL derivable = CK_TRUE;
+	bool hasDerive = false, hasGostParams = false;
+	for (CK_ULONG i = 0; i < ulCount; ++i)
+	{
+		hasDerive |= pTemplate[i].type == CKA_DERIVE;
+		hasGostParams |= pTemplate[i].type == CKA_GOST28147_PARAMS;
+	}
+	ByteString baseParams;
+	if (keyType == CKK_GOST28147)
+	{
+		if (!hasDerive)
+			attributes.push_back({ CKA_DERIVE, &derivable, sizeof(derivable) });
+		if (!hasGostParams)
+		{
+			if (baseKey->getBooleanValue(CKA_PRIVATE, false))
+			{
+				if (!token->decrypt(baseKey->getByteStringValue(CKA_GOST28147_PARAMS), baseParams))
+				{
+					result.wipe();
+					return CKR_GENERAL_ERROR;
+				}
+			}
+			else
+				baseParams = baseKey->getByteStringValue(CKA_GOST28147_PARAMS);
+			attributes.push_back({ CKA_GOST28147_PARAMS, baseParams.byte_str(), baseParams.size() });
+		}
+	}
+	const CK_RV rv = storeDerivedGOSTSecret(hSession, attributes.data(),
+	                                      (CK_ULONG)attributes.size(), phKey,
+	                                      isOnToken, isPrivate, keyType, result,
+	                                      twin, baseKey, token, false);
+	result.wipe();
+	baseParams.wipe();
 	return rv;
 }
 
