@@ -15531,7 +15531,8 @@ CK_RV SoftHSM::deriveGOSTKDF
 			}
 			else
 				baseParams = baseKey->getByteStringValue(CKA_GOST28147_PARAMS);
-			attributes.push_back({ CKA_GOST28147_PARAMS, baseParams.byte_str(), baseParams.size() });
+			attributes.push_back({ CKA_GOST28147_PARAMS, baseParams.byte_str(),
+			                       static_cast<CK_ULONG>(baseParams.size()) });
 		}
 	}
 	const CK_RV rv = storeDerivedGOSTSecret(hSession, attributes.data(),
