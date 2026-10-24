@@ -164,8 +164,10 @@ before it loads the module; in the process it checks a close, an explicit
 three sessions - one in the middle of a digest, one in the middle of a
 signature - for the handler, which closes them and finalizes. Success is exit
 0 together with `[LIFECYCLE] PASS: late C_CloseSession and C_Finalize after
-main`. CI runs it with the profile off and on, and so does `run-test.sh` of
-the Linux test kits.
+main`. CI runs it with the profile off and on. The packaged `run-test.sh`
+does the same on Linux and macOS; `run-test.cmd` does it on Windows through
+`run-test.ps1`. Each run writes its log to a separate directory under
+`test-output`.
 
 `tls/` is the test kit's TLS block (`tls/README.txt`): `tls/run-tls.sh
 <module> <softhsm2-util> <pkcs11-tool> <pkcs11-provider> <tls-client> <work>`

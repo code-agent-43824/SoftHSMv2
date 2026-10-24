@@ -285,6 +285,42 @@ if ($BundledMode -eq "YES") {
         else { $env:P11_TEST_EXCLUDE_FUNCTIONS = $OldExcludedFunctions }
     }
     Write-Host '[GOST-CMS] PASS: external CryptoPro-A and TC26-A envelopes verified by PKCS #11 module'
+
+    # Register the client's exit handler before loading the DLL, then leave
+    # active sessions for that handler. Each profile needs a fresh token store.
+    $OldSoftHsmConfig = $env:SOFTHSM2_CONF
+    $OldExcludedFunctions = $env:P11_TEST_EXCLUDE_FUNCTIONS
+    try {
+        foreach ($LifecycleProfile in @('false', 'true')) {
+            $LifecycleStore = Join-Path $OutputDir ("lifecycle-$LifecycleProfile-" + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Force (Join-Path $LifecycleStore 'tokens') | Out-Null
+            @('directories.tokendir = ./tokens', 'objectstore.backend = file',
+              "FAKE_RUTOKEN_ECP = $LifecycleProfile") |
+                Set-Content -LiteralPath (Join-Path $LifecycleStore 'softhsm.conf') -Encoding ascii
+            $env:SOFTHSM2_CONF = Join-Path $LifecycleStore 'softhsm.conf'
+            $env:P11_TEST_EXCLUDE_FUNCTIONS = ''
+            $LifecycleLog = Join-Path $LifecycleStore 'lifecycle.log'
+            $PreviousErrorActionPreference = $ErrorActionPreference
+            try {
+                $ErrorActionPreference = 'Continue'
+                & $Client lifecycle $Module 2>&1 | Tee-Object -FilePath $LifecycleLog
+                $LifecycleExit = $LASTEXITCODE
+            }
+            finally { $ErrorActionPreference = $PreviousErrorActionPreference }
+            if ($LifecycleExit -ne 0 -or -not (Select-String -LiteralPath $LifecycleLog `
+                    -SimpleMatch -Pattern '[LIFECYCLE] PASS: late C_CloseSession and C_Finalize after main' -Quiet)) {
+                throw "[LIFECYCLE] FAIL: FAKE_RUTOKEN_ECP=$LifecycleProfile, exit=$LifecycleExit; see $LifecycleLog"
+            }
+        }
+    }
+    finally {
+        if ($null -eq $OldSoftHsmConfig) { Remove-Item Env:SOFTHSM2_CONF -ErrorAction SilentlyContinue }
+        else { $env:SOFTHSM2_CONF = $OldSoftHsmConfig }
+        if ($null -eq $OldExcludedFunctions) { Remove-Item Env:P11_TEST_EXCLUDE_FUNCTIONS -ErrorAction SilentlyContinue }
+        else { $env:P11_TEST_EXCLUDE_FUNCTIONS = $OldExcludedFunctions }
+    }
+    Write-Host '[LIFECYCLE] PASS: PKCS #11 calls after main, profile off and on'
+
     & (Join-Path $KitDir 'scripts/verify-rutoken-opensc.ps1') `
         -Module $Module -Cli $Pkcs11Tool `
         -Spy (Join-Path $KitDir 'lib/pkcs11-spy.dll') `

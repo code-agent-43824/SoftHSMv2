@@ -258,12 +258,11 @@ if [[ "$bundled_mode" == YES ]]; then
     "$kit_dir/bin/portable-token-e2e" cms-gost-verify-external "$module" \
       "$kit_dir/test-output/gost-cms/tc26"
   printf '[GOST-CMS] PASS: external CryptoPro-A and TC26-A envelopes verified by PKCS #11 module\n'
-  if [[ $(uname -s) == Linux ]]; then
+  if [[ $(uname -s) == Linux || $(uname -s) == Darwin ]]; then
     # PKCS #11 calls after main, as pkcs11-provider makes them from OpenSSL's
     # exit handler: the client closes sessions and finalizes from a handler
     # registered before it loads the module (docs/JOURNAL.md, 17 October
-    # 2026). Each profile on a fresh store of its own. Linux only for now:
-    # the other platforms are to be checked later, by the owner's decision.
+    # 2026). Each profile uses its own fresh store, on Linux and macOS.
     for lifecycle_profile in false true; do
       lifecycle_store=$(mktemp -d "$kit_dir/test-output/lifecycle-$lifecycle_profile.XXXXXX")
       mkdir -p "$lifecycle_store/tokens"
