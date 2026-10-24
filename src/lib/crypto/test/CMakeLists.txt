@@ -9,6 +9,7 @@ set(INCLUDE_DIRS ${PROJECT_SOURCE_DIR}/..
                  ${PROJECT_SOURCE_DIR}/../../session_mgr
                  ${PROJECT_SOURCE_DIR}/../../slot_mgr
                  ${CRYPTO_INCLUDES}
+                 ${CPPUNIT_INCLUDES}
                  )
 
 set(SOURCES cryptotest.cpp
@@ -20,6 +21,7 @@ set(SOURCES cryptotest.cpp
             ECDSATests.cpp
             EDDSATests.cpp
             GOSTTests.cpp
+            GOST2012Tests.cpp
             HashTests.cpp
             MacTests.cpp
             MLDSATests.cpp
