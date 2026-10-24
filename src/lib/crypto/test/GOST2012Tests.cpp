@@ -16,7 +16,7 @@
 
 #include "GOST2012Tests.h"
 
-#if defined(WITH_GOST_3411_2012) || defined(WITH_GOST_3410_2012_256)
+#if defined(WITH_GOST_3411_2012) || defined(WITH_GOST_3411_2012_512) || defined(WITH_GOST_3410_2012_256)
 #include "ByteString.h"
 CPPUNIT_TEST_SUITE_REGISTRATION(GOST2012Tests);
 #endif
@@ -57,8 +57,47 @@ void GOST2012Tests::testStreebog256()
 }
 #endif
 
+#ifdef WITH_GOST_3411_2012_512
+#include "BotanStreebog512.h"
+
+void GOST2012Tests::testStreebog512()
+{
+	// RFC 6986, sections 10.1.1 and 10.2.1, in byte-API order.
+	const ByteString message1(
+		"3031323334353637383930313233343536373839303132333435363738393031"
+		"32333435363738393031323334353637383930313233343536373839303132");
+	const ByteString digest1(
+		"1b54d01a4af5b9d5cc3d86d68d285462b19abc2475222f35c085122be4ba1ffa"
+		"00ad30f8767b3a82384c6574f024c311e2a481332b08ef7f41797891c1646f48");
+	const ByteString message2(
+		"d1e520e2e5f2f0e82c20d1f2f0e8e1eee6e820e2edf3f6e82c20e2e5fef2"
+		"fa20f120eceef0ff20f1f2f0e5ebe0ece820ede020f5f0e0e1f0fbff20efeb"
+		"faeafb20c8e3eef0e5e2fb");
+	const ByteString digest2(
+		"1e88e62226bfca6f9994f1f2d51569e0daf8475a3b0fe61a5300eee46d96137"
+		"6035fe83549ada2b8620fcd7c496ce5b33f0cb9dddc2b6460143b03dabac9fb28");
+
+	BotanStreebog512 hash;
+	ByteString result;
+	CPPUNIT_ASSERT(hash.getHashSize() == 64);
+	CPPUNIT_ASSERT(hash.hashInit());
+	CPPUNIT_ASSERT(hash.hashUpdate(message1));
+	CPPUNIT_ASSERT(hash.hashFinal(result));
+	CPPUNIT_ASSERT(result == digest1);
+
+	CPPUNIT_ASSERT(hash.hashInit());
+	CPPUNIT_ASSERT(hash.hashUpdate(message2.substr(0, 1)));
+	CPPUNIT_ASSERT(hash.hashUpdate(ByteString()));
+	CPPUNIT_ASSERT(hash.hashUpdate(message2.substr(1, 13)));
+	CPPUNIT_ASSERT(hash.hashUpdate(message2.substr(14)));
+	CPPUNIT_ASSERT(hash.hashFinal(result));
+	CPPUNIT_ASSERT(result == digest2);
+}
+#endif
+
 #ifdef WITH_GOST_3410_2012_256
 #include "BotanGOST2012KeyGenerator.h"
+#include "BotanGOST2012KEG.h"
 #include "BotanGOST2012Signer.h"
 #include "BotanGOSTCurves.h"
 #include <botan/bigint.h>
@@ -235,5 +274,77 @@ void GOST2012Tests::testSigningAndVerification()
 	CPPUNIT_ASSERT(signer.verifyInit(&wrongCurveKey, AsymMech::GOST_GOST));
 	CPPUNIT_ASSERT(signer.verifyUpdate(message));
 	CPPUNIT_ASSERT(!signer.verifyFinal(signature));
+}
+
+void GOST2012Tests::testKEG()
+{
+	// Independent 256-bit known answer from the TC26 KEG sample. The first
+	// UKM half drives VKO; bytes 16..23 seed the internal two-block KDF_TREE.
+	const ByteString private256(
+		"0debb7875a83206ad1b4167c0a3e35c3c3a75b0aefebcc01d81a18ff9f8e7d9f");
+	const ByteString public256(
+		"c0ec907466beb2eb5ea1bbd2f6015b710c775b88efca1f558cc81038617f8888"
+		"8884f2471bba3e2468564213f04e71700151747941f6a3032085321e9b3aa602");
+	const ByteString ukm256(
+		"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
+	const ByteString expected256(
+		"bc2b44f590b48adcea709a0485f7054462a7b3bc738d7cbbf972bd309d671900"
+		"39eb73d0237a338ffa142d810f844206fcd36d6296df6f6f9149749b2db1e62b");
+	ByteString result;
+	CPPUNIT_ASSERT(BotanGOST2012KEG::isPeerPointValid(curve256A(), public256));
+	CPPUNIT_ASSERT(BotanGOST2012KEG::derive(
+		curve256A(), private256, public256, ukm256, result));
+	CPPUNIT_ASSERT(result == expected256);
+
+	ByteString alteredSeed = ukm256;
+	alteredSeed[16] ^= 1;
+	CPPUNIT_ASSERT(BotanGOST2012KEG::derive(
+		curve256A(), private256, public256, alteredSeed, result));
+	CPPUNIT_ASSERT(result.size() == 64 && result != expected256);
+	// A failed call must clear the previous derived secret.
+	CPPUNIT_ASSERT(!BotanGOST2012KEG::derive(
+		curve256A(), private256, public256, ukm256.substr(0, 31), result));
+	CPPUNIT_ASSERT(result.size() == 0);
+	ByteString zeroScalar;
+	zeroScalar.wipe(32);
+	CPPUNIT_ASSERT(!BotanGOST2012KEG::derive(
+		curve256A(), zeroScalar, public256, ukm256, result));
+	CPPUNIT_ASSERT(result.size() == 0);
+	ByteString invalidPoint;
+	invalidPoint.wipe(64);
+	CPPUNIT_ASSERT(!BotanGOST2012KEG::isPeerPointValid(curve256A(), invalidPoint));
+	CPPUNIT_ASSERT(!BotanGOST2012KEG::derive(
+		curve256A(), private256, invalidPoint, ukm256, result));
+	CPPUNIT_ASSERT(result.size() == 0);
+
+#ifdef WITH_GOST_3410_2012_512
+	// Published TC26 sample_keg_512 ETALON. 512-bit KEG is VKO-512 without
+	// the extra KDF_TREE used by the 256-bit construction.
+	const ByteString private512(
+		"12fd7a70067479a0f66c59f9a25534adfbc7abfd3cc72d79806f8b402601644b"
+		"3005ed365a2d8989a8ccae640d5fc08dd27dfbbfe137cf528e1ac6d445192e01");
+	const ByteString public512(
+		"c65bd705b6860198bad4a70eb937b6b48084e260adf7b1074a89182862c5bffe"
+		"6486283541330b150fe48a737cb3e5bb043e4a1134035a6d479b189351be41c9"
+		"be9a7e2afc246276fe4e2356845293b03178e2ec003ca8a814324f16350bc0ab"
+		"534187de86c76be29a940a8db2ad71646aa0c952fdf411206548813eb9f754a1");
+	const ByteString ukm512(
+		"c3ef0428d4b7a1f4c5025f2e65dd2b2ea583aeefdb67c7f4214a6a298e99e325");
+	const ByteString expected512(
+		"7dac56e48a4dc170faa8fcbae20db845450cccc4c6328bdc8d01157cefa2a5f1"
+		"1f1cbad8866166f01ffaab0152e24bf4609d5f46a5c899c787900d08b9fcad24");
+	CPPUNIT_ASSERT(BotanGOST2012KEG::isPeerPointValid(curve512C(), public512));
+	CPPUNIT_ASSERT(BotanGOST2012KEG::derive(
+		curve512C(), private512, public512, ukm512, result));
+	CPPUNIT_ASSERT(result == expected512);
+	ByteString ignoredTail = ukm512;
+	ignoredTail[16] ^= 1;
+	CPPUNIT_ASSERT(BotanGOST2012KEG::derive(
+		curve512C(), private512, public512, ignoredTail, result));
+	CPPUNIT_ASSERT(result == expected512);
+	CPPUNIT_ASSERT(!BotanGOST2012KEG::derive(
+		curve256A(), private512, public512, ukm512, result));
+	CPPUNIT_ASSERT(result.size() == 0);
+#endif
 }
 #endif

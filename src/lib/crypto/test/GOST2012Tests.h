@@ -26,9 +26,13 @@ class GOST2012Tests : public CppUnit::TestFixture
 #ifdef WITH_GOST_3411_2012
 	CPPUNIT_TEST(testStreebog256);
 #endif
+#ifdef WITH_GOST_3411_2012_512
+	CPPUNIT_TEST(testStreebog512);
+#endif
 #ifdef WITH_GOST_3410_2012_256
 	CPPUNIT_TEST(testKeyGeneration);
 	CPPUNIT_TEST(testSigningAndVerification);
+	CPPUNIT_TEST(testKEG);
 #endif
 	CPPUNIT_TEST_SUITE_END();
 
@@ -36,9 +40,13 @@ public:
 #ifdef WITH_GOST_3411_2012
 	void testStreebog256();
 #endif
+#ifdef WITH_GOST_3411_2012_512
+	void testStreebog512();
+#endif
 #ifdef WITH_GOST_3410_2012_256
 	void testKeyGeneration();
 	void testSigningAndVerification();
+	void testKEG();
 #endif
 };
 
