@@ -15303,13 +15303,8 @@ CK_RV SoftHSM::deriveGOSTVKO
 	ByteString ukm(parameter + 12 + publicLen, ukmLen);
 	if (kdf == CKD_KDF_GOSTR3411_2012_256)
 	{
-		// The 256-bit branch is independently checked against the device.
-		// The supplied specification calls the 512-bit branch a hypothesis.
-		if (publicLen != 64)
-		{
-			privateKey.setD(ByteString());
-			return CKR_MECHANISM_PARAM_INVALID;
-		}
+		// Both curve sizes use VKO-256 followed by the same HMAC layer.
+		// The 512-bit base-key path was confirmed by the reference device.
 		bool nonzero = false;
 		for (size_t i = 0; i < ukm.size(); ++i) nonzero |= ukm.const_byte_str()[i] != 0;
 		if (!nonzero)

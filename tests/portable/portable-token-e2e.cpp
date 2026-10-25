@@ -3035,6 +3035,67 @@ static void verifyGOSTVKODerive(Module& module, CK_SESSION_HANDLE session)
             bytesFromHex("85698c31664115a6fcd15203f89f8ccb7d27a7a46417c45fa51b43df2fa8be7b"))
             fail("CKM_GOSTR3410_12_DERIVE does not give the device's answer for a 512-bit key");
         destroyObject(module, session, key);
+        for (const Bytes& selectorUkm : {ukm, bytesFromHex("0102030405060708090a0b0c0d0e0f10")})
+        {
+            CK_OBJECT_HANDLE bareKey = CK_INVALID_HANDLE;
+            check(vkoDerive(module, session, baseKey512,
+                            vkoDeriveParameter(CKD_NULL, devicePoint512, selectorUkm),
+                            pluginTemplate, pluginCount, bareKey, "512-bit bare VKO"),
+                  CKR_OK, "C_DeriveKey(512-bit CKD_NULL before selector)");
+            Bytes hmacInput = bytesFromHex("0126bdb87800");
+            hmacInput.insert(hmacInput.end(), selectorUkm.begin(), selectorUkm.end());
+            hmacInput.push_back(0x01);
+            hmacInput.push_back(0x00);
+            CK_MECHANISM hmac{CKM_KDF_HMAC3411_2012_256, hmacInput.data(),
+                              static_cast<CK_ULONG>(hmacInput.size())};
+            CK_OBJECT_HANDLE hmacKey = CK_INVALID_HANDLE;
+            check(invoke("C_DeriveKey", "direct HMAC of 512-bit bare VKO", [&] {
+                return module->C_DeriveKey(session, &hmac, bareKey, pluginTemplate,
+                                           pluginCount, &hmacKey);
+            }), CKR_OK, "C_DeriveKey(HMAC of 512-bit CKD_NULL)");
+            const Bytes expectedSelector = attribute(module, session, hmacKey, CKA_VALUE);
+            destroyObject(module, session, hmacKey);
+            destroyObject(module, session, bareKey);
+            check(vkoDerive(module, session, baseKey512,
+                            vkoDeriveParameter(CKD_KDF_GOSTR3411_2012_256,
+                                               devicePoint512, selectorUkm),
+                            pluginTemplate, pluginCount, key, "512-bit VKO selector"),
+                  CKR_OK, "C_DeriveKey(512-bit VKO selector)");
+            if (attribute(module, session, key, CKA_VALUE) != expectedSelector)
+                fail("512-bit VKO selector differs from HMAC of the bare VKO result");
+            destroyObject(module, session, key);
+        }
+        check(vkoDerive(module, session, baseKey512,
+                        vkoDeriveParameter(CKD_KDF_GOSTR3411_2012_256,
+                                           devicePoint512, bytesFromHex("01")),
+                        pluginTemplate, pluginCount, key, "512-bit selector with short UKM"),
+              CKR_MECHANISM_PARAM_INVALID, "C_DeriveKey(512-bit selector, short UKM)");
+        check(vkoDerive(module, session, baseKey512,
+                        vkoDeriveParameter(CKD_KDF_GOSTR3411_2012_256,
+                                           devicePoint512, Bytes(8, 0)),
+                        pluginTemplate, pluginCount, key, "512-bit selector with zero UKM"),
+              CKR_MECHANISM_PARAM_INVALID, "C_DeriveKey(512-bit selector, zero UKM)");
+        check(vkoDerive(module, session, baseKey512,
+                        vkoDeriveParameter(CKD_KDF_GOSTR3411_2012_256,
+                                           devicePoint512, Bytes(32, 1)),
+                        pluginTemplate, pluginCount, key, "512-bit selector with 32-byte UKM"),
+              CKR_MECHANISM_PARAM_INVALID, "C_DeriveKey(512-bit selector, 32-byte UKM)");
+        CK_KEY_TYPE genericType = CKK_GENERIC_SECRET;
+        CK_ULONG requestedGenericLength = 64;
+        CK_ATTRIBUTE genericTemplate[] = {
+            {CKA_CLASS, &secretClass, sizeof(secretClass)},
+            {CKA_KEY_TYPE, &genericType, sizeof(genericType)},
+            {CKA_TOKEN, &no, sizeof(no)},
+            {CKA_VALUE_LEN, &requestedGenericLength, sizeof(requestedGenericLength)}
+        };
+        check(vkoDerive(module, session, baseKey512,
+                        vkoDeriveParameter(CKD_KDF_GOSTR3411_2012_256,
+                                           devicePoint512, ukm),
+                        genericTemplate, 4, key, "512-bit selector, generic result length 64"),
+              CKR_OK, "C_DeriveKey(512-bit selector, generic length 64)");
+        if (attribute(module, session, key, CKA_VALUE).size() != 32)
+            fail("512-bit VKO selector obeyed an ignored generic result length");
+        destroyObject(module, session, key);
         check(vkoDerive(module, session, baseKey512, vkoDeriveParameter(CKD_NULL, devicePoint, ukm),
                         pluginTemplate, pluginCount, key, "a 64-byte point with a 512-bit key"),
               CKR_ARGUMENTS_BAD, "C_DeriveKey(CKM_GOSTR3410_12_DERIVE, 512-bit key, 64-byte point)");
@@ -5605,7 +5666,25 @@ static void verifyGOSTKDF(Module& module, CK_SESSION_HANDLE session)
         destroyObject(module, session, base);
     }
 
+    // The reference device supplied both values from one 512-bit-key call.
+    // This checks the HMAC layer independently of its unknown private scalar.
     type = CKK_GOST28147;
+    const Bytes deviceBareVKO = bytesFromHex(
+        "6139fbb3e4feef7f0eb0e0c985fb8c226eaaedac8d428274e2997ac83d0df69d");
+    const CK_OBJECT_HANDLE deviceBareKey = createGOSTSecret(
+        module, session, CKK_GOST28147, deviceBareVKO, false, false, true);
+    const Bytes deviceFrame = bytesFromHex("0126bdb8780001020304050607080100");
+    CK_MECHANISM deviceHmac{CKM_KDF_HMAC3411_2012_256,
+                            const_cast<unsigned char*>(deviceFrame.data()),
+                            static_cast<CK_ULONG>(deviceFrame.size())};
+    check(derive(deviceHmac, deviceBareKey, "512-bit device VKO HMAC layer"),
+          CKR_OK, "C_DeriveKey(HMAC, device 512-bit VKO value)");
+    if (attribute(module, session, key, CKA_VALUE) !=
+        bytesFromHex("4bb5eada666ea61b315191de3814439b04350833f2811cdc273193f575d3d847"))
+        fail("512-bit device VKO HMAC layer differs from the device answer");
+    destroyObject(module, session, key);
+    destroyObject(module, session, deviceBareKey);
+
     const CK_OBJECT_HANDLE privateBase = createGOSTSecret(
         module, session, CKK_GOST28147, baseValue, false, false, true, true);
     check(derive(hmac, privateBase, "KDF HMAC encrypted base key"), CKR_OK,
