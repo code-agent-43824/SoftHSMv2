@@ -8183,7 +8183,8 @@ static void verifyCmsBattery(const fs::path& modulePath,
             &store, OPTIONAL_CRL_CHECK, 0);
     }), CKR_SESSION_HANDLE_INVALID, "CMS verify rejects invalid session");
     closeSession(module, session);
-    trace("CMS", "attached/detached, public-session verification, chain and tamper verified");
+    trace("CMS", "attached/detached, chain, tamper and signer output verified");
+    trace("CMS", "public-session attached and detached verification verified");
 }
 
 static void verifyGostCmsBattery(const fs::path& modulePath,
