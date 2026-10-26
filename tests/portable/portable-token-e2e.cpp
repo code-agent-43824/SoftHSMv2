@@ -7193,9 +7193,9 @@ static void verifyMultipleTokens(const fs::path& modulePath)
             CK_ULONG mechanismCount = 0;
             callOk("C_GetMechanismList", "slotID=" + std::to_string(slot),
                    [&] { return module->C_GetMechanismList(slot, nullptr, &mechanismCount); });
-            if (mechanismCount != 70)
+            if (mechanismCount != 72)
                 fail("slot " + std::to_string(slot) + " advertises " +
-                     std::to_string(mechanismCount) + " mechanisms, not the device's 70");
+                     std::to_string(mechanismCount) + " mechanisms, not the updated 72");
 
             CK_TOKEN_INFO_EXTENDED info{};
             info.ulSizeofThisStructure = sizeof(info);
