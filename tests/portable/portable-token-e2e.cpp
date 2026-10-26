@@ -4908,16 +4908,11 @@ static void verifyExtendedInitToken(const fs::path& modulePath)
     // Extended name and local PIN are persistent token state, not session state.
     {
         CK_SESSION_HANDLE s = openSession(module, slot);
-        const std::string longName = "Rutoken ECP extended name beyond thirty-two bytes";
+        const std::string longName = "Rutoken ECP " + std::string(4096 - 12, 'N');
         check(invoke("C_EX_SetTokenName", "without User login", [&] {
             return ex->C_EX_SetTokenName(s, reinterpret_cast<CK_CHAR_PTR>(const_cast<char*>(longName.data())), longName.size());
         }), CKR_USER_NOT_LOGGED_IN, "SetTokenName requires User login");
         login(module, s, CKU_USER, newUser);
-        const std::string tooLongName(256, 'N');
-        check(invoke("C_EX_SetTokenName", "name longer than 255 bytes", [&] {
-            return ex->C_EX_SetTokenName(s,
-                reinterpret_cast<CK_CHAR_PTR>(const_cast<char*>(tooLongName.data())), tooLongName.size());
-        }), CKR_ARGUMENTS_BAD, "extended name length limit");
         callOk("C_EX_SetTokenName", "empty name", [&] {
             return ex->C_EX_SetTokenName(s, nullptr, 0);
         });
@@ -4926,7 +4921,7 @@ static void verifyExtendedInitToken(const fs::path& modulePath)
             return ex->C_EX_GetTokenName(s, nullptr, &emptyNameLength);
         });
         if (emptyNameLength == 0) fail("empty token name lost the profile placeholder");
-        callOk("C_EX_SetTokenName", "long name", [&] {
+        callOk("C_EX_SetTokenName", "4096-byte name", [&] {
             return ex->C_EX_SetTokenName(s, reinterpret_cast<CK_CHAR_PTR>(const_cast<char*>(longName.data())), longName.size());
         });
         CK_ULONG nameLength = 0;
@@ -4992,8 +4987,15 @@ static void verifyExtendedInitToken(const fs::path& modulePath)
         callOk("C_EX_GetTokenName", "size after restart", [&] {
             return ex->C_EX_GetTokenName(reopened, nullptr, &nameLength);
         });
-        closeSession(module, reopened);
         if (nameLength != longName.size()) fail("extended name did not survive restart");
+        std::vector<char> persistedName(nameLength);
+        callOk("C_EX_GetTokenName", "4096-byte name after restart", [&] {
+            return ex->C_EX_GetTokenName(reopened,
+                reinterpret_cast<CK_CHAR_PTR>(persistedName.data()), &nameLength);
+        });
+        if (std::string(persistedName.begin(), persistedName.end()) != longName)
+            fail("extended name content changed across restart");
+        closeSession(module, reopened);
         callOk("C_EX_SetLocalPIN", "change persisted local PIN", [&] {
             return ex->C_EX_SetLocalPIN(slot,
                 reinterpret_cast<CK_UTF8CHAR_PTR>(const_cast<char*>(localA.data())), localA.size(),
@@ -5297,6 +5299,9 @@ static void verifyRutokenExtension(Module& module, const CK_TOKEN_INFO& token)
         fail("C_EX_GetTokenInfoExtended reports more retries left than the maximum");
     if (extended.ulATRLen > sizeof(extended.ATR))
         fail("C_EX_GetTokenInfoExtended reports an ATR longer than its own field");
+    if (extended.ulBatteryVoltage != 0 || extended.ulBatteryPercentage != 0 ||
+        extended.ulBatteryFlags != 0)
+        fail("unsupported battery must be reported with zero-valued fields");
 
     // The two views of the token must agree on the serial number: the extended
     // field is the device's binary serial, big endian and right aligned, and
@@ -6497,6 +6502,116 @@ static void verifyRutokenCBCFSS(Module& module, CK_SESSION_HANDLE session)
     destroyObject(module, session, key);
 }
 
+static void verifyRutokenECAlgorithms(Module& module, CK_SESSION_HANDLE session)
+{
+    const Bytes p521 = bytesFromHex("06052b81040023");
+    const Bytes ed25519 = bytesFromHex("06032b6570");
+    const Bytes ed448 = bytesFromHex("06032b6571");
+    CK_BBOOL yes = CK_TRUE, no = CK_FALSE;
+    auto generate = [&](CK_MECHANISM_TYPE type, CK_KEY_TYPE keyType,
+                        const Bytes& curve, CK_OBJECT_HANDLE& publicKey,
+                        CK_OBJECT_HANDLE& privateKey) {
+        CK_OBJECT_CLASS publicClass = CKO_PUBLIC_KEY, privateClass = CKO_PRIVATE_KEY;
+        CK_MECHANISM mechanism{type, nullptr, 0};
+        CK_ATTRIBUTE publicTemplate[] = {
+            {CKA_CLASS, &publicClass, sizeof(publicClass)},
+            {CKA_KEY_TYPE, &keyType, sizeof(keyType)},
+            {CKA_TOKEN, &no, sizeof(no)},
+            {CKA_EC_PARAMS, const_cast<unsigned char*>(curve.data()),
+                            static_cast<CK_ULONG>(curve.size())},
+            {CKA_VERIFY, &yes, sizeof(yes)}
+        };
+        CK_ATTRIBUTE privateTemplate[] = {
+            {CKA_CLASS, &privateClass, sizeof(privateClass)},
+            {CKA_KEY_TYPE, &keyType, sizeof(keyType)},
+            {CKA_TOKEN, &no, sizeof(no)},
+            {CKA_SIGN, &yes, sizeof(yes)},
+            {CKA_DERIVE, &yes, sizeof(yes)}
+        };
+        return module->C_GenerateKeyPair(session, &mechanism,
+            publicTemplate, 5, privateTemplate, 5, &publicKey, &privateKey);
+    };
+
+    CK_OBJECT_HANDLE p521PublicA = CK_INVALID_HANDLE, p521PrivateA = CK_INVALID_HANDLE;
+    CK_OBJECT_HANDLE p521PublicB = CK_INVALID_HANDLE, p521PrivateB = CK_INVALID_HANDLE;
+    callOk("C_GenerateKeyPair", "P-521 A", [&] {
+        return generate(CKM_EC_KEY_PAIR_GEN, CKK_EC, p521, p521PublicA, p521PrivateA);
+    });
+    callOk("C_GenerateKeyPair", "P-521 B", [&] {
+        return generate(CKM_EC_KEY_PAIR_GEN, CKK_EC, p521, p521PublicB, p521PrivateB);
+    });
+    if (attribute(module, session, p521PublicA, CKA_EC_PARAMS) != p521)
+        fail("P-521 key generation returned a different curve");
+    const Bytes message = {'R', 'u', 't', 'o', 'k', 'e', 'n', '-', 'E', 'C'};
+    const CK_MECHANISM_TYPE ecdsaMechanisms[] = {
+        CKM_ECDSA_SHA1, CKM_ECDSA_SHA224, CKM_ECDSA_SHA256,
+        CKM_ECDSA_SHA384, CKM_ECDSA_SHA512
+    };
+    for (CK_MECHANISM_TYPE algorithm : ecdsaMechanisms)
+    {
+        const Bytes signature = signOneShot(module, session, p521PrivateA,
+                                            algorithm, message);
+        if (signature.size() != 132) fail("P-521 ECDSA signature is not 132 bytes");
+        verifyOneShot(module, session, p521PublicA, algorithm, message, signature);
+    }
+    const Bytes digest(64, 0x5a);
+    const Bytes rawSignature = signOneShot(module, session, p521PrivateA,
+                                           CKM_ECDSA, digest);
+    if (rawSignature.size() != 132) fail("raw P-521 ECDSA signature is not 132 bytes");
+    verifyOneShot(module, session, p521PublicA, CKM_ECDSA, digest, rawSignature);
+    auto derive = [&](CK_OBJECT_HANDLE privateKey, CK_OBJECT_HANDLE peer) {
+        Bytes point = attribute(module, session, peer, CKA_EC_POINT);
+        CK_ECDH1_DERIVE_PARAMS params{CKD_NULL, 0, nullptr,
+                                      static_cast<CK_ULONG>(point.size()), point.data()};
+        CK_MECHANISM mechanism{CKM_ECDH1_DERIVE, &params, sizeof(params)};
+        CK_OBJECT_CLASS secretClass = CKO_SECRET_KEY;
+        CK_KEY_TYPE secretType = CKK_GENERIC_SECRET;
+        CK_ULONG length = 32;
+        CK_ATTRIBUTE secretTemplate[] = {
+            {CKA_CLASS, &secretClass, sizeof(secretClass)},
+            {CKA_KEY_TYPE, &secretType, sizeof(secretType)},
+            {CKA_TOKEN, &no, sizeof(no)},
+            {CKA_SENSITIVE, &no, sizeof(no)},
+            {CKA_EXTRACTABLE, &yes, sizeof(yes)},
+            {CKA_VALUE_LEN, &length, sizeof(length)}
+        };
+        CK_OBJECT_HANDLE secret = CK_INVALID_HANDLE;
+        callOk("C_DeriveKey", "P-521 ECDH", [&] {
+            return module->C_DeriveKey(session, &mechanism, privateKey,
+                                       secretTemplate, 6, &secret);
+        });
+        const Bytes value = attribute(module, session, secret, CKA_VALUE);
+        destroyObject(module, session, secret);
+        return value;
+    };
+    const Bytes sharedA = derive(p521PrivateA, p521PublicB);
+    const Bytes sharedB = derive(p521PrivateB, p521PublicA);
+    if (sharedA.size() != 32 || sharedA != sharedB)
+        fail("P-521 ECDH did not produce the same 32-byte secret on both sides");
+    destroyObject(module, session, p521PublicA);
+    destroyObject(module, session, p521PrivateA);
+    destroyObject(module, session, p521PublicB);
+    destroyObject(module, session, p521PrivateB);
+
+    CK_OBJECT_HANDLE edPublic = CK_INVALID_HANDLE, edPrivate = CK_INVALID_HANDLE;
+    callOk("C_GenerateKeyPair", "Ed25519", [&] {
+        return generate(CKM_EC_EDWARDS_KEY_PAIR_GEN, CKK_EC_EDWARDS,
+                        ed25519, edPublic, edPrivate);
+    });
+    if (attribute(module, session, edPublic, CKA_EC_PARAMS) != ed25519)
+        fail("Ed25519 key generation returned a different curve");
+    const Bytes edSignature = signOneShot(module, session, edPrivate, CKM_EDDSA, message);
+    if (edSignature.size() != 64) fail("Ed25519 signature is not 64 bytes");
+    verifyOneShot(module, session, edPublic, CKM_EDDSA, message, edSignature);
+    destroyObject(module, session, edPublic);
+    destroyObject(module, session, edPrivate);
+    check(invoke("C_GenerateKeyPair", "Ed448 excluded by Rutoken profile", [&] {
+        return generate(CKM_EC_EDWARDS_KEY_PAIR_GEN, CKK_EC_EDWARDS,
+                        ed448, edPublic, edPrivate);
+    }), CKR_CURVE_NOT_SUPPORTED, "Rutoken EdDSA only supports Ed25519");
+    trace("EC", "P-521 ECDSA/ECDH, Ed25519 EdDSA and Ed448 exclusion verified");
+}
+
 static void verifyRutokenProfile(const fs::path& modulePath)
 {
     Module module(modulePath);
@@ -6738,20 +6853,24 @@ static void verifyRutokenProfile(const fs::path& modulePath)
          CKF_HW | CKF_SIGN | CKF_VERIFY},
         {CKM_GOSTR3411_HMAC, 0, 0,
          CKF_SIGN | CKF_VERIFY},
-        {CKM_ECDSA_KEY_PAIR_GEN, 256, 256,
+        {CKM_ECDSA_KEY_PAIR_GEN, 256, 521,
          CKF_HW | CKF_GENERATE_KEY_PAIR | CKF_EC_F_P | CKF_EC_NAMEDCURVE | CKF_EC_UNCOMPRESS},
-        {CKM_ECDSA, 256, 256,
+        {CKM_ECDSA, 256, 521,
          CKF_HW | CKF_SIGN | CKF_VERIFY | CKF_EC_F_P | CKF_EC_NAMEDCURVE | CKF_EC_UNCOMPRESS},
-        {CKM_ECDSA_SHA1, 256, 256,
+        {CKM_ECDSA_SHA1, 256, 521,
          CKF_HW | CKF_SIGN | CKF_VERIFY | CKF_EC_F_P | CKF_EC_NAMEDCURVE | CKF_EC_UNCOMPRESS},
-        {CKM_ECDSA_SHA224, 256, 256,
+        {CKM_ECDSA_SHA224, 256, 521,
          CKF_HW | CKF_SIGN | CKF_VERIFY | CKF_EC_F_P | CKF_EC_NAMEDCURVE | CKF_EC_UNCOMPRESS},
-        {CKM_ECDSA_SHA256, 256, 256,
+        {CKM_ECDSA_SHA256, 256, 521,
          CKF_HW | CKF_SIGN | CKF_VERIFY | CKF_EC_F_P | CKF_EC_NAMEDCURVE | CKF_EC_UNCOMPRESS},
-        {CKM_ECDSA_SHA384, 256, 256,
+        {CKM_ECDSA_SHA384, 256, 521,
          CKF_HW | CKF_SIGN | CKF_VERIFY | CKF_EC_F_P | CKF_EC_NAMEDCURVE | CKF_EC_UNCOMPRESS},
-        {CKM_ECDSA_SHA512, 256, 256,
+        {CKM_ECDSA_SHA512, 256, 521,
          CKF_HW | CKF_SIGN | CKF_VERIFY | CKF_EC_F_P | CKF_EC_NAMEDCURVE | CKF_EC_UNCOMPRESS},
+        {CKM_EDDSA, 256, 256,
+         CKF_HW | CKF_SIGN | CKF_VERIFY | CKF_EC_F_P | CKF_EC_NAMEDCURVE},
+        {CKM_EC_EDWARDS_KEY_PAIR_GEN, 256, 256,
+         CKF_HW | CKF_GENERATE_KEY_PAIR | CKF_EC_F_P | CKF_EC_NAMEDCURVE},
         {CKM_KDF_HMAC3411_2012_256, 0, 0,
          CKF_HW | CKF_DERIVE},
         {CKM_CONCATENATE_BASE_AND_KEY, 0, 0,
@@ -6760,7 +6879,7 @@ static void verifyRutokenProfile(const fs::path& modulePath)
          CKF_HW | CKF_DERIVE},
         {CKM_GOST_KEG, 0, 0,
          CKF_HW | CKF_DERIVE},
-        {CKM_ECDH1_DERIVE, 255, 512,
+        {CKM_ECDH1_DERIVE, 255, 521,
          CKF_HW | CKF_DERIVE | CKF_EC_F_P | CKF_EC_NAMEDCURVE | CKF_EC_UNCOMPRESS},
         {0xD432102BUL, 0, 0,
          CKF_HW | CKF_WRAP | CKF_UNWRAP},
@@ -6818,6 +6937,7 @@ static void verifyRutokenProfile(const fs::path& modulePath)
             verifyRutokenCBCFSS(module, session);
             verifyGOSTSymmetric(module, session);
             verifyForcedSensitiveDefaults(module, session);
+            verifyRutokenECAlgorithms(module, session);
             logout(module, session, "CKU_USER");
         }
 
@@ -8037,8 +8157,33 @@ static void verifyCmsBattery(const fs::path& modulePath,
     if (!signerResult || signerCount != 1) fail("detached CMS omitted signer");
     cmsFreeSigners(ex, signerResult, signerCount);
     logout(module, session, "CKU_USER");
+    verifyAttached(attached, rootDer, CKR_OK);
+    callOk("C_EX_PKCS7VerifyInit", "detached CMS without login", [&] {
+        return verifyInit(detached, rootDer);
+    });
+    callOk("C_EX_PKCS7VerifyUpdate", "detached CMS without login", [&] {
+        return ex->C_EX_PKCS7VerifyUpdate(session,
+            const_cast<unsigned char*>(content.data()), content.size());
+    });
+    signerResult = nullptr;
+    signerCount = 0;
+    callOk("C_EX_PKCS7VerifyFinal", "detached CMS without login", [&] {
+        return ex->C_EX_PKCS7VerifyFinal(session, &signerResult, &signerCount);
+    });
+    if (!signerResult || signerCount != 1) fail("public CMS verification omitted signer");
+    cmsFreeSigners(ex, signerResult, signerCount);
+    CK_VENDOR_BUFFER anchor{const_cast<unsigned char*>(rootDer.data()),
+                            static_cast<CK_ULONG>(rootDer.size())};
+    CK_VENDOR_X509_STORE store{};
+    store.pTrustedCertificates = &anchor;
+    store.ulTrustedCertificateCount = 1;
+    check(invoke("C_EX_PKCS7VerifyInit", "invalid session", [&] {
+        return ex->C_EX_PKCS7VerifyInit(CK_INVALID_HANDLE,
+            const_cast<unsigned char*>(attached.data()), attached.size(),
+            &store, OPTIONAL_CRL_CHECK, 0);
+    }), CKR_SESSION_HANDLE_INVALID, "CMS verify rejects invalid session");
     closeSession(module, session);
-    trace("CMS", "attached/detached, chain, tamper and signer output verified");
+    trace("CMS", "attached/detached, public-session verification, chain and tamper verified");
 }
 
 static void verifyGostCmsBattery(const fs::path& modulePath,

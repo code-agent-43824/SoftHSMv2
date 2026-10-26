@@ -1105,10 +1105,6 @@ namespace
 	};
 	const CK_ULONG FAKE_RUTOKEN_ATR_LEN = sizeof(FAKE_RUTOKEN_ATR);
 
-	// A bus-powered token reports no voltage and all-ones for the two battery
-	// fields it cannot answer.
-	const CK_ULONG FAKE_RUTOKEN_BATTERY_UNKNOWN = 0xFFFFFFFF;
-
 	// Constant capabilities of the reference Rutoken ECP. The "PIN is not
 	// default" bits are added from the token's own state below.
 	const CK_FLAGS FAKE_RUTOKEN_EXTENDED_FLAGS =
@@ -1204,8 +1200,8 @@ CK_RV SoftHSM::C_EX_GetTokenInfoExtended(CK_SLOT_ID slotID, CK_TOKEN_INFO_EXTEND
 	pInfo->ulBatteryVoltage = 0;
 	pInfo->ulBodyColor = FAKE_RUTOKEN_BODY_COLOR;
 	pInfo->ulFirmwareChecksum = FAKE_RUTOKEN_FIRMWARE_CHECKSUM;
-	pInfo->ulBatteryPercentage = FAKE_RUTOKEN_BATTERY_UNKNOWN;
-	pInfo->ulBatteryFlags = FAKE_RUTOKEN_BATTERY_UNKNOWN;
+	pInfo->ulBatteryPercentage = 0;
+	pInfo->ulBatteryFlags = 0;
 
 	return CKR_OK;
 }
@@ -1389,7 +1385,7 @@ CK_RV SoftHSM::C_EX_SetTokenName(CK_SESSION_HANDLE hSession, CK_CHAR_PTR pLabel,
 	if (session->getState() == CKS_RO_PUBLIC_SESSION ||
 	    session->getState() == CKS_RO_USER_FUNCTIONS) return CKR_SESSION_READ_ONLY;
 	if (session->getState() != CKS_RW_USER_FUNCTIONS) return CKR_USER_NOT_LOGGED_IN;
-	if ((pLabel == NULL_PTR && ulLabelLen != 0) || ulLabelLen > 255) return CKR_ARGUMENTS_BAD;
+	if (pLabel == NULL_PTR && ulLabelLen != 0) return CKR_ARGUMENTS_BAD;
 	ByteString name;
 	if (ulLabelLen != 0) name = ByteString((const unsigned char*)pLabel, ulLabelLen);
 	Token* token = session->getToken();
@@ -1825,6 +1821,21 @@ namespace
 
 	const CK_FLAGS FAKE_RUTOKEN_EC =
 		CKF_EC_F_P | CKF_EC_NAMEDCURVE | CKF_EC_UNCOMPRESS;
+	const CK_FLAGS FAKE_RUTOKEN_ED = CKF_EC_F_P | CKF_EC_NAMEDCURVE;
+
+#ifdef WITH_EDDSA
+	bool isRutokenEd25519(const ByteString& params)
+	{
+		static const unsigned char oid[] = { 0x06, 0x03, 0x2b, 0x65, 0x70 };
+		static const unsigned char name[] = {
+			0x13, 0x0c, 'e', 'd', 'w', 'a', 'r', 'd', 's', '2', '5', '5', '1', '9'
+		};
+		return (params.size() == sizeof(oid) &&
+		        memcmp(params.const_byte_str(), oid, sizeof(oid)) == 0) ||
+		       (params.size() == sizeof(name) &&
+		        memcmp(params.const_byte_str(), name, sizeof(name)) == 0);
+	}
+#endif
 
 	const FakeRutokenMechanism FAKE_RUTOKEN_MECHANISMS[] = {
 		{ CKM_RSA_PKCS_KEY_PAIR_GEN, 512, 4096, CKF_HW | CKF_GENERATE_KEY_PAIR },
@@ -1881,18 +1892,21 @@ namespace
 		{ CKM_GOSTR3411_12_256_HMAC, 0, 0, CKF_HW | CKF_SIGN | CKF_VERIFY },
 		{ CKM_GOSTR3411_12_512_HMAC, 0, 0, CKF_HW | CKF_SIGN | CKF_VERIFY },
 		{ CKM_GOSTR3411_HMAC, 0, 0, CKF_SIGN | CKF_VERIFY },
-		{ CKM_EC_KEY_PAIR_GEN, 256, 256, CKF_HW | CKF_GENERATE_KEY_PAIR | FAKE_RUTOKEN_EC },
-		{ CKM_ECDSA, 256, 256, CKF_HW | CKF_SIGN | CKF_VERIFY | FAKE_RUTOKEN_EC },
-		{ CKM_ECDSA_SHA1, 256, 256, CKF_HW | CKF_SIGN | CKF_VERIFY | FAKE_RUTOKEN_EC },
-		{ CKM_ECDSA_SHA224, 256, 256, CKF_HW | CKF_SIGN | CKF_VERIFY | FAKE_RUTOKEN_EC },
-		{ CKM_ECDSA_SHA256, 256, 256, CKF_HW | CKF_SIGN | CKF_VERIFY | FAKE_RUTOKEN_EC },
-		{ CKM_ECDSA_SHA384, 256, 256, CKF_HW | CKF_SIGN | CKF_VERIFY | FAKE_RUTOKEN_EC },
-		{ CKM_ECDSA_SHA512, 256, 256, CKF_HW | CKF_SIGN | CKF_VERIFY | FAKE_RUTOKEN_EC },
+		{ CKM_EC_KEY_PAIR_GEN, 256, 521, CKF_HW | CKF_GENERATE_KEY_PAIR | FAKE_RUTOKEN_EC },
+		{ CKM_ECDSA, 256, 521, CKF_HW | CKF_SIGN | CKF_VERIFY | FAKE_RUTOKEN_EC },
+		{ CKM_ECDSA_SHA1, 256, 521, CKF_HW | CKF_SIGN | CKF_VERIFY | FAKE_RUTOKEN_EC },
+		{ CKM_ECDSA_SHA224, 256, 521, CKF_HW | CKF_SIGN | CKF_VERIFY | FAKE_RUTOKEN_EC },
+		{ CKM_ECDSA_SHA256, 256, 521, CKF_HW | CKF_SIGN | CKF_VERIFY | FAKE_RUTOKEN_EC },
+		{ CKM_ECDSA_SHA384, 256, 521, CKF_HW | CKF_SIGN | CKF_VERIFY | FAKE_RUTOKEN_EC },
+		{ CKM_ECDSA_SHA512, 256, 521, CKF_HW | CKF_SIGN | CKF_VERIFY | FAKE_RUTOKEN_EC },
+		{ CKM_EDDSA, 256, 256, CKF_HW | CKF_SIGN | CKF_VERIFY | FAKE_RUTOKEN_ED },
+		{ CKM_EC_EDWARDS_KEY_PAIR_GEN, 256, 256,
+		  CKF_HW | CKF_GENERATE_KEY_PAIR | FAKE_RUTOKEN_ED },
 		{ CKM_KDF_HMAC3411_2012_256, 0, 0, CKF_HW | CKF_DERIVE },
 		{ CKM_CONCATENATE_BASE_AND_KEY, 0, 0, CKF_HW | CKF_DERIVE },
 		{ CKM_KDF_TREE_GOSTR3411_2012_256, 0, 0, CKF_HW | CKF_DERIVE },
 		{ CKM_GOST_KEG, 0, 0, CKF_HW | CKF_DERIVE },
-		{ CKM_ECDH1_DERIVE, 255, 512, CKF_HW | CKF_DERIVE | FAKE_RUTOKEN_EC },
+		{ CKM_ECDH1_DERIVE, 255, 521, CKF_HW | CKF_DERIVE | FAKE_RUTOKEN_EC },
 		{ 0xD432102BUL, 0, 0, CKF_HW | CKF_WRAP | CKF_UNWRAP },
 		{ 0xD432102CUL, 0, 0, CKF_HW | CKF_WRAP | CKF_UNWRAP },
 		{ 0x80000003UL, 0, 0, CKF_HW | CKF_UNWRAP },
@@ -6534,6 +6548,12 @@ CK_RV SoftHSM::AsymSignInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMechan
 			CryptoFactory::i()->recycleAsymmetricAlgorithm(asymCrypto);
 			return CKR_GENERAL_ERROR;
 		}
+		if (fakeRutokenECP && !isRutokenEd25519(((EDPrivateKey*)privateKey)->getEC()))
+		{
+			asymCrypto->recyclePrivateKey(privateKey);
+			CryptoFactory::i()->recycleAsymmetricAlgorithm(asymCrypto);
+			return CKR_KEY_TYPE_INCONSISTENT;
+		}
 	}
 #endif
 #ifdef WITH_ML_DSA
@@ -7742,6 +7762,12 @@ CK_RV SoftHSM::AsymVerifyInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMech
 			asymCrypto->recyclePublicKey(publicKey);
 			CryptoFactory::i()->recycleAsymmetricAlgorithm(asymCrypto);
 			return CKR_GENERAL_ERROR;
+		}
+		if (fakeRutokenECP && !isRutokenEd25519(((EDPublicKey*)publicKey)->getEC()))
+		{
+			asymCrypto->recyclePublicKey(publicKey);
+			CryptoFactory::i()->recycleAsymmetricAlgorithm(asymCrypto);
+			return CKR_KEY_TYPE_INCONSISTENT;
 		}
 	}
 #endif
@@ -13355,6 +13381,8 @@ CK_RV SoftHSM::generateED
 
 	// Generate key pair
 	AsymmetricKeyPair* kp = NULL;
+	if (fakeRutokenECP && !isRutokenEd25519(params))
+		return CKR_CURVE_NOT_SUPPORTED;
 	AsymmetricAlgorithm* ec = CryptoFactory::i()->getAsymmetricAlgorithm(AsymAlgo::EDDSA);
 	if (ec == NULL) return CKR_GENERAL_ERROR;
 	if (!ec->generateKeyPair(&kp, &p))

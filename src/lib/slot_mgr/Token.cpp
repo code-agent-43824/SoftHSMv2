@@ -643,7 +643,7 @@ bool Token::getSerial(ByteString& serial)
 CK_RV Token::setTokenName(const ByteString& name)
 {
 	MutexLocker lock(tokenMutex);
-	if (token == NULL || name.size() > 255) return CKR_ARGUMENTS_BAD;
+	if (token == NULL) return CKR_ARGUMENTS_BAD;
 	ByteString label;
 	label.resize(32);
 	for (size_t i = 0; i < 32; ++i) label[i] = i < name.size() ? name.const_byte_str()[i] : ' ';

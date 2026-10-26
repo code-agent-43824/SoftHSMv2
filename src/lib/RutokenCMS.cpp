@@ -54,6 +54,12 @@ CK_RV userSession(CK_SESSION_HANDLE session)
     return CKR_OK;
 }
 
+CK_RV activeSession(CK_SESSION_HANDLE session)
+{
+    CK_SESSION_INFO info;
+    return C_GetSessionInfo(session, &info);
+}
+
 CK_RV attribute(CK_SESSION_HANDLE session, CK_OBJECT_HANDLE object,
                 CK_ATTRIBUTE_TYPE type, std::vector<unsigned char>& bytes,
                 CK_ULONG maximum = maxCertificate)
@@ -1041,7 +1047,7 @@ CK_RV verifyInit(CK_SESSION_HANDLE session, CK_BYTE_PTR cms, CK_ULONG cmsLen,
             return CKR_ARGUMENTS_BAD;
         // Neither a store nor a flag: the device refuses here, not at Verify.
         if (!store && !flags) return CKR_ARGUMENTS_BAD;
-        CK_RV rv = userSession(session);
+        CK_RV rv = activeSession(session);
         if (rv != CKR_OK) return rv;
         VerifyState state;
         state.cms.assign(cms, cms + cmsLen);
@@ -1100,7 +1106,7 @@ CK_RV verify(CK_SESSION_HANDLE session, CK_BYTE_PTR_PTR data,
     try {
         if (!data || !dataLen || !signers || !signerCount) return CKR_ARGUMENTS_BAD;
         *data = nullptr; *dataLen = 0; *signers = nullptr; *signerCount = 0;
-        CK_RV rv = userSession(session);
+        CK_RV rv = activeSession(session);
         if (rv != CKR_OK) return rv;
         VerifyState state;
         {
@@ -1130,7 +1136,7 @@ CK_RV verifyUpdate(CK_SESSION_HANDLE session, CK_BYTE_PTR data, CK_ULONG dataLen
 #else
     try {
         if (dataLen && !data) return CKR_ARGUMENTS_BAD;
-        CK_RV rv = userSession(session);
+        CK_RV rv = activeSession(session);
         if (rv != CKR_OK) return rv;
         std::lock_guard<std::mutex> lock(stateMutex);
         auto it = states.find(session);
@@ -1154,7 +1160,7 @@ CK_RV verifyFinal(CK_SESSION_HANDLE session, CK_VENDOR_BUFFER_PTR_PTR signers,
     try {
         if (!signers || !signerCount) return CKR_ARGUMENTS_BAD;
         *signers = nullptr; *signerCount = 0;
-        CK_RV rv = userSession(session);
+        CK_RV rv = activeSession(session);
         if (rv != CKR_OK) return rv;
         VerifyState state;
         {
