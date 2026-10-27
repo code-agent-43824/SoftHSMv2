@@ -7,7 +7,7 @@
 нет.
 
 **Ждёт владельца: проба кросс-проверки CMS** (27.10, PLAN «Аппаратная
-кросс-проверка CMS A/B»). На токене: `bash scripts/rutoken-cms-cross-probe.sh
+кросс-проверка CMS A/B»; выпущена в `.98`, STATUS). На токене: `bash scripts/rutoken-cms-cross-probe.sh
 <kit> /usr/lib/librtpkcs11ecp.so` — только PIN пользователя. Ожидание:
 A 4/4 и B 4/4 `PASS`, итог `[CMS-CROSS] PASS: OpenSSL and the token accept
 each other's GOST CMS`. Наименее надёжное — A: подписывающий сертификат
