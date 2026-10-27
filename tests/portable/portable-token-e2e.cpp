@@ -9255,6 +9255,95 @@ static void verifyGostCmsCurveParity(Module& module, CK_SESSION_HANDLE session,
     }
 }
 
+// ---- cms-cross: CMS between the token and an independent OpenSSL, both ways
+// in one run with only the user PIN and no format. A: the envelopes
+// verify-gost-cms.sh made with OpenSSL (S/MIME and CMS, CryptoPro-A and
+// TC26-A) are verified by C_EX_PKCS7Verify with OpenSSL's CA as the trusted
+// root. B: the token makes a root, a signer and attached and detached
+// C_EX_PKCS7Sign envelopes, written to <directory>/rutoken for OpenSSL to
+// verify (rutoken-cms-cross-probe.sh). Every object it creates is removed.
+static void verifyCmsCross(const fs::path& modulePath, const fs::path& directory)
+{
+    Module module(modulePath);
+    const CK_SESSION_HANDLE session = openSession(module, selectSlot(module, true));
+    login(module, session, CKU_USER, environment("P11_TEST_USER_PIN", true));
+    auto getList = reinterpret_cast<CK_C_EX_GetFunctionListExtended>(
+        module.symbol("C_EX_GetFunctionListExtended"));
+    if (getList == nullptr) fail("C_EX_GetFunctionListExtended is not exported");
+    CK_FUNCTION_LIST_EXTENDED_PTR ex = nullptr;
+    callOk("C_EX_GetFunctionListExtended", "cms-cross", [&] { return getList(&ex); });
+    if (ex == nullptr) fail("C_EX_GetFunctionListExtended returned no table");
+
+    // A is reported per envelope and does not stop the run, so that one
+    // refusal still leaves B measured.
+    int failures = 0;
+    const std::pair<const char*, const char*> sets[] = {{".", "CryptoPro-A"}, {"tc26", "TC26-A"}};
+    for (const auto& set : sets)
+    {
+        const fs::path dir = directory / set.first;
+        const Bytes ca = readFile(dir / "ca.der");
+        const Bytes content = readFile(dir / "message.txt");
+        for (const char* form : {"smime", "cms"})
+        {
+            const std::string what = std::string("A: OpenSSL ") + form + " envelope, " + set.second;
+            const CmsVerifyResult result = cmsVerify(
+                ex, session, readFile(dir / (std::string("openssl-") + form + ".der")), &ca,
+                nullptr, true, 0, nullptr, what.c_str());
+            const bool ok = result.initRv == CKR_OK && result.rv == CKR_OK &&
+                            result.hasData && result.data == content;
+            std::cout << "[CMS-CROSS] " << (ok ? "PASS: " : "FAIL: ") << what
+                      << " - init " << rvName(result.initRv) << ", final " << rvName(result.rv)
+                      << ", data " << (result.hasData ? (result.data == content ? "matches" : "differs")
+                                                      : "none")
+                      << ", signers " << result.signers.size()
+                      << (result.signers.size() == 1 && result.signers[0] == ca ? " (OpenSSL's CA)" : "")
+                      << "\n";
+            if (!ok) ++failures;
+        }
+    }
+
+    const Bytes rootId = asciiBytes("cms-cross-root"), leafId = asciiBytes("cms-cross-leaf");
+    for (const Bytes* id : {&rootId, &leafId}) removePriorTestObjects(module, session, *id);
+    const fs::path out = directory / "rutoken";
+    fs::create_directories(out);
+    try
+    {
+        const CmsKeyPair root = cmsGostKeyPair(module, session, rootId, 256);
+        const CmsKeyPair leaf = cmsGostKeyPair(module, session, leafId, 256);
+        const Bytes rootName = cmsName("CryptoMost Cross-check CA");
+        const Bytes leafName = cmsName("CryptoMost Cross-check Signer");
+        const Bytes rootDer = cmsGostCertificate(module, session, root.publicKey, root.privateKey,
+                                                 rootName, rootName, 31, true, 256);
+        const Bytes leafDer = cmsGostCertificate(module, session, leaf.publicKey, root.privateKey,
+                                                 rootName, leafName, 32, false, 256);
+        const CK_OBJECT_HANDLE rootCert = cmsTokenCertificate(module, session, rootId, rootDer, rootName);
+        const CK_OBJECT_HANDLE leafCert = cmsTokenCertificate(module, session, leafId, leafDer, leafName);
+        const Bytes content = asciiBytes("CryptoMost Rutoken CMS cross-check payload\n");
+        Bytes attached, detached;
+        check(cmsSign(ex, session, content, leafCert, leaf.privateKey, {rootCert}, 0, &attached,
+                      "B: attached"), CKR_OK, "C_EX_PKCS7Sign(attached)");
+        check(cmsSign(ex, session, content, leafCert, leaf.privateKey, {rootCert},
+                      PKCS7_DETACHED_SIGNATURE, &detached, "B: detached"),
+              CKR_OK, "C_EX_PKCS7Sign(detached)");
+        writeFile(out / "root.der", rootDer);
+        writeFile(out / "signer.der", leafDer);
+        writeFile(out / "content.bin", content);
+        writeFile(out / "attached.der", attached);
+        writeFile(out / "detached.der", detached);
+        std::cout << "[CMS-CROSS] B: token envelopes written to " << out.string() << "\n";
+    }
+    catch (...)
+    {
+        for (const Bytes* id : {&rootId, &leafId}) removePriorTestObjects(module, session, *id);
+        throw;
+    }
+    for (const Bytes* id : {&rootId, &leafId}) removePriorTestObjects(module, session, *id);
+    logout(module, session, "CKU_USER");
+    closeSession(module, session);
+    if (failures) fail("cms-cross: " + std::to_string(failures) + " OpenSSL envelope(s) not verified by the token");
+    std::cout << "[CMS-CROSS] token side done\n";
+}
+
 static CK_BBOOL booleanAttribute(Module& module, CK_SESSION_HANDLE session,
                                  CK_OBJECT_HANDLE object, CK_ATTRIBUTE_TYPE type)
 {
@@ -10829,6 +10918,11 @@ int main(int argc, char** argv)
                                                  ? "06072a850302022303" : nullptr);
             return 0;
         }
+        if (argc == 4 && std::string(argv[1]) == "cms-cross")
+        {
+            verifyCmsCross(fs::absolute(argv[2]), fs::absolute(argv[3]));
+            return 0;
+        }
         if (argc == 4 && std::string(argv[1]) == "cms-verify-external")
         {
             verifyCmsExternal(fs::absolute(argv[2]), fs::absolute(argv[3]));
@@ -10862,6 +10956,8 @@ int main(int argc, char** argv)
                   << "  portable-token-e2e device-parity <module> (this module or the\n"
                   << "                      reference Rutoken; initialized token, leaves\n"
                   << "                      no objects behind)\n"
+                  << "  portable-token-e2e cms-cross <module> <directory> (CMS with OpenSSL\n"
+                  << "                      both ways, run by rutoken-cms-cross-probe.sh)\n"
                   << "  portable-token-e2e device-parity-write <module> (the same, changing\n"
                   << "                      PINs, a local PIN and CKA_TRUSTED; token in\n"
                   << "                      factory state, left in factory state with the\n"

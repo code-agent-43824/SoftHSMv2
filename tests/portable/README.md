@@ -243,6 +243,17 @@ P11_TEST_USER_PIN=12345678 ./bin/portable-token-e2e device-parity \
 
 Success ends with `DEVICE-PARITY: all cases passed` and exit code 0.
 
+`cms-cross <module> <directory>` is the token half of
+`scripts/rutoken-cms-cross-probe.sh <kit> <module>` (Linux and macOS kits):
+GOST CMS between the module and the kit's independent OpenSSL, both ways,
+with only the user PIN. A: the OpenSSL envelopes `verify-gost-cms.sh` makes
+(S/MIME and CMS, CryptoPro-A and TC26-A) are verified by `C_EX_PKCS7Verify`
+with OpenSSL's CA trusted; B: the token makes a root, a signer and attached
+and detached `C_EX_PKCS7Sign` envelopes, which OpenSSL `smime` and `cms`
+verify. It removes what it creates and packs everything into
+`test-output/cms-cross-<time>.tar.gz`. Success ends with
+`[CMS-CROSS] PASS: OpenSSL and the token accept each other's GOST CMS`.
+
 `device-parity-write <module>` holds the cases that change the token: they
 need a token in factory state, `P11_TEST_USER_PIN` and `P11_TEST_SO_PIN`
 (used, never guessed), and leave it in factory state with the same PINs:

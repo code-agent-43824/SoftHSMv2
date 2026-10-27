@@ -221,7 +221,24 @@ Self-тест также проверяет `cms -sign/-verify`, OID ГОСТ в
 `scripts/verify-gost-cms.ps1 -KitDir $Kit`: скрипт сам задаёт локальные
 `OPENSSL_CONF`, `OPENSSL_ENGINES` и `OPENSSL_MODULES` только на время теста.
 
-При доступе к **физическому** Рутокену есть отдельный кросс-тест. Он
+Проба `scripts/rutoken-cms-cross-probe.sh` (Linux и macOS) делает
+кросс-проверку с физическим Рутокеном целиком сама: нужен только
+инициализированный токен и PIN пользователя, без формата, SO PIN и
+заранее записанного сертификата. A — конверты комплектного OpenSSL (S/MIME и
+CMS, CryptoPro-A и TC26-A) проверяет `C_EX_PKCS7Verify` токена с CA OpenSSL
+как доверенным; B — токен сам создаёт пары, корневой и подписывающий
+сертификаты и конверты `C_EX_PKCS7Sign` (присоединённый и отсоединённый),
+их проверяет OpenSSL `smime` и `cms`. Созданные объекты удаляются; PIN
+спрашивается без эха или берётся из `P11_TEST_USER_PIN`:
+
+```bash
+bash "$KIT/scripts/rutoken-cms-cross-probe.sh" "$KIT" /usr/lib/librtpkcs11ecp.so
+```
+
+Успех — `[CMS-CROSS] PASS: OpenSSL and the token accept each other's GOST
+CMS` и код 0; результат — `test-output/cms-cross-<время>.tar.gz`.
+
+Прежний кросс-тест ниже требует готовый сертификат на токене. Он
 проверяет A: envelope OpenSSL → `pkcs11-tool --rutoken-pkcs7-verify` с
 `--rutoken-trusted`; затем B: `C_EX_PKCS7Sign` на токене →
 `openssl smime -verify -CAfile`. Нужны ID сертификата на токене и PEM его

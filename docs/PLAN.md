@@ -697,6 +697,10 @@
       отсоединённый); их проверяет OpenSSL (`smime` и `cms` с `-CAfile`).
       Объекты удаляются; результат — архив для владельца. Проверка — тот же
       скрипт против форка в kit.
+      Проба готова 27.10 (Linux и macOS kit); `run-test.sh` гоняет её против
+      модуля kit (`[CMS-CROSS] PASS: the Rutoken cross-check probe runs…`).
+      Локально на `.97` с новым клиентом: A 4/4, B 4/4, полный kit с
+      `P11_TLS_REQUIRED=1` — exit 0. Ждёт прогона владельца на токене.
 
 - [x] **Основной профиль test-kit — Rutoken ECP (задание 06.10).**
       В adjacent-конфиге test-kit включить `FAKE_RUTOKEN_ECP = true`,

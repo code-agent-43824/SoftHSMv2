@@ -258,6 +258,16 @@ if [[ "$bundled_mode" == YES ]]; then
     "$kit_dir/bin/portable-token-e2e" cms-gost-verify-external "$module" \
       "$kit_dir/test-output/gost-cms/tc26"
   printf '[GOST-CMS] PASS: external CryptoPro-A and TC26-A envelopes verified by PKCS #11 module\n'
+  # The physical-token cross-check probe, run here against the bundled module
+  # in the same store so that the script the owner runs on a Rutoken is known
+  # to work end to end.
+  if ! SOFTHSM2_CONF="$gost_verify_store/softhsm.conf" P11_TEST_EXCLUDE_FUNCTIONS= \
+      bash "$kit_dir/scripts/rutoken-cms-cross-probe.sh" "$kit_dir" "$module" \
+      > "$kit_dir/test-output/cms-cross-probe.log" 2>&1; then
+    cat "$kit_dir/test-output/cms-cross-probe.log"
+    exit 1
+  fi
+  printf '[CMS-CROSS] PASS: the Rutoken cross-check probe runs against the bundled module\n'
   if [[ $(uname -s) == Linux || $(uname -s) == Darwin ]]; then
     # PKCS #11 calls after main, as pkcs11-provider makes them from OpenSSL's
     # exit handler: the client closes sessions and finalizes from a handler

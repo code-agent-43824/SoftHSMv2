@@ -522,6 +522,7 @@ jobs:
                 zipinfo -1 "$archive" | grep -Fx 'config/openssl-gost-engine.cnf' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'scripts/verify-gost-cms.sh' >/dev/null
                 zipinfo -1 "$archive" | grep -Fx 'scripts/verify-rutoken-cms-cross.sh' >/dev/null
+                zipinfo -1 "$archive" | grep -Fx 'scripts/rutoken-cms-cross-probe.sh' >/dev/null
                 if zipinfo -1 "$archive" | grep -Fx 'bin/opensc-lib/pkcs11-tool' >/dev/null; then
                   echo "duplicate pkcs11-tool found in $archive" >&2
                   exit 1
