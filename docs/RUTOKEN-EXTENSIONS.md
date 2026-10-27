@@ -243,8 +243,15 @@ SoftHSM, из-за которого сайт ломался сразу посл�
 `CKM_GOST_KEG` отдавать три типа — `CKK_MAGMA_TWIN_KEY`,
 `CKK_KUZNECHIK_TWIN_KEY` и `CKK_GENERIC_SECRET`. Проба 03.10 показала: эталон
 принимает **MAGMA и KUZNECHIK** twin (значение одно, различается ярлык),
-`CKK_GENERIC_SECRET` отвергает `CKR_TEMPLATE_INCONSISTENT`. Мы пока принимаем
-только `CKK_MAGMA_TWIN_KEY`; добавить KUZNECHIK-twin — задача в `docs/PLAN.md`.
+`CKK_GENERIC_SECRET` отвергает `CKR_TEMPLATE_INCONSISTENT`. Модуль принимает
+оба twin-типа (с 20.10, `ddf422b4`).
+
+Явное `CKA_DERIVE = TRUE` в шаблоне результата эталон на 512-битной базе
+отвергает `CKR_TEMPLATE_INCONSISTENT` (0xd1), без него выдаёт ключ с
+`CKA_DERIVE` FALSE (проба 21.10). Модуль явное TRUE принимает и выдаёт ключ с
+`CKA_DERIVE` TRUE — сознательно, решением владельца 27.10 (Settled decisions
+в `AGENTS.md`): программа, которая так просит, на форке работает, а на токене
+получит 0xd1. Без атрибута — FALSE, как у эталона.
 Базовых типов принимаются оба, `CKK_GOSTR3410` и `CKK_GOSTR3410_512`, как и
 написано в спецификации.
 

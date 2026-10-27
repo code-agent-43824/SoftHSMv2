@@ -398,9 +398,19 @@ name.
   in `C_EX_PKCS7Sign` (probe run of 9 October 2026, JOURNAL); this module
   signs RSA CMS. *Reason:* the owner's decision of 10 October 2026, made after
   being shown the device's refusal: RSA CMS was his own request (request №3,
-  released in `.66`), and it stays. This is the one deliberate exception to
-  the rule above. The battery treats it as dual: 0x63 on the device, a valid
-  envelope on the fork.
+  released in `.66`), and it stays. This is one of two deliberate exceptions
+  to the rule above; the other follows. The battery treats it as dual: 0x63
+  on the device, a valid envelope on the fork.
+- **An explicit `CKA_DERIVE = TRUE` in a `CKM_GOST_KEG` template is accepted,
+  although the device refuses it.** The reference Rutoken answers
+  `CKR_TEMPLATE_INCONSISTENT` (0xd1) to it on a 512-bit base key and, without
+  it, issues the twin key with `CKA_DERIVE` FALSE (probe of 21 October 2026,
+  JOURNAL 22.10); this module issues the key with `CKA_DERIVE` TRUE. The value,
+  type and length match the device; a template without the attribute gets
+  FALSE here as well. *Reason:* the owner's decision of 27 October 2026, made
+  after being shown the cost — software that asks for it works on the fork
+  and fails on the token: the fork may be more permissive here. Do not tighten
+  it without his word.
 
 ## Departures from the rules above
 
