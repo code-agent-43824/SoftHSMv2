@@ -411,6 +411,13 @@ name.
   after being shown the cost — software that asks for it works on the fork
   and fails on the token: the fork may be more permissive here. Do not tighten
   it without his word.
+- **Generic secret keys of 1–9 bytes are accepted, although the device
+  refuses them.** The reference Rutoken answers `CKR_ATTRIBUTE_VALUE_INVALID`
+  (0x13) to `C_CreateObject` and `C_GenerateKey` for lengths 0–9 and accepts
+  10–34 (probe of 21 October 2026, JOURNAL 22.10); this module accepts 1–9.
+  *Reason:* the owner's decision of 27 October 2026, the same as for the KEG
+  template above: the fork may be more permissive. Do not tighten it without
+  his word.
 
 ## Departures from the rules above
 
