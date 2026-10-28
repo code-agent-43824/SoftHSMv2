@@ -10,8 +10,8 @@ CMS без диалога.** Терминал не читается: A — бе�
 Скачанные Linux x64 product и kit и macOS kit совпали с `SHA256SUMS`;
 Linux x64 kit (`f5696c9e7648fa91f8d31c7f3b1bfafcc674d81df4bde00efe3c39fbc83adb48`)
 прошёл `run-test.sh` с `P11_TLS_REQUIRED=1` (exit 0), его проба без
-переменной на токене с заводским PIN — A и B `PASS`, exit 0. На
-Рутокене проба не прогонялась.
+переменной на токене с заводским PIN — A и B `PASS`, exit 0. Владелец
+28.10 прогнал пробу на Рутокене: все проверки `PASS` (JOURNAL 28.10).
 
 Перед ним **`v2.7.0-portable.98` опубликован на `2c2e826b`: проба кросс-проверки
 CMS с Рутокеном.** `scripts/rutoken-cms-cross-probe.sh` в Unix kit: только
