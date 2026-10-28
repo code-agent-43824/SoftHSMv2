@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # GOST CMS between a PKCS #11 module - the physical Rutoken through the
 # vendor's library, or this fork - and the kit's independent OpenSSL, both
-# ways, in one run. Needs only an initialized token and the user PIN: no
-# format, no SO PIN, no certificate prepared in advance.
+# ways, in one run. Non-interactive: it never reads the terminal. Needs only
+# an initialized token: no format, no SO PIN, no certificate prepared in
+# advance. The user PIN comes from P11_TEST_USER_PIN or, when that is not set,
+# is the factory 12345678 - used only if the token reports its user PIN
+# unchanged; otherwise B is skipped without a login attempt.
 #   A: OpenSSL envelopes (S/MIME and CMS, CryptoPro-A and TC26-A) verified by
 #      C_EX_PKCS7Verify on the token with OpenSSL's CA trusted;
 #   B: C_EX_PKCS7Sign envelopes (attached and detached) under a root and a
@@ -16,11 +19,6 @@ if [[ $# != 2 ]]; then
 fi
 kit=$(cd "$1" && pwd)
 module=$2
-if [[ -z ${P11_TEST_USER_PIN:-} ]]; then
-  read -r -s -p 'Rutoken user PIN: ' P11_TEST_USER_PIN
-  printf '\n'
-fi
-export P11_TEST_USER_PIN
 
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 name="cms-cross-$stamp"
@@ -40,7 +38,7 @@ echo "[CMS-CROSS] $(date -u +%Y-%m-%dT%H:%M:%SZ), module $module"
 uname -a
 "$openssl" version
 
-if ! bash "$kit/scripts/verify-gost-cms.sh" "$kit" > "$out/openssl-self-test.log" 2>&1; then
+if ! bash "$kit/scripts/verify-gost-cms.sh" "$kit" < /dev/null > "$out/openssl-self-test.log" 2>&1; then
   cat "$out/openssl-self-test.log"
   echo '[CMS-CROSS] FAIL: the kit OpenSSL could not make its envelopes; nothing sent to the token'
   exit 1
@@ -48,11 +46,12 @@ fi
 cp -R "$kit/test-output/gost-cms" "$out/openssl"
 pass 'kit OpenSSL made S/MIME and CMS envelopes on CryptoPro-A and TC26-A'
 
-"$kit/bin/portable-token-e2e" cms-cross "$module" "$out/openssl" > "$out/token.log" 2>&1
+"$kit/bin/portable-token-e2e" cms-cross "$module" "$out/openssl" \
+  < /dev/null > "$out/token.log" 2>&1
 token_rc=$?
 grep -F '[CMS-CROSS]' "$out/token.log"
 if [[ $token_rc != 0 ]]; then
-  tail -n 20 "$out/token.log"
+  grep -vF '[CMS-CROSS]' "$out/token.log" | tail -n 20
   failed "token side exited with $token_rc (full trace in token.log)"
 fi
 failures=$((failures + $(grep -c '^\[CMS-CROSS\] FAIL' "$out/token.log")))

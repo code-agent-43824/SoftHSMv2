@@ -9256,17 +9256,21 @@ static void verifyGostCmsCurveParity(Module& module, CK_SESSION_HANDLE session,
 }
 
 // ---- cms-cross: CMS between the token and an independent OpenSSL, both ways
-// in one run with only the user PIN and no format. A: the envelopes
+// in one run, without a terminal and without a format. A: the envelopes
 // verify-gost-cms.sh made with OpenSSL (S/MIME and CMS, CryptoPro-A and
 // TC26-A) are verified by C_EX_PKCS7Verify with OpenSSL's CA as the trusted
 // root. B: the token makes a root, a signer and attached and detached
 // C_EX_PKCS7Sign envelopes, written to <directory>/rutoken for OpenSSL to
 // verify (rutoken-cms-cross-probe.sh). Every object it creates is removed.
+// A runs before any login: the device verifies CMS without one (JOURNAL
+// 26.10). B logs in once with P11_TEST_USER_PIN or, when that is not set,
+// with the factory user PIN only if the token reports it unchanged; otherwise
+// it makes no login attempt at all, so the probe never costs a PIN retry.
 static void verifyCmsCross(const fs::path& modulePath, const fs::path& directory)
 {
     Module module(modulePath);
-    const CK_SESSION_HANDLE session = openSession(module, selectSlot(module, true));
-    login(module, session, CKU_USER, environment("P11_TEST_USER_PIN", true));
+    const CK_SLOT_ID slot = selectSlot(module, true);
+    const CK_SESSION_HANDLE session = openSession(module, slot);
     auto getList = reinterpret_cast<CK_C_EX_GetFunctionListExtended>(
         module.symbol("C_EX_GetFunctionListExtended"));
     if (getList == nullptr) fail("C_EX_GetFunctionListExtended is not exported");
@@ -9301,6 +9305,36 @@ static void verifyCmsCross(const fs::path& modulePath, const fs::path& directory
             if (!ok) ++failures;
         }
     }
+
+    std::string userPin = environment("P11_TEST_USER_PIN");
+    if (!userPin.empty())
+    {
+        std::cout << "[CMS-CROSS] B: user PIN from P11_TEST_USER_PIN\n";
+    }
+    else
+    {
+        CK_TOKEN_INFO_EXTENDED extended{};
+        extended.ulSizeofThisStructure = sizeof(extended);
+        const CK_RV rv = invoke("C_EX_GetTokenInfoExtended", "cms-cross factory PIN", [&] {
+            return ex->C_EX_GetTokenInfoExtended(slot, &extended);
+        });
+        const CK_FLAGS locked = tokenInfo(module, slot).flags & CKF_USER_PIN_LOCKED;
+        if (rv == CKR_OK && !locked && (extended.flags & TOKEN_FLAGS_USER_PIN_NOT_DEFAULT) == 0)
+        {
+            userPin = "12345678";
+            std::cout << "[CMS-CROSS] B: the token reports the factory user PIN; using it\n";
+        }
+        else
+        {
+            std::cout << "[CMS-CROSS] FAIL: B skipped - P11_TEST_USER_PIN is not set and the token does "
+                         "not report the factory user PIN (C_EX_GetTokenInfoExtended "
+                      << rvName(rv) << (locked ? ", user PIN locked" : "")
+                      << "); no login attempted\n";
+            closeSession(module, session);
+            fail("cms-cross: B needs the user PIN");
+        }
+    }
+    login(module, session, CKU_USER, userPin);
 
     const Bytes rootId = asciiBytes("cms-cross-root"), leafId = asciiBytes("cms-cross-leaf");
     for (const Bytes* id : {&rootId, &leafId}) removePriorTestObjects(module, session, *id);
